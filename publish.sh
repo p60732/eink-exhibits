@@ -62,13 +62,7 @@ c "[入口][展示] 畫面與樣式" index.html css js/ui.js
 c "[建置/測試] 規則層、流程層、結構、突變、前端 E2E 測試與建置腳本" tests build.js
 c "[部署] GitHub Actions 與後端網址設定" .github deploy.config.json publish.sh
 
-# 4) 推上 GitHub
-if ! git remote get-url origin >/dev/null 2>&1; then
-  if command -v gh >/dev/null 2>&1; then
-    gh repo create p60732/eink-exhibits --public --source . --remote origin
-  else
-    git remote add origin https://github.com/p60732/eink-exhibits.git
-  fi
-fi
+# 4) 推上 GitHub(repo 已建立;第一次會要求 GitHub 登入)
+git remote get-url origin >/dev/null 2>&1 || git remote add origin https://github.com/p60732/eink-exhibits.git
 git push -u origin main
-echo "✔ 已推上 GitHub。請到 repo 的 Settings → Pages → Source 選「GitHub Actions」。"
+echo "✔ 已推上 GitHub:https://github.com/p60732/eink-exhibits"
