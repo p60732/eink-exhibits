@@ -34,9 +34,9 @@ function routes_() {
     LOAN_CALC: ['id', 'status', 'start', 'end', 'lines'],                                  // 只做可借量 / 在庫計算
     LOAN_MINE: ['id', 'status', 'start', 'end', 'lines', 'applicantId'],                   // 加上「是不是我的單」
     LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines', 'applicant', 'dept', 'event'],    // 加上「這台在誰手上」
-    UNIT_CALC: ['id', 'itemId', 'status'],
-    UNIT_PICK: ['id', 'itemId', 'status', 'serial'],
-    ITEM_CALC: ['id', 'name', 'mode', 'qty', 'archived'],
+    UNIT_CALC: ['id', 'itemId', 'status', 'location'],                                     // 地點要算各廠區的庫存
+    UNIT_PICK: ['id', 'itemId', 'status', 'serial', 'location'],
+    ITEM_CALC: ['id', 'name', 'mode', 'qty', 'location', 'stock', 'archived'],
     ITEM_CAT: ['id', 'name', 'category', 'archived'],
     USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange']   // 不讀 pinHash / email
   };
@@ -86,7 +86,7 @@ function routes_() {
   add('admin', true, A, {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
-    stocktake: ['qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
+    stocktake: ['location', 'qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
     saveCat: ['cat'], moveCat: ['id', 'dir'],
     approveMany: ['ids', 'note', 'force'], decideRequest: ['id', 'ok', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force'],
     deleteItem: ['id']

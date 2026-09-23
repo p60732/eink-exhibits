@@ -36,13 +36,13 @@ var Logic = (function () {
   var MEMO = new WeakMap();
   function memo(db) {
     var m = MEMO.get(db);
-    if (!m) { m = { cap: {}, li: null }; MEMO.set(db, m); }
+    if (!m) { m = { cap: {}, li: null, us: null }; MEMO.set(db, m); }
     return m;
   }
   function dirty(db, t) {
     db._dirty[t] = true;
     var m = memo(db);
-    if (t === 'Units' || t === 'Items') m.cap = {};
+    if (t === 'Units' || t === 'Items') { m.cap = {}; m.us = null; }
     if (t === 'Loans') m.li = null;
   }
   function byId(list, id) { for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]; return null; }
@@ -65,32 +65,115 @@ var Logic = (function () {
 
   /* ---------- 庫存計算 ---------- */
   function outstanding(line) { return Math.max(0, int(line.qty) - int(line.returned) - int(line.lost)); }
+
+  /* ---------- 存放地點 ----------
+   * 一個展品可以分散在好幾個地點(新竹 3 台、林口 2 台)。
+   * 逐台編號的展品:每台自己的 location 就是答案,分佈用算的。
+   * 數量型展品:存在 Items.stock,形如 {"新竹":{"數量":3,"盤點":"2026-09-23"}}。
+   * 舊資料只有「總數 + 單一地點」,讀進來時自動當成全部放在那個地點。
+   */
+  var SQ = '數量', SC = '盤點';
+  var NOLOC = '未指定';
+  function loc(v) { return s(v) || NOLOC; }
+  function lineKey(ln) { return s(ln.itemId) + '@' + loc(ln.location); }
+  /** 數量型展品 → { 地點: { qty, countedAt } } */
+  function stockMap(it) {
+    var raw = it.stock, m = {}, any = false;
+    if (raw && typeof raw === 'object') Object.keys(raw).forEach(function (k) {
+      var L = s(k); if (!L) return;
+      var v = raw[k] || {}, isObj = typeof v === 'object';
+      m[L] = { qty: Math.max(0, int(isObj ? v[SQ] : v)), countedAt: s(isObj ? v[SC] : '') };
+      any = true;
+    });
+    if (!any && (int(it.qty) > 0 || s(it.location))) m[loc(it.location)] = { qty: int(it.qty), countedAt: s(it.countedAt) };
+    return m;
+  }
+  /** 把各地點數量寫回展品,並回填舊欄位(總數 / 存放位置 / 最後盤點)讓試算表與匯出仍看得懂 */
+  function writeStock(it, m) {
+    var out = {}, total = 0, names = [], dates = [];
+    Object.keys(m).forEach(function (L) {
+      var q = Math.max(0, int(m[L].qty)), c = s(m[L].countedAt);
+      if (!q && !c) return;
+      out[L] = {}; out[L][SQ] = q; out[L][SC] = c;
+      total += q; names.push(L); dates.push(c);
+    });
+    it.stock = out;
+    it.qty = total;
+    it.location = names.join('、');
+    it.countedAt = dates.length && dates.every(function (d) { return d; }) ? dates.slice().sort()[0] : '';
+    return it;
+  }
+  /** 逐台編號的展品 → { itemId: { 地點: { qty, countedAt } } };一次請求只算一次 */
+  function unitSites(db) {
+    var m = memo(db);
+    if (m.us) return m.us;
+    var idx = {};
+    db.Units.forEach(function (u) {
+      if (u.status !== 'in' && u.status !== 'out') return;      // 維修 / 遺失不算庫存
+      var g = idx[u.itemId] = idx[u.itemId] || {}, L = loc(u.location);
+      var e = g[L] = g[L] || { qty: 0, dates: [] };
+      e.qty++; e.dates.push(s(u.countedAt));
+    });
+    // 該地點的「最後盤點」= 全部都點過才算,取最早的那天(有一台沒點過就當作還沒盤完)
+    Object.keys(idx).forEach(function (id) {
+      Object.keys(idx[id]).forEach(function (L) {
+        var e = idx[id][L];
+        e.countedAt = e.dates.every(function (d) { return d; }) ? e.dates.slice().sort()[0] : '';
+        delete e.dates;
+      });
+    });
+    return (m.us = idx);
+  }
+  function siteMap(db, it) { return it.mode === 'unit' ? (unitSites(db)[it.id] || {}) : stockMap(it); }
+  /** 一個展品的分佈:[{ location, qty, countedAt }],多的排前面 */
+  function sitesOf(db, it) {
+    var m = siteMap(db, it);
+    return Object.keys(m).map(function (L) { return { location: L, qty: int(m[L].qty), countedAt: s(m[L].countedAt) }; })
+      .sort(function (a, b) { return b.qty - a.qty || (a.location < b.location ? -1 : 1); });
+  }
+  /** 這個地點登記了幾台(不扣借出) */
+  function siteTotal(db, it, L) { var e = siteMap(db, it)[loc(L)]; return e ? int(e.qty) : 0; }
+  /** 數量型展品:把某個地點的台數加減 delta(搬動 / 短少 / 盤點調整都走這裡) */
+  function adjustStock(c, it, where, delta) {
+    if (!delta || it.mode === 'unit') return;
+    var m = stockMap(it), L = loc(where);
+    m[L] = m[L] || { qty: 0, countedAt: '' };
+    m[L].qty = Math.max(0, int(m[L].qty) + delta);
+    writeStock(it, m);
+    it.updatedAt = c.now;
+    dirty(c.db, 'Items');
+  }
+
   /** 總數(unit 模式數在庫+借出的台數);同一次請求內每個品項只算一次 */
-  function capacity(db, item) {
+  function capacity(db, item, where) {
+    if (where != null) return siteTotal(db, item, where);
     var cache = memo(db).cap;
     if (item.id in cache) return cache[item.id];
-    var c;
-    if (item.mode === 'unit') {
-      c = 0;
-      db.Units.forEach(function (u) { if (u.itemId === item.id && (u.status === 'in' || u.status === 'out')) c++; });
-    } else c = int(item.qty);
+    var m = siteMap(db, item), c = 0;
+    Object.keys(m).forEach(function (L) { c += int(m[L].qty); });
     return (cache[item.id] = c);
   }
+  /** 每個品項一組數字;另外用「品項@地點」為 key 再放一組,盤點與可借量要分地點時直接查 */
   function stats(db, today) {
     var m = {};
+    function box(total) { return { total: total, out: 0, reserved: 0, repair: 0, lost: 0 }; }
     db.Items.forEach(function (it) {
-      m[it.id] = { total: capacity(db, it), out: 0, reserved: 0, repair: 0, lost: 0 };
+      m[it.id] = box(capacity(db, it));
+      var sm = siteMap(db, it);
+      Object.keys(sm).forEach(function (L) { m[it.id + '@' + L] = box(int(sm[L].qty)); });
     });
     db.Units.forEach(function (u) {
-      if (!m[u.itemId]) return;
-      if (u.status === 'repair') m[u.itemId].repair++;
-      if (u.status === 'lost') m[u.itemId].lost++;
+      var st = m[u.itemId], site = m[u.itemId + '@' + loc(u.location)];
+      if (!st) return;
+      if (u.status === 'repair') { st.repair++; if (site) site.repair++; }
+      if (u.status === 'lost') { st.lost++; if (site) site.lost++; }
     });
     db.Loans.forEach(function (L) {
       if (L.status !== 'out' && L.status !== 'approved') return;
       (L.lines || []).forEach(function (ln) {
-        var st = m[ln.itemId]; if (!st) return;
-        if (L.status === 'out') st.out += outstanding(ln); else st.reserved += outstanding(ln);
+        var n = outstanding(ln), st = m[ln.itemId], site = m[lineKey(ln)];
+        if (st) { if (L.status === 'out') st.out += n; else st.reserved += n; }
+        if (site) { if (L.status === 'out') site.out += n; else site.reserved += n; }
       });
     });
     Object.keys(m).forEach(function (k) { m[k].inStock = m[k].total - m[k].out; });
@@ -107,13 +190,19 @@ var Logic = (function () {
     var idx = {};
     db.Loans.forEach(function (L) {
       if (L.status !== 'approved' && L.status !== 'out') return;
-      (L.lines || []).forEach(function (ln) { (idx[ln.itemId] = idx[ln.itemId] || []).push({ L: L, ln: ln }); });
+      (L.lines || []).forEach(function (ln) {
+        var e = { L: L, ln: ln };
+        (idx[ln.itemId] = idx[ln.itemId] || []).push(e);        // 整個品項
+        var k = lineKey(ln);
+        (idx[k] = idx[k] || []).push(e);                        // 單一地點
+      });
     });
     return (m.li = idx);
   }
-  function reservedInRange(db, itemId, from, to, excludeId, today) {
-    var sum = 0;
-    (loanIndex(db)[itemId] || []).forEach(function (e) {
+  /** where 省略 = 整個品項;給地點就只算那個地點借出去的 */
+  function reservedInRange(db, itemId, where, from, to, excludeId, today) {
+    var sum = 0, key = where == null ? itemId : itemId + '@' + loc(where);
+    (loanIndex(db)[key] || []).forEach(function (e) {
       if (e.L.id === excludeId) return;
       var w = loanWindow(e.L, today);
       if (w[0] > to || w[1] < from) return;
@@ -121,15 +210,15 @@ var Logic = (function () {
     });
     return sum;
   }
-  function availableInRange(db, item, from, to, excludeId, today) {
-    return capacity(db, item) - reservedInRange(db, item.id, from, to, excludeId, today);
+  function availableInRange(db, item, where, from, to, excludeId, today) {
+    return capacity(db, item, where) - reservedInRange(db, item.id, where, from, to, excludeId, today);
   }
   function checkLines(db, lines, from, to, excludeId, today) {
     return lines.map(function (ln) {
-      var it = byId(db.Items, ln.itemId);
-      if (!it) return { itemId: ln.itemId, name: '(已刪除)', qty: int(ln.qty), available: 0, short: int(ln.qty) };
-      var av = availableInRange(db, it, from, to, excludeId, today);
-      return { itemId: it.id, name: it.name, qty: int(ln.qty), available: Math.max(0, av), short: Math.max(0, int(ln.qty) - av) };
+      var it = byId(db.Items, ln.itemId), where = loc(ln.location);
+      if (!it) return { itemId: ln.itemId, location: where, name: '(已刪除)', qty: int(ln.qty), available: 0, short: int(ln.qty) };
+      var av = availableInRange(db, it, where, from, to, excludeId, today);
+      return { itemId: it.id, location: where, name: it.name, qty: int(ln.qty), available: Math.max(0, av), short: Math.max(0, int(ln.qty) - av) };
     });
   }
   function isOverdue(L, today) { return L.status === 'out' && L.end < today; }
@@ -177,7 +266,13 @@ var Logic = (function () {
       image: it.image, archived: bool(it.archived), countedAt: it.countedAt, qty: int(it.qty),
       total: x.total, inStock: x.inStock, out: x.out, reserved: x.reserved, repair: x.repair, lost: x.lost
     };
-    if (range) v.available = Math.max(0, availableInRange(db, it, range[0], range[1], null, today));
+    v.sites = sitesOf(db, it).map(function (g) {
+      var y = st[it.id + '@' + g.location] || { out: 0, reserved: 0, repair: 0, lost: 0 };
+      var o = { location: g.location, total: g.qty, countedAt: g.countedAt, out: y.out, reserved: y.reserved, repair: y.repair, lost: y.lost, inStock: g.qty - y.out };
+      if (range) o.available = Math.max(0, availableInRange(db, it, g.location, range[0], range[1], null, today));
+      return o;
+    });
+    if (range) v.available = Math.max(0, availableInRange(db, it, null, range[0], range[1], null, today));
     return v;
   }
   function validRange(p) {
@@ -185,15 +280,28 @@ var Logic = (function () {
     if (p.start > p.end) throw E('歸還日不可早於借出日');
     return [p.start, p.end];
   }
+  /** 同一個品項在不同地點算不同行;沒指定地點時,只有一個地點就自動補上,有兩個以上就要求指定 */
   function cleanLines(db, lines) {
-    var merged = {};
+    var merged = {}, meta = {};
     (lines || []).forEach(function (ln) {
       var id = s(ln.itemId), q = int(ln.qty);
       if (!id || q <= 0) return;
-      if (!byId(db.Items, id)) throw E('找不到展品 ' + id);
-      merged[id] = (merged[id] || 0) + q;
+      var it = byId(db.Items, id);
+      if (!it) throw E('找不到展品 ' + id);
+      var where = s(ln.location), sites = Object.keys(siteMap(db, it));
+      if (!where) {
+        if (sites.length > 1) throw E('「' + it.name + '」放在 ' + sites.join('、') + ',請指定要從哪一個地點借');
+        where = sites[0] || loc(it.location);
+      } else if (sites.length && sites.indexOf(where) < 0) {
+        throw E('「' + it.name + '」在 ' + where + ' 沒有庫存');
+      }
+      var k = id + '@' + where;
+      merged[k] = (merged[k] || 0) + q;
+      meta[k] = { itemId: id, location: where };
     });
-    var out = Object.keys(merged).map(function (id) { return { itemId: id, qty: merged[id], returned: 0, lost: 0, units: [], returnedUnits: [], lostUnits: [] }; });
+    var out = Object.keys(merged).map(function (k) {
+      return { itemId: meta[k].itemId, location: meta[k].location, qty: merged[k], returned: 0, lost: 0, units: [], returnedUnits: [], lostUnits: [] };
+    });
     if (!out.length) throw E('請至少選擇一項展品');
     return out;
   }
@@ -279,20 +387,23 @@ var Logic = (function () {
     L.lines.forEach(function (ln) {
       var it = byId(c.db.Items, ln.itemId);
       if (!it) throw E('展品已不存在:' + ln.itemId);
+      var key = lineKey(ln), where = loc(ln.location), label = it.name + '(' + where + ')';
       if (it.mode === 'unit') {
-        var ids = (assign[ln.itemId] || []).map(function (x) { return s(x).toUpperCase(); });
-        if (!allowPartial && ids.length !== int(ln.qty)) throw E(it.name + ' 需要指定 ' + ln.qty + ' 台(目前 ' + ids.length + ' 台)');
-        if (ids.length > int(ln.qty)) throw E(it.name + ' 只借 ' + ln.qty + ' 台');
+        var ids = (assign[key] || assign[ln.itemId] || []).map(function (x) { return s(x).toUpperCase(); });
+        if (!allowPartial && ids.length !== int(ln.qty)) throw E(label + ' 需要指定 ' + ln.qty + ' 台(目前 ' + ids.length + ' 台)');
+        if (ids.length > int(ln.qty)) throw E(label + ' 只借 ' + ln.qty + ' 台');
         ids.forEach(function (uid) {
           var u = byId(c.db.Units, uid);
           if (!u || u.itemId !== it.id) throw E(uid + ' 不是「' + it.name + '」的編號');
           if (u.status !== 'in') throw E(uid + ' 目前狀態為「' + UNIT_ST[u.status] + '」,無法出借');
+          if (loc(u.location) !== where) throw E(uid + ' 放在 ' + loc(u.location) + ',這一行借的是 ' + where + ' 的');
           if (used[uid]) throw E(uid + ' 重複指定');
           used[uid] = 1;
         });
-        clean[ln.itemId] = ids;
-      } else if (st[it.id].inStock < int(ln.qty)) {
-        throw E(it.name + ' 倉庫現有 ' + st[it.id].inStock + ',不足 ' + ln.qty);
+        clean[key] = ids;
+      } else {
+        var have = st[key] ? st[key].inStock : 0;
+        if (have < int(ln.qty)) throw E(label + ' 現有 ' + have + ',不足 ' + ln.qty);
       }
     });
     return clean;
@@ -302,9 +413,10 @@ var Logic = (function () {
     if (L.status !== 'approved') throw E('只有「已核准」的借用單可以點交出借');
     var clean = validatePickup(c, L, assign, false);
     L.lines.forEach(function (ln) {
-      if (clean[ln.itemId]) {
-        ln.units = clean[ln.itemId];
-        ln.units.forEach(function (uid) { var u = byId(c.db.Units, uid); u.status = 'out'; u.updatedAt = c.now; });
+      var ids = clean[lineKey(ln)];
+      if (ids) {
+        ln.units = ids;
+        ids.forEach(function (uid) { var u = byId(c.db.Units, uid); u.status = 'out'; u.updatedAt = c.now; });
       }
     });
     L.status = 'out'; L.outAt = c.now; L.request = null;
@@ -316,11 +428,13 @@ var Logic = (function () {
   function doReceive(c, L, inputLines, note) {
     var today = c.today, now = c.now;
     if (L.status !== 'out') throw E('只有「出借中」的借用單可以歸還');
-    var input = {}; (inputLines || []).forEach(function (x) { input[x.itemId] = x; });
+    var input = {};
+    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; if (!(s(x.itemId) in input)) input[s(x.itemId)] = x; });
     var notes = [];
     L.lines.forEach(function (ln) {
-      var x = input[ln.itemId]; if (!x) return;
+      var x = input[lineKey(ln)] || input[ln.itemId]; if (!x) return;
       var it = byId(c.db.Items, ln.itemId);
+      var from = loc(ln.location), back = s(x.to) || from;          // 可以還到別的廠區,預設還回原借出的點
       if (it && it.mode === 'unit') {
         var pending = ln.units.filter(function (u) { return ln.returnedUnits.indexOf(u) < 0 && ln.lostUnits.indexOf(u) < 0; });
         (x.unitResults || []).forEach(function (r) {
@@ -330,14 +444,23 @@ var Logic = (function () {
           if (r.result === 'lost') { ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; if (u) u.status = 'lost'; notes.push(uid + ' 遺失'); }
           else if (r.result === 'in' || r.result === 'repair') {
             ln.returnedUnits.push(uid); ln.returned = int(ln.returned) + 1;
-            if (u) u.status = r.result; if (r.result === 'repair') notes.push(uid + ' 送修');
+            if (u) {
+              u.status = r.result;
+              var dest = s(r.to) || back;
+              if (loc(u.location) !== dest) { notes.push(uid + ' 移到 ' + dest); u.location = dest; }
+            }
+            if (r.result === 'repair') notes.push(uid + ' 送修');
           }
           if (u) { u.updatedAt = now; if (s(r.note)) u.note = s(r.note); }
         });
       } else {
         var left = outstanding(ln), ret = Math.min(left, Math.max(0, int(x.returned))), lost = Math.min(left - ret, Math.max(0, int(x.lost)));
         ln.returned = int(ln.returned) + ret; ln.lost = int(ln.lost) + lost;
-        if (lost && it) { it.qty = Math.max(0, int(it.qty) - lost); it.updatedAt = now; dirty(c.db, 'Items'); notes.push(it.name + ' 短少 ' + lost); }
+        if (lost && it) { adjustStock(c, it, from, -lost); notes.push(it.name + '(' + from + ') 短少 ' + lost); }
+        if (ret && it && back !== from) {                            // 還到別的廠區 = 庫存跟著搬過去
+          adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);
+          notes.push(it.name + ' ' + ret + ' 台從 ' + from + ' 移到 ' + back);
+        }
       }
     });
     var done = L.lines.every(function (ln) { return outstanding(ln) === 0; });
@@ -471,9 +594,10 @@ var Logic = (function () {
       if (L.status !== 'approved') throw E('這筆借用目前不能簽收');
       var st = stats(c.db, c.today);
       return L.lines.map(function (ln) {
-        var it = byId(c.db.Items, ln.itemId) || {};
-        return { itemId: ln.itemId, name: it.name, mode: it.mode, qty: int(ln.qty), inStock: st[ln.itemId] ? st[ln.itemId].inStock : 0,
-          units: it.mode === 'unit' ? c.db.Units.filter(function (u) { return u.itemId === it.id && u.status === 'in'; }).map(function (u) { return { id: u.id, serial: u.serial }; }) : [] };
+        var it = byId(c.db.Items, ln.itemId) || {}, where = loc(ln.location), box = st[lineKey(ln)];
+        return { itemId: ln.itemId, key: lineKey(ln), location: where, name: it.name, mode: it.mode, qty: int(ln.qty),
+          inStock: box ? box.inStock : 0,
+          units: it.mode === 'unit' ? c.db.Units.filter(function (u) { return u.itemId === it.id && u.status === 'in' && loc(u.location) === where; }).map(function (u) { return { id: u.id, serial: u.serial }; }) : [] };
       });
     },
     requestPickup: function (c) {
@@ -488,7 +612,7 @@ var Logic = (function () {
       var L = ownLoan(c);
       if (L.status !== 'out') throw E('只有「出借中」的借用可以歸還');
       var lines = (c.p.lines || []).map(function (x) {
-        return { itemId: s(x.itemId), returned: int(x.returned), lost: int(x.lost),
+        return { itemId: s(x.itemId), location: loc(x.location), to: s(x.to), returned: int(x.returned), lost: int(x.lost),
           unitResults: (x.unitResults || []).filter(function (r) { return r && r.result; }).map(function (r) { return { id: s(r.id).toUpperCase(), result: r.result, note: s(r.note) }; }) };
       });
       L.request = { type: 'return', at: c.now, by: c.user.name, lines: lines, note: s(c.p.note) };
@@ -688,11 +812,22 @@ var Logic = (function () {
       if (!it) throw E('找不到展品');
       if (!isNew && it.mode !== mode && c.db.Units.some(function (u) { return u.itemId === it.id; })) throw E('此展品已有逐台編號,無法改為「只記數量」');
       it.name = s(p.name); it.category = ensureCat(c, p.category); it.mode = mode;
-      it.qty = mode === 'qty' ? Math.max(0, int(p.qty)) : 0;
-      it.location = s(p.location); it.spec = s(p.spec); it.note = s(p.note); it.image = s(p.image); it.updatedAt = now;
+      it.spec = s(p.spec); it.note = s(p.note); it.image = s(p.image); it.updatedAt = now;
+      if (mode === 'qty') {
+        var keep = stockMap(it), m = {};
+        (p.sites && p.sites.length ? p.sites : [{ location: p.location, qty: p.qty }]).forEach(function (g) {
+          var L = loc(g.location), q = Math.max(0, int(g.qty));
+          if (!q) return;
+          m[L] = { qty: (m[L] ? m[L].qty : 0) + q, countedAt: keep[L] ? keep[L].countedAt : '' };
+        });
+        writeStock(it, m);
+      } else {
+        it.qty = 0; it.stock = {};
+        it.location = s(p.location);                               // 之後新增單台時的預設地點
+      }
       if (isNew) c.db.Items.push(it);
       dirty(c.db, 'Items');
-      log(c, isNew ? '新增展品' : '修改展品', it.id, it.name + (mode === 'qty' ? ' 數量 ' + it.qty : ''));
+      log(c, isNew ? '新增展品' : '修改展品', it.id, it.name + (mode === 'qty' ? ' ' + (it.location || '') + ' 共 ' + it.qty : ''));
       if (isNew && mode === 'unit' && int(p.unitCount) > 0) addUnits(c, it, int(p.unitCount), p.location);
       return it;
     },
@@ -760,34 +895,43 @@ var Logic = (function () {
       u.updatedAt = c.now; dirty(c.db, 'Units');
       return u;
     },
+    /** 盤點。給了 location 就只盤那個廠區:應在庫、差異、未點到的單台都只算該區 */
     stocktake: function (c) {
       var today = c.today, now = c.now, st = stats(c.db, today), apply = !!c.p.apply;
-      var report = { qty: [], missingUnits: [], seenUnits: 0, adjusted: 0 };
+      var where = s(c.p.location), onlyHere = !!where;
+      var report = { location: where, qty: [], missingUnits: [], seenUnits: 0, adjusted: 0 };
       (c.p.qty || []).forEach(function (x) {
         var it = byId(c.db.Items, s(x.itemId));
         if (!it || it.mode !== 'qty' || x.counted === '' || x.counted == null) return;
-        var expected = st[it.id].inStock, counted = Math.max(0, int(x.counted)), diff = counted - expected;
-        report.qty.push({ itemId: it.id, name: it.name, expected: expected, counted: counted, diff: diff });
-        it.countedAt = today;
-        if (apply && diff) { it.qty = Math.max(0, int(it.qty) + diff); report.adjusted++; }
+        var at = loc(x.location || where), box = st[it.id + '@' + at];
+        if (onlyHere && at !== where) return;
+        var expected = box ? box.inStock : 0, counted = Math.max(0, int(x.counted)), diff = counted - expected;
+        report.qty.push({ itemId: it.id, name: it.name, location: at, expected: expected, counted: counted, diff: diff });
+        var m = stockMap(it);
+        m[at] = m[at] || { qty: 0, countedAt: '' };
+        m[at].countedAt = today;
+        if (apply && diff) { m[at].qty = Math.max(0, int(m[at].qty) + diff); report.adjusted++; }
+        writeStock(it, m);
+        it.updatedAt = now;
         dirty(c.db, 'Items');
       });
       var seen = {}; (c.p.seenUnits || []).forEach(function (id) { seen[s(id).toUpperCase()] = 1; });
       var scope = {}; (c.p.unitItems || []).forEach(function (id) { scope[id] = 1; });
       c.db.Units.forEach(function (u) {
         if (!scope[u.itemId]) return;
+        if (onlyHere && loc(u.location) !== where) return;
         if (seen[u.id]) {
           report.seenUnits++; u.countedAt = today;
           if (u.status === 'lost' && apply) { u.status = 'in'; u.updatedAt = now; report.adjusted++; report.qty.push({ itemId: u.id, name: u.id + ' 找回', expected: 0, counted: 1, diff: 1 }); }
         } else if (u.status === 'in') {
           var it = byId(c.db.Items, u.itemId) || {};
-          report.missingUnits.push({ id: u.id, name: it.name, serial: u.serial, history: unitHistory(c.db, u.id).slice(0, 1) });
+          report.missingUnits.push({ id: u.id, name: it.name, location: loc(u.location), serial: u.serial, history: unitHistory(c.db, u.id).slice(0, 1) });
           if (apply && c.p.markMissingLost) { u.status = 'lost'; u.updatedAt = now; report.adjusted++; }
         }
       });
       dirty(c.db, 'Units');
       var diffs = report.qty.filter(function (x) { return x.diff; });
-      log(c, '盤點', today, '數量品項 ' + report.qty.length + ',差異 ' + diffs.length + ';逐台點到 ' + report.seenUnits + ',未點到 ' + report.missingUnits.length + (apply ? '(已套用調整)' : '(僅記錄)'));
+      log(c, '盤點', today, (where ? where + ':' : '') + '數量品項 ' + report.qty.length + ',差異 ' + diffs.length + ';逐台點到 ' + report.seenUnits + ',未點到 ' + report.missingUnits.length + (apply ? '(已套用調整)' : '(僅記錄)'));
       return report;
     },
     importItems: function (c) {
@@ -843,6 +987,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules, LOAN_ST: LOAN_ST };
 })();

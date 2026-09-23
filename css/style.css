@@ -262,3 +262,13 @@ label.btn.sm{cursor:pointer}
   .btn .lbl-hide{display:none}
 }
 @media print{.top,.toolbar,.actions{display:none}}
+
+/* 展品編輯:各地點的數量(地點 / 台數 / 移除) */
+.siterow { display: grid; grid-template-columns: 1fr 96px 36px; gap: 8px; align-items: center; margin-bottom: 8px }
+.siterow .slocnew { grid-column: 1 / -1 }
+.siterow .sdel { padding: 6px 10px; color: var(--muted) }
+.siterow .sdel:hover { color: var(--red) }
+/* 清單上的分佈:新竹 3 · 林口 2 */
+.dist { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px }
+.dist b { font-weight: 600 }
+.dist .z { color: var(--muted) }

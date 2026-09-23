@@ -11,14 +11,15 @@ var Memory = (function () {
   var SHEET_NAMES = { Cats: '分類', Items: '展品', Units: '單台編號', Loans: '借用單', Users: '使用者', Logs: '操作紀錄' };
   var SCHEMA = {
     Cats: ['id', 'name', 'sort', 'archived', 'updatedAt'],
-    Items: ['id', 'name', 'category', 'mode', 'qty', 'location', 'spec', 'note', 'image', 'archived', 'countedAt', 'updatedAt'],
+    Items: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'spec', 'note', 'image', 'archived', 'countedAt', 'updatedAt'],
     Units: ['id', 'itemId', 'serial', 'status', 'location', 'note', 'countedAt', 'updatedAt'],
     Loans: ['id', 'applicant', 'applicantId', 'dept', 'contact', 'event', 'venue', 'purpose', 'start', 'end', 'status', 'lines',
       'createdBy', 'createdAt', 'reviewer', 'reviewedAt', 'reviewNote', 'outAt', 'returnedAt', 'note', 'request'],
     Users: ['id', 'empNo', 'name', 'dept', 'email', 'role', 'pinHash', 'mustChange', 'sessionVer', 'active', 'createdAt'],
     Logs: ['ts', 'user', 'action', 'ref', 'detail']
   };
-  var JSON_FIELDS = { Loans: { lines: [], request: null } };   // 欄位 → 空值預設
+  // stock:數量型展品的各地點庫存 {"新竹":{"數量":3,"盤點":"2026-09-23"}};qty 與 countedAt 由後端回填
+  var JSON_FIELDS = { Loans: { lines: [], request: null }, Items: { stock: {} } };   // 欄位 → 空值預設
   var TABLES = ['Cats', 'Items', 'Units', 'Loans', 'Users'];
   // 分類第一次建立時先放進來的七類(之後可在畫面上自行新增 / 改名 / 調順序)
   var SEED = { Cats: ['eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'] };

@@ -265,6 +265,60 @@ ok('approve', { id: L4.id }, A);
 ok('checkout', { id: L4.id, units: { [panel.id]: ['E0002'] } }, A);
 assert.strictEqual(ok('units', { itemId: panel.id }, A).find(u => u.id === 'E0002').holder.applicant, '測試員工A');
 
+/* 舊資料相容:直接在試算表補一列「只有總數 + 單一地點、沒有 stock 欄」的舊展品 */
+(() => {
+  const sh = G.sheets['展品'], head = G.ctx.Memory.SCHEMA.Items, row = head.map(h => '');
+  const put = (h, v) => row[head.indexOf(h)] = v;
+  put('id', 'P9000'); put('name', '舊資料燈箱'); put('category', 'Signage'); put('mode', 'qty');
+  put('qty', '7'); put('location', '湖口'); put('archived', 'FALSE');       // 沒有 stock 欄
+  sh.getRange(sh.getLastRow() + 1, 1, 1, head.length).setValues([row]);
+  G.ctx.Memory.load({});                                                     // 觸發一次讀取,確保快取用的是新版本
+})();
+const legacy = ok('items', {}, A).find(x => x.id === 'P9000');
+assert.strictEqual(legacy.total, 7, '舊資料的總數要讀得到');
+assert.deepStrictEqual(legacy.sites.map(g => g.location + g.total), ['湖口7'], '舊資料要自動視為全部放在那個地點');
+const LG = ok('createLoan', { event: '舊資料場', start: '2026-12-01', end: '2026-12-03', lines: [{ itemId: 'P9000', qty: 2 }] }, U);
+ok('approve', { id: LG.id }, A);
+assert.strictEqual(ok('pickupOptions', { id: LG.id }, U)[0].inStock, 7, '舊資料的在庫量要算得出來');
+assert.strictEqual(ok('pickupOptions', { id: LG.id }, U)[0].location, '湖口', '沒指定地點時要自動補上唯一的那個地點');
+
+/* ===== 分地點庫存:同一個展品散在兩個廠區 ===== */
+const dual = ok('saveItem', { item: { name: '雙廠展示機', mode: 'qty', category: 'Signage', sites: [{ location: '新竹', qty: 3 }, { location: '林口', qty: 2 }] } }, A);
+assert.strictEqual(dual.qty, 5, '總數應為各地相加');
+const dualView = ok('items', {}, A).find(x => x.id === dual.id);
+assert.deepStrictEqual(dualView.sites.map(g => g.location + g.total), ['新竹3', '林口2']);
+// 借新竹的 3 台 → 新竹借光,林口不受影響
+const LS = ok('createLoan', { event: '新竹場', start: '2026-11-01', end: '2026-11-05', lines: [{ itemId: dual.id, location: '新竹', qty: 3 }] }, U);
+assert.strictEqual(LS.lines[0].location, '新竹', '借用單那一行要記得是哪個廠區的');
+ok('approve', { id: LS.id }, A);
+assert.strictEqual(ok('check', { start: '2026-11-02', end: '2026-11-03', lines: [{ itemId: dual.id, location: '新竹', qty: 1 }] }, U)[0].short, 1);
+assert.strictEqual(ok('check', { start: '2026-11-02', end: '2026-11-03', lines: [{ itemId: dual.id, location: '林口', qty: 2 }] }, U)[0].short, 0);
+bad('createLoan', { event: 'X', start: '2026-11-01', end: '2026-11-05', lines: [{ itemId: dual.id, qty: 1 }] }, U, /請指定要從哪一個地點借/);
+bad('createLoan', { event: 'X', start: '2026-11-01', end: '2026-11-05', lines: [{ itemId: dual.id, location: '湖口', qty: 1 }] }, U, /沒有庫存/);
+// 只盤林口:新竹的那一筆不該進報表,林口盤完差異為 0
+const repL = ok('stocktake', { location: '林口', qty: [{ itemId: dual.id, location: '林口', counted: 2 }, { itemId: dual.id, location: '新竹', counted: 0 }], unitItems: [], seenUnits: [], apply: true }, A);
+assert.deepStrictEqual(repL.qty.map(x => x.location), ['林口']);
+assert.strictEqual(repL.qty[0].diff, 0);
+const dual2 = ok('items', {}, A).find(x => x.id === dual.id);
+assert.match(dual2.sites.find(g => g.location === '林口').countedAt, /^\d{4}-\d{2}-\d{2}$/, '林口要留下盤點日');
+assert.strictEqual(dual2.sites.find(g => g.location === '新竹').countedAt, '', '新竹沒盤到就不該有盤點日');
+// 逐台編號也分廠區:點交時不能拿別廠的機器交差
+const dualU = ok('saveItem', { item: { name: '雙廠單台機', mode: 'unit', category: 'Signage', unitCount: 2, location: '新竹' } }, A);
+const dualUnits = ok('units', { itemId: dualU.id }, A).map(u => u.id);
+ok('saveUnit', { unit: { id: dualUnits[1], location: '林口' } }, A);
+const dualUView = ok('items', {}, A).find(x => x.id === dualU.id);
+assert.deepStrictEqual(dualUView.sites.map(g => g.location + g.total).sort(), ['新竹1', '林口1'].sort());
+const LU = ok('createLoan', { event: '新竹單台場', start: '2026-11-10', end: '2026-11-12', lines: [{ itemId: dualU.id, location: '新竹', qty: 1 }] }, U);
+ok('approve', { id: LU.id }, A);
+bad('checkout', { id: LU.id, units: { [dualU.id + '@新竹']: [dualUnits[1]] } }, A, /放在 林口/);
+ok('checkout', { id: LU.id, units: { [dualU.id + '@新竹']: [dualUnits[0]] } }, A);
+// 只盤林口:新竹那一台沒點到也不算短少(根本不在這一區)
+const dualU2 = ok('saveItem', { item: { name: '雙廠單台機B', mode: 'unit', category: 'Signage', unitCount: 2, location: '新竹' } }, A);
+const u2 = ok('units', { itemId: dualU2.id }, A).map(u => u.id);
+ok('saveUnit', { unit: { id: u2[1], location: '林口' } }, A);
+const repU = ok('stocktake', { location: '林口', unitItems: [dualU2.id], seenUnits: [], qty: [], apply: false }, A);
+assert.deepStrictEqual(repU.missingUnits.map(u => u.id), [u2[1]], '只盤林口時,新竹的單台不該被當成沒點到');
+
 const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [
@@ -273,7 +327,7 @@ const readActions = [
   ['catalog', {}, U], ['catalog', { start: '2026-10-01', end: '2026-10-05' }, U],
   ['check', { start: '2026-10-01', end: '2026-10-05', lines: [{ itemId: stand.id, qty: 3 }] }, U],
   ['myLoans', {}, U], ['myLoans', {}, U2b],
-  ['pickupOptions', { id: L3.id }, U2b], ['pickupOptions', { id: L.id }, U],
+  ['pickupOptions', { id: L3.id }, U2b], ['pickupOptions', { id: L.id }, U], ['pickupOptions', { id: LG.id }, U],
   ['lookup', { code: 'E0001' }, U2b], ['lookup', { code: 'E0001' }, A], ['lookup', { code: '沒這個' }, U],
   ['dashboard', {}, A], ['items', {}, A], ['units', {}, A], ['units', { itemId: panel.id }, A]
 ];

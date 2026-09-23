@@ -22,13 +22,13 @@
 | ☑ | 排程積木 | `gas/50_schedule.gs`:每日 08:30 觸發 `dailyReminder` |
 | ☑ | 守門+調度 | `gas/00_gateway.gs`:`doPost` → 路由表(權限、欄位白名單)→ 分派 → `{success,data,error}` |
 | ☑ | 身份積木 | `gas/10_identity.gs`:工號登入、管理者 PIN、token、名冊維護 |
-| ☑ | 邏輯積木 | `gas/20_logic.gs`:庫存/可借量、預約、審核、簽收、歸還、盤點、提醒內容(純規則,時間由外部傳入) |
+| ☑ | 邏輯積木 | `gas/20_logic.gs`:庫存/可借量(分地點各算各的)、預約、審核、簽收、歸還、盤點、提醒內容(純規則,時間由外部傳入) |
 | ☑ | 連線積木 | `js/connect.js`:fetch GAS、逾時、讀取類重試、統一解析 |
 | ☐ | 爬蟲積木 | — |
 | ☐ | AI 積木 | — |
 | ☑ | 通知積木 | `gas/40_notify.gs`:MailApp 寄出邏輯積木產生的事件 |
-| ☑ | 記憶積木 | `gas/30_memory.gs`:Sheets 結構與讀寫(依表頭名稱對應;可指定只讀某些表 / 欄位 / 未結案的列,並依版本快取) |
-| ☐ | 檔案積木 | —(展品圖片目前用網址欄位,未上傳檔案) |
+| ☑ | 記憶積木 | `gas/30_memory.gs`:Sheets 結構與讀寫(依表頭名稱對應;可指定只讀某些表 / 欄位 / 未結案的列,並依版本快取)。展品的 `stock` 欄存各地點數量與各自的盤點日 |
+| ☑ | 檔案積木 | `gas/60_files.gs`:展品照片存進雲端硬碟「展品照片」資料夾,試算表只存連結 |
 | ☑ | 版本控制積木 | GitHub repo:`p60732/eink-exhibits` |
 | ☑ | 部署積木 | GitHub Pages:`https://p60732.github.io/eink-exhibits/`(Actions:測試 → 建置 → 發佈) |
 

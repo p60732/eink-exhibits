@@ -48,11 +48,10 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   // 展品編輯:上傳照片 + 刪除
   await p.click('[data-act=edit-item][data-id]'); await p.waitForSelector('#fphoto');
   if (!await p.isVisible('#fdrop')) throw new Error('編輯視窗少了刪除按鈕');
-  // 存放位置是下拉選單,先放新竹、林口
+  // 存放位置是下拉選單,先放新竹、林口(逐台編號的展品用單一預設地點)
   const sites = await p.$$eval('#floc option', els => els.map(e => e.textContent.trim()));
   if (sites[0] !== '新竹' || sites[1] !== '林口') throw new Error('存放位置選單不正確:' + sites.join('|'));
   if (!sites.some(v => /新增地點/.test(v))) throw new Error('存放位置少了「新增地點」');
-  await p.selectOption('#floc', '林口'); await wait(200);
   await p.setInputFiles('#ffile', { name: 'test.png', mimeType: 'image/png', buffer: PNG }); await wait(1500);
   const imgSrc = await p.getAttribute('#fphoto img', 'src');
   if (!/drive\.google\.com\/thumbnail/.test(imgSrc || '')) throw new Error('照片沒上傳成功:' + imgSrc);
@@ -62,9 +61,10 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('.modal [data-act=close]'); await wait(400);
   // 借過的展品刪不掉(這時候還沒借,所以先建一個丟掉的來試刪除)
   await p.click('.btn.brand[data-act=edit-item]'); await p.waitForSelector('#itf');
-  await p.fill('#itf [name=name]', '建錯的展品'); await p.fill('#itf [name=qty]', '1');
-  await p.selectOption('#floc', '__new'); await wait(300);
-  await p.fill('#flocnew', '湖口 B 倉 A-01');
+  await p.fill('#itf [name=name]', '建錯的展品');
+  await p.selectOption('.siterow .sloc', '__new'); await wait(300);
+  await p.fill('.siterow .slocnew', '湖口 B 倉 A-01');
+  await p.fill('.siterow .sqty', '1');
   await p.click('#itf .btn.pri'); await wait(900);
   const rowsBefore = await p.$$eval('#ibody tr:not(.grouph):not(.groupe)', els => els.length);
   const lastEdit = (await p.$$('[data-act=edit-item][data-id]')).slice(-1)[0];
@@ -74,7 +74,7 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   if (rowsAfter !== rowsBefore - 1) throw new Error('刪除展品沒生效:' + rowsBefore + ' → ' + rowsAfter);
   // 回歸:背景重新驗證還在路上時按刪除,清單不可以還留著那一筆(舊讀取不能覆蓋寫入後的資料)
   await p.click('.btn.brand[data-act=edit-item]'); await p.waitForSelector('#itf');
-  await p.fill('#itf [name=name]', '賽跑測試展品'); await p.fill('#itf [name=qty]', '1');
+  await p.fill('#itf [name=name]', '賽跑測試展品'); await p.fill('.siterow .sqty', '1');
   await p.click('#itf .btn.pri'); await wait(900);
   // 攔第一筆 items 讀取:先讓它真的去後端拿(拿到的是刪除前的資料),回應壓到刪除之後才送達
   let heldOnce = false;
@@ -100,6 +100,37 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   if (raceLeft) throw new Error('刪除後被在路上的舊讀取蓋回來了,清單還留著已刪除的展品');
   await p.unroute('**/api');
   if (!heldOnce) throw new Error('賽跑測試沒攔到 items 讀取,測試本身失效了');
+  /* 同一個展品分散在兩個廠區 */
+  await p.click('.btn.brand[data-act=edit-item]'); await p.waitForSelector('#itf');
+  await p.fill('#itf [name=name]', '雙廠展示機');
+  await p.selectOption('#fcat', '體驗區'); await wait(200);        // 放最後一個分類,不要打亂後面依順序挑的測試
+  await p.selectOption('.siterow .sloc', '新竹'); await p.fill('.siterow .sqty', '2');
+  await p.click('#faddsite'); await wait(200);
+  const rows2 = await p.$$('.siterow');
+  if (rows2.length !== 2) throw new Error('加不了第二個地點');
+  await p.selectOption('.siterow:nth-child(2) .sloc', '林口');
+  await p.fill('.siterow:nth-child(2) .sqty', '3');
+  await p.click('#itf .btn.pri'); await wait(1000);
+  const distTxt = await p.$$eval('#ibody tr', els => {
+    const r = els.find(e => e.textContent.includes('雙廠展示機'));
+    return r ? r.querySelector('.dist').textContent.replace(/\s+/g, ' ').trim() : '';
+  });
+  if (!/新竹 2/.test(distTxt) || !/林口 3/.test(distTxt)) throw new Error('清單沒顯示各地分佈:' + distTxt);
+  // 目錄:多地點的展品要能選從哪一點借
+  await p.click('[data-v=catalog]'); await wait(700);
+  const locSel = await p.$$eval('select[id^="loc-"]', els => els.filter(e => e.tagName === 'SELECT').map(e => [...e.options].map(o => o.textContent.trim())));
+  if (!locSel.some(opts => opts.some(t => /新竹/.test(t)) && opts.some(t => /林口/.test(t)))) throw new Error('目錄沒有讓人選地點:' + JSON.stringify(locSel));
+  // 盤點:可以只盤一個廠區
+  await p.click('[data-v=count]'); await p.waitForSelector('#ksite .catchip');
+  const chips2 = await p.$$eval('#ksite .catchip', els => els.map(e => e.textContent.trim()));
+  if (!chips2.includes('新竹') || !chips2.includes('林口')) throw new Error('盤點少了廠區籤條:' + chips2.join('|'));
+  await p.click('#ksite .catchip[data-site="林口"]'); await wait(600);
+  const bodyTxt = await p.textContent('#kbody');
+  if (/新竹/.test(bodyTxt)) throw new Error('只盤林口時不該出現新竹的東西');
+  if (!/雙廠展示機/.test(bodyTxt)) throw new Error('林口該有的東西沒列出來');
+  await shot('count_site');
+  await p.click('#ksite .catchip[data-site=""]'); await wait(500);
+  await p.click('[data-v=items]'); await wait(500);
   await p.click('#menu-btn'); await p.click('#m-out');
   // 同仁預約
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('.cards');
@@ -179,7 +210,8 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await shot('count_who'); await p.click('.modal [data-act=close]'); await wait(400);
   await shot('count');
   await p.click('[data-v=dash]'); await p.waitForSelector('.kpis');
-  await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2'); await p.click('#rgo2'); await wait(600);
+  await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2');
+  await p.click('#rgo2'); await wait(600);
   await p.click('[data-f=returned]'); await wait(500); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
   // 進行中的五個分頁共用同一次請求:切分頁不應該再打後端
   await p.click('[data-f=pending]'); await wait(900);

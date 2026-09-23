@@ -10,7 +10,7 @@ const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
   cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
-  loanFilter: 'pending', itemQ: '', cat: '', showArchived: false, logQ: ''
+  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, logQ: ''
 };
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -285,9 +285,10 @@ function reqBanner(req, mine) {
 }
 
 function loanCard(L, opts = {}) {
-  const chk = {}; (L.check || []).forEach(c => chk[c.itemId] = c);
+  const chk = {}; (L.check || []).forEach(c => { chk[c.itemId + '@' + nloc(c.location)] = c; });
   const lines = L.lines.map(ln => {
-    const c = chk[ln.itemId];
+    const c = chk[lkey(ln)];
+    const where = esc(nloc(ln.location));
     const units = (ln.units || []).length ? `<div class="u">${ln.units.map(u => {
       const st = (ln.lostUnits || []).includes(u) ? '(遺失)' : (ln.returnedUnits || []).includes(u) ? '(已還)' : '';
       return esc(u) + st;
@@ -295,7 +296,7 @@ function loanCard(L, opts = {}) {
     let right = `<span class="q">× ${ln.qty}</span>`;
     if (L.status === 'out' && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.lost ? `・短少 ${ln.lost}` : ''}</span>`;
     if (c) right += c.short ? ` <span class="short">缺 ${c.short}(可借 ${c.available})</span>` : ` <span class="okt">足夠</span>`;
-    return `<div class="line"><span class="nm">${esc(ln.name)} ${ln.mode === 'unit' ? '<span class="pill unit">逐台</span>' : ''}</span>${right}${units}</div>`;
+    return `<div class="line"><span class="nm">${esc(ln.name)} ${ln.mode === 'unit' ? '<span class="pill unit">逐台</span>' : ''}<br><span class="meta">${where}</span></span>${right}${units}</div>`;
   }).join('');
   const A = [];
   const admin = isAdmin() && !opts.mine;
@@ -342,16 +343,26 @@ function downloadCSV(name, rows) {
 }
 async function exportStock() {
   const list = await api(isAdmin() ? 'items' : 'catalog');
-  downloadCSV(`展品庫存_${todayStr()}.csv`, [['編號', '品名', '類別', '追蹤方式', '總數', '倉庫在庫', '出借中', '已預約', '維修', '存放位置', '最後盤點', '規格', '狀態']]
-    .concat(list.map(i => [i.id, i.name, i.category, i.mode === 'unit' ? '逐台編號' : '數量', i.total, i.inStock, i.out, i.reserved, i.repair || 0, i.location, i.countedAt, i.spec, i.archived ? '已下架' : '使用中'])));
+  downloadCSV(`展品庫存_${todayStr()}.csv`, [['編號', '品名', '類別', '追蹤方式', '總數', '倉庫在庫', '出借中', '已預約', '維修', '各地點數量', '最後盤點', '規格', '狀態']]
+    .concat(list.map(i => [i.id, i.name, i.category, i.mode === 'unit' ? '逐台編號' : '數量', i.total, i.inStock, i.out, i.reserved, i.repair || 0,
+      (i.sites || []).map(g => g.location + ' ' + g.total).join('、') || i.location, i.countedAt, i.spec, i.archived ? '已下架' : '使用中'])));
 }
 function saveCart() { store.set('cart', S.cart); store.set('plan', S.plan); renderTabs(); }
-function addToCart(itemId, qty) {
+/** 同一個展品放在不同廠區要分開算,所以清單的 key 是「展品 + 地點」 */
+const ckey = c => c.itemId + '@' + (c.location || '');
+function addToCart(itemId, qty, where) {
   qty = Math.max(1, parseInt(qty, 10) || 1);
-  const ex = S.cart.find(c => c.itemId === itemId);
-  if (ex) ex.qty += qty; else S.cart.push({ itemId, qty });
+  const key = itemId + '@' + (where || '');
+  const ex = S.cart.find(c => ckey(c) === key);
+  if (ex) ex.qty += qty; else S.cart.push({ itemId, location: where || '', qty });
   saveCart();
 }
+/** 這個展品放在哪幾個地點 */
+function itemSites(i) { return (i.sites || []).map(g => g.location); }
+/** 地點的標準寫法:沒填就叫「未指定」(後端也是這樣算) */
+const nloc = v => (v && String(v).trim()) || '未指定';
+/** 借用單一行的 key:同一個展品在不同廠區是兩行 */
+const lkey = l => l.itemId + '@' + nloc(l.location);
 
 /* ===================== 各頁面 ===================== */
 const VIEWS = {};
@@ -398,22 +409,27 @@ VIEWS.catalog = async main => {
     ${range ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到展覽規劃</a></div>` : ''}
     <div id="cgrid"></div>`;
   const card = i => {
-    const inCart = S.cart.find(c => c.itemId === i.id);
+    const inCart = S.cart.filter(c => c.itemId === i.id).reduce((a, c) => a + c.qty, 0);
     const av = range ? i.available : null;
+    const gs = i.sites || [];
+    const picker = gs.length > 1
+      ? `<select id="loc-${i.id}" aria-label="從哪個地點借">${gs.map(g => `<option value="${esc(g.location)}">${esc(g.location)}(${range ? '可借 ' + (g.available || 0) : '在庫 ' + g.inStock})</option>`).join('')}</select>`
+      : `<input type="hidden" id="loc-${i.id}" value="${esc(gs[0] ? gs[0].location : '')}">`;
+    const distHtml = distLine(i, range ? 'total' : 'inStock');
     return `<div class="card item-card">
       ${i.image ? `<div class="img" style="background-image:url('${esc(i.image)}')"></div>` : ''}
       <div class="row" style="gap:6px"><label class="chk"><input type="checkbox" data-mpick="${esc(i.id)}" ${S.multi.has(i.id) ? 'checked' : ''}>選</label><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
       <h3>${esc(i.name)}</h3>
       ${i.spec ? `<div class="meta">${esc(i.spec)}</div>` : ''}
-      <div class="meta">存放:${esc(i.location || '—')}</div>
+      <div class="meta">存放:</div>${distHtml}
       <div class="nums"><div class="${i.inStock ? '' : 'zero'}"><b>${i.inStock}</b>倉庫在庫</div><div><b>${i.out}</b>出借中</div><div><b>${i.reserved}</b>已預約</div><div><b>${i.total}</b>總數</div></div>
       ${range ? `<div class="avail ${av ? '' : 'none'}">期間可借 <b>${av}</b></div>` : ''}
-      <div class="addrow"><input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="add-cart" data-id="${i.id}">${inCart ? `加入規劃(已選 ${inCart.qty})` : '加入規劃'}</button></div>
+      <div class="addrow">${picker}<input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="add-cart" data-id="${i.id}">${inCart ? `加入規劃(已選 ${inCart})` : '加入規劃'}</button></div>
     </div>`;
   };
   let draw = () => {
     const q = f.q.toLowerCase();
-    const match = i => (!q || [i.name, i.spec, i.location, i.category, i.id].join(' ').toLowerCase().includes(q)) && (!f.onlyAvail || (range ? i.available : i.inStock) > 0);
+    const match = i => (!q || [i.name, i.spec, i.location, i.category, i.id, itemSites(i).join(' ')].join(' ').toLowerCase().includes(q)) && (!f.onlyAvail || (range ? i.available : i.inStock) > 0);
     const shown = S.items.filter(match);
     const counts = {};
     shown.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
@@ -481,19 +497,21 @@ VIEWS.plan = async main => {
   </div>`;
   let lastCheck = [];
   const drawLines = () => {
-    const ck = Object.fromEntries(lastCheck.map(c => [c.itemId, c]));
+    const ck = Object.fromEntries(lastCheck.map(c => [c.itemId + '@' + (c.location || ''), c]));
     $('#plines').innerHTML = S.cart.map(c => {
-      const i = byId[c.itemId], k = ck[c.itemId];
+      const i = byId[c.itemId], k = ck[ckey(c)] || ck[c.itemId + '@'];
       const st = k ? (k.short ? `<span class="short">缺 ${k.short}(可借 ${k.available})</span>` : `<span class="okt">足夠(可借 ${k.available})</span>`) : `<span class="meta">在庫 ${i.inStock}</span>`;
-      return `<div class="line"><span class="nm">${esc(i.name)}<br><span class="meta">${esc(i.location || '')}</span></span>
-        <span class="qtybox"><button type="button" data-act="cq" data-id="${i.id}" data-d="-1">−</button><input type="number" min="1" value="${c.qty}" data-cqi="${i.id}"><button type="button" data-act="cq" data-id="${i.id}" data-d="1">+</button></span>
-        <span style="min-width:120px;text-align:right">${st}</span><button class="btn sm ghost" data-act="rm-cart" data-id="${i.id}" aria-label="移除">✕</button></div>`;
+      const where = esc(c.location || (i.sites || []).map(g => g.location).join('、'));
+      const key = esc(ckey(c));
+      return `<div class="line"><span class="nm">${esc(i.name)}<br><span class="meta">${where}</span></span>
+        <span class="qtybox"><button type="button" data-act="cq" data-id="${key}" data-d="-1">−</button><input type="number" min="1" value="${c.qty}" data-cqi="${key}"><button type="button" data-act="cq" data-id="${key}" data-d="1">+</button></span>
+        <span style="min-width:120px;text-align:right">${st}</span><button class="btn sm ghost" data-act="rm-cart" data-id="${key}" aria-label="移除">✕</button></div>`;
     }).join('');
-    $$('[data-cqi]').forEach(inp => inp.onchange = () => { const c = S.cart.find(x => x.itemId === inp.dataset.cqi); c.qty = Math.max(1, parseInt(inp.value, 10) || 1); saveCart(); recheck(); });
+    $$('[data-cqi]').forEach(inp => inp.onchange = () => { const c = S.cart.find(x => ckey(x) === inp.dataset.cqi); c.qty = Math.max(1, parseInt(inp.value, 10) || 1); saveCart(); recheck(); });
     const short = lastCheck.filter(c => c.short);
     const hasRange = P.start && P.end;
     $('#psum').innerHTML = !hasRange ? `<div class="sumbar banner info">選擇日期後會檢查每項是否足夠</div>`
-      : short.length ? `<div class="sumbar banner bad"><b>缺 ${short.length} 項</b>:${short.map(s => esc(s.name) + ' ×' + s.short).join('、')}</div>`
+      : short.length ? `<div class="sumbar banner bad"><b>缺 ${short.length} 項</b>:${short.map(s => esc(s.name) + (s.location ? '(' + esc(s.location) + ')' : '') + ' ×' + s.short).join('、')}</div>`
         : `<div class="sumbar banner ok"><b>全部足夠</b>,共 ${S.cart.length} 項 ${S.cart.reduce((a, c) => a + c.qty, 0)} 件</div>`;
     const force = admin && $('#pform [name=force]') && $('#pform [name=force]').checked;
     $('#psubmit').disabled = !hasRange || (short.length && !force);
@@ -648,14 +666,14 @@ VIEWS.items = async main => {
     <div class="toolbar"><input class="grow" type="search" id="iq" placeholder="搜尋…" value="${esc(S.itemQ)}"><label class="chk"><input type="checkbox" id="iarc" ${S.showArchived ? 'checked' : ''}>顯示已下架</label></div>
     <div id="ibar"></div>
     <div class="tbl-wrap"><table><thead><tr><th>編號</th><th>品名</th><th>方式</th><th class="num">總數</th><th class="num">在庫</th><th class="num">借出</th><th class="num">預約</th><th>存放位置</th><th>最後盤點</th><th></th></tr></thead><tbody id="ibody"></tbody></table></div>`;
-  const row = i => `
+  const row = i => { const dist = distLine(i, 'total'); return `
     <tr class="${i.archived ? 'dim' : ''}"><td class="mono">${esc(i.id)}</td><td>${esc(i.name)}</td><td>${i.mode === 'unit' ? '<span class="pill unit">逐台</span>' : '<span class="pill">數量</span>'}</td>
-    <td class="num">${i.total}</td><td class="num"><span class="chipnum ${i.inStock ? '' : 'zero'}">${i.inStock}</span></td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${esc(i.location)}</td><td>${esc(i.countedAt || '—')}</td>
+    <td class="num">${i.total}</td><td class="num"><span class="chipnum ${i.inStock ? '' : 'zero'}">${i.inStock}</span></td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${dist}</td><td>${esc(i.countedAt || '—')}</td>
     <td><div class="row" style="gap:4px;flex-wrap:nowrap">${i.mode === 'unit' ? `<button class="btn sm" data-act="units" data-id="${i.id}">單台 / QR</button>` : ''}<button class="btn sm" data-act="edit-item" data-id="${i.id}">編輯</button>
-    <button class="btn sm ghost" data-act="archive" data-id="${i.id}" data-on="${i.archived ? '0' : '1'}">${i.archived ? '上架' : '下架'}</button></div></td></tr>`;
+    <button class="btn sm ghost" data-act="archive" data-id="${i.id}" data-on="${i.archived ? '0' : '1'}">${i.archived ? '上架' : '下架'}</button></div></td></tr>`; };
   const draw = () => {
     const q = S.itemQ.toLowerCase();
-    const shown = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec].join(' ').toLowerCase().includes(q)));
+    const shown = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec, (i.sites || []).map(g => g.location).join(' ')].join(' ').toLowerCase().includes(q)));
     const counts = {};
     shown.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
     $('#ibar').innerHTML = catBar(S.cats, S.cat, counts);
@@ -720,11 +738,12 @@ function outUnitLines(us) {
 }
 
 /** 數量品項:點「借出中」的數字看是誰借走的 */
-function outWhoModal(itemId) {
+function outWhoModal(key) {
+  const itemId = String(key).split('@')[0], where = String(key).split('@')[1] || '';
   const it = (S.items || []).find(x => x.id === itemId) || {};
-  const hs = (S._holders || {})[itemId] || [];
+  const hs = (S._holders || {})[key] || [];
   const rows = hs.map(h => holderLine(h.loanId, h, h.qty)).join('');
-  openModal('<h2>' + esc(it.name || itemId) + '・借出中</h2>'
+  openModal('<h2>' + esc(it.name || itemId) + (where ? '(' + esc(where) + ')' : '') + '・借出中</h2>'
     + '<p class="sub">這些不列入盤點,實點時不用把它們算進去。</p>'
     + (rows ? '<div class="lines">' + rows + '</div>' : '<div class="card empty">查無借用中的紀錄</div>')
     + '<div class="modal-f"><button class="btn pri" data-act="close">關閉</button></div>');
@@ -741,65 +760,78 @@ VIEWS.count = async main => {
   outLoans.forEach(L => (L.lines || []).forEach(ln => {
     const left = ln.outstanding == null ? ln.qty : ln.outstanding;
     if (!left) return;
-    (holders[ln.itemId] = holders[ln.itemId] || []).push({
-      loanId: L.id, applicant: L.applicant, dept: L.dept, event: L.event, end: L.end, overdue: L.overdue, qty: left
-    });
+    const rec = { loanId: L.id, applicant: L.applicant, dept: L.dept, event: L.event, end: L.end, overdue: L.overdue, qty: left };
+    (holders[lkey(ln)] = holders[lkey(ln)] || []).push(rec);
   }));
   S._holders = holders;
-  const list = items.filter(i => !i.archived);
+  const all = items.filter(i => !i.archived);
   const unitsBy = {};
-  list.forEach(i => unitsBy[i.id] = []);
+  all.forEach(i => unitsBy[i.id] = []);
   allUnits.forEach(u => { if (unitsBy[u.itemId]) unitsBy[u.itemId].push(u); });
-  const inUnits = i => unitsBy[i.id].filter(u => u.status === 'in');
-  const outUnits = i => unitsBy[i.id].filter(u => u.status === 'out');
-  const expect = i => i.mode === 'unit' ? inUnits(i).length : i.inStock;   // 應在庫
+  // 盤點是一個廠區一個廠區盤的,所以一列 = 一個展品在一個地點
+  const sites = [...new Set(all.flatMap(i => (i.sites || []).map(g => nloc(g.location))))].sort();
+  if (S.site && !sites.includes(S.site)) S.site = '';
+  const rowsOf = i => (i.sites || []).map(g => nloc(g.location)).filter(L => !S.site || L === S.site);
+  const list = all.filter(i => rowsOf(i).length);
+  const K = (i, L) => i.id + '@' + L;
+  const inUnits = (i, L) => unitsBy[i.id].filter(u => u.status === 'in' && nloc(u.location) === L);
+  const outUnits = (i, L) => unitsBy[i.id].filter(u => u.status === 'out' && nloc(u.location) === L);
+  const siteOf = (i, L) => (i.sites || []).find(g => nloc(g.location) === L) || { total: 0, inStock: 0, out: 0 };
+  const expect = (i, L) => i.mode === 'unit' ? inUnits(i, L).length : siteOf(i, L).inStock;   // 應在庫
   const seen = new Set(), scope = new Set(), counted = {};                 // 切分類重畫時要保留
   if (S.cat && !cats.some(c => c.name === S.cat)) S.cat = '';
 
   main.innerHTML = `<div class="eyebrow">Stocktake</div><h1>盤點</h1>
-    <p class="sub">「應在庫」已扣除借出中的數量。數量品項填實點數;逐台品項勾選或掃描點到的編號。未填 / 未勾選的品項不列入本次盤點。</p>
+    <p class="sub" id="ksub2">先選你要盤的廠區,畫面只會列出那一區該有的東西,差異也只算那一區。「應在庫」已扣除借出中的數量;未填 / 未勾選的不列入本次盤點。</p>
     <div class="kpis" id="ksum"></div>
     <div class="card" style="margin:14px 0"><div class="row"><input class="grow" type="text" id="kscan" placeholder="輸入或用掃描槍刷編號後按 Enter(例:E0001)" style="flex:1 1 240px"><button class="btn" data-act="count-cam">${ICON.scan}相機掃描</button></div><div class="meta" id="klast" style="margin-top:6px"></div></div>
+    <div class="catbar" id="ksite"></div>
     <div id="kbar"></div>
     <div id="kbody"></div>
     <div class="card" style="margin-top:14px"><div class="row"><label class="chk"><input type="checkbox" id="kapply" checked>把差異套用到系統數量</label><label class="chk"><input type="checkbox" id="klost">未點到的單台標記為「遺失」</label><span class="spacer"></span><button class="btn pri" data-act="count-submit">完成盤點</button></div></div>`;
 
   /* ---- 總計對照:只算「已納入本次盤點」的品項 ---- */
   const drawSum = () => {
-    let exp = 0, got = 0, done = 0, todo = 0, out = 0;
-    list.forEach(i => {
-      out += i.out;
-      const inScope = i.mode === 'unit' ? scope.has(i.id) : counted[i.id] != null;
+    let exp = 0, got = 0, done = 0, todo = 0, out = 0, total = 0;
+    list.forEach(i => rowsOf(i).forEach(L => {
+      total++;
+      const k = K(i, L);
+      out += i.mode === 'unit' ? outUnits(i, L).length : siteOf(i, L).out;
+      const inScope = i.mode === 'unit' ? scope.has(k) : counted[k] != null;
       if (!inScope) { todo++; return; }
       done++;
-      exp += expect(i);
-      got += i.mode === 'unit' ? unitsBy[i.id].filter(u => seen.has(u.id)).length : counted[i.id];
-    });
+      exp += expect(i, L);
+      got += i.mode === 'unit' ? inUnits(i, L).concat(unitsBy[i.id].filter(u => u.status === 'lost' && nloc(u.location) === L)).filter(u => seen.has(u.id)).length : counted[k];
+    }));
     const diff = got - exp;
     $('#ksum').innerHTML = [
-      kpi(ICON.layers, '已盤 / 全部品項', done + ' / ' + list.length),
+      kpi(ICON.layers, '已盤 / 全部品項', done + ' / ' + total),
       kpi(ICON.home, '應在庫(已盤部分)', exp),
       kpi(ICON.check, '實際點到', got),
       kpi(ICON.alert, '差異', (diff > 0 ? '+' : '') + diff, diff ? 'bad' : ''),
       kpi(ICON.out, '借出中(不用盤)', out)
     ].join('');
     $('#ksub') && ($('#ksub').textContent = todo ? '還有 ' + todo + ' 項沒盤' : '全部盤完了');
+    $('#ksite').innerHTML = ['<span class="catchip' + (S.site ? '' : ' on') + '" data-site="">全部廠區</span>']
+      .concat(sites.map(v => '<span class="catchip' + (S.site === v ? ' on' : '') + '" data-site="' + esc(v) + '">' + esc(v) + '</span>')).join('');
+    $$('[data-site]').forEach(el => el.onclick = () => { S.site = el.dataset.site; seen.clear(); scope.clear(); Object.keys(counted).forEach(k => delete counted[k]); draw(); });
   };
 
   /* ---- 依分類分段 ---- */
-  const unitCard = i => {
-    const ins = inUnits(i), lost = unitsBy[i.id].filter(u => u.status === 'lost');
+  const unitCard = (i, L) => {
+    const k = esc(K(i, L));
+    const ins = inUnits(i, L), lost = unitsBy[i.id].filter(u => u.status === 'lost' && nloc(u.location) === L);
     const pick = ins.concat(lost);
-    const chips = pick.map(u => `<span class="chipk ${seen.has(u.id) ? 'on' : ''}" data-unit="${esc(u.id)}" data-item="${esc(i.id)}">${esc(u.id)}${u.status === 'lost' ? ' <small>遺失</small>' : ''}</span>`);
-    return `<div class="card"><div class="row"><b style="flex:1">${esc(i.name)}</b><label class="chk"><input type="checkbox" data-scope="${esc(i.id)}" ${scope.has(i.id) ? 'checked' : ''}>納入盤點</label></div>
-      <div class="meta">應在庫 <b>${ins.length}</b> 台・<span data-cnt="${esc(i.id)}"></span>・<span data-udiff="${esc(i.id)}"></span></div>
-      <div class="chips">${chips.join('') || '<span class="meta">無應在庫的單台</span>'}</div>
-      ${outUnitLines(outUnits(i))}</div>`;
+    const chips = pick.map(u => `<span class="chipk ${seen.has(u.id) ? 'on' : ''}" data-unit="${esc(u.id)}" data-item="${k}">${esc(u.id)}${u.status === 'lost' ? ' <small>遺失</small>' : ''}</span>`);
+    return `<div class="card"><div class="row"><b style="flex:1">${esc(i.name)} <span class="pill">${esc(L)}</span></b><label class="chk"><input type="checkbox" data-scope="${k}" ${scope.has(K(i, L)) ? 'checked' : ''}>納入盤點</label></div>
+      <div class="meta">應在庫 <b>${ins.length}</b> 台・<span data-cnt="${k}"></span>・<span data-udiff="${k}"></span></div>
+      <div class="chips">${chips.join('') || '<span class="meta">這一區沒有應在庫的單台</span>'}</div>
+      ${outUnitLines(outUnits(i, L))}</div>`;
   };
   const qtyTable = qs => qs.length ? `<div class="tbl-wrap"><table><thead><tr><th>品名</th><th>存放位置</th><th class="num">應在庫</th><th class="num">借出中</th><th class="num" style="width:120px">實點</th><th class="num">差異</th></tr></thead><tbody>
-    ${qs.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.location)}</td><td class="num">${i.inStock}</td><td class="num">${i.out ? '<button class="btn sm ghost" data-act="out-who" data-id="' + esc(i.id) + '">' + i.out + ' 台</button>' : '—'}</td>
-      <td><input type="number" min="0" data-cnt-qty="${esc(i.id)}" data-exp="${i.inStock}" value="${counted[i.id] == null ? '' : counted[i.id]}" style="text-align:right"></td>
-      <td class="num" data-diff="${esc(i.id)}">—</td></tr>`).join('')}</tbody></table></div>` : '';
+    ${qs.map(([i, L]) => { const k = esc(K(i, L)), g = siteOf(i, L); return `<tr><td>${esc(i.name)}</td><td>${esc(L)}</td><td class="num">${g.inStock}</td><td class="num">${g.out ? '<button class="btn sm ghost" data-act="out-who" data-id="' + k + '">' + g.out + ' 台</button>' : '—'}</td>
+      <td><input type="number" min="0" data-cnt-qty="${k}" data-exp="${g.inStock}" value="${counted[K(i, L)] == null ? '' : counted[K(i, L)]}" style="text-align:right"></td>
+      <td class="num" data-diff="${k}">—</td></tr>`; }).join('')}</tbody></table></div>` : '';
 
   const draw = () => {
     const counts = {};
@@ -807,35 +839,39 @@ VIEWS.count = async main => {
     $('#kbar').innerHTML = catBar(cats, S.cat, counts);
     const groups = S.cat ? [[S.cat, list.filter(i => i.category === S.cat)]] : groupByCat(cats, list);
     $('#kbody').innerHTML = groups.map(([name, arr]) => {
-      const us = arr.filter(i => i.mode === 'unit'), qs = arr.filter(i => i.mode === 'qty');
-      const body = arr.length
-        ? (us.length ? `<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${us.map(unitCard).join('')}</div>` : '') + qtyTable(qs)
-        : '<div class="catempty">這個分類還沒有展品</div>';
-      return `<h2 class="cath">${esc(name)}<span class="chipnum">${arr.length}</span></h2>` + body;
+      const pairs = arr.flatMap(i => rowsOf(i).map(L => [i, L]));
+      const us = pairs.filter(([i]) => i.mode === 'unit'), qs = pairs.filter(([i]) => i.mode === 'qty');
+      const body = pairs.length
+        ? (us.length ? `<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${us.map(([i, L]) => unitCard(i, L)).join('')}</div>` : '') + qtyTable(qs)
+        : '<div class="catempty">這個分類在這一區沒有展品</div>';
+      return `<h2 class="cath">${esc(name)}<span class="chipnum">${pairs.length}</span></h2>` + body;
     }).join('');
     wire();
-    list.forEach(i => { if (i.mode === 'unit') syncUnit(i.id); else syncQty(i.id); });
+    list.forEach(i => rowsOf(i).forEach(L => { if (i.mode === 'unit') syncUnit(K(i, L)); else syncQty(K(i, L)); }));
     drawSum();
   };
   S._countDraw = draw;
 
   /* ---- 即時同步單一品項的數字 ---- */
-  const syncUnit = id => {
-    const c = $(`[data-cnt="${id}"]`), d = $(`[data-udiff="${id}"]`);
+  const split = k => { const j = String(k).indexOf('@'); return [String(k).slice(0, j), String(k).slice(j + 1)]; };
+  const syncUnit = k => {
+    const c = $(`[data-cnt="${k}"]`), d = $(`[data-udiff="${k}"]`);
     if (!c) return;
-    const i = list.find(x => x.id === id);
-    const got = unitsBy[id].filter(u => seen.has(u.id)).length, exp = inUnits(i).length;
+    const [id, L] = split(k), i = list.find(x => x.id === id);
+    if (!i) return;
+    const got = unitsBy[id].filter(u => nloc(u.location) === L && seen.has(u.id)).length, exp = inUnits(i, L).length;
     c.textContent = '點到 ' + got;
-    if (!scope.has(id)) { d.textContent = '尚未納入盤點'; d.className = 'meta'; return; }
+    if (!scope.has(k)) { d.textContent = '尚未納入盤點'; d.className = 'meta'; return; }
     const v = got - exp;
     d.textContent = v ? '差異 ' + (v > 0 ? '+' : '') + v : '相符';
     d.className = v ? 'short' : 'okt';
   };
-  const syncQty = id => {
-    const d = $(`[data-diff="${id}"]`);
+  const syncQty = k => {
+    const d = $(`[data-diff="${k}"]`);
     if (!d) return;
-    if (counted[id] == null) { d.textContent = '—'; d.className = 'num'; return; }
-    const v = counted[id] - list.find(x => x.id === id).inStock;
+    if (counted[k] == null) { d.textContent = '—'; d.className = 'num'; return; }
+    const [id, L] = split(k), i = list.find(x => x.id === id);
+    const v = counted[k] - (i ? siteOf(i, L).inStock : 0);
     d.textContent = v ? (v > 0 ? '+' : '') + v : '0';
     d.className = 'num ' + (v ? 'short' : 'okt');
   };
@@ -854,6 +890,7 @@ VIEWS.count = async main => {
   };
   S._countMark = code => {
     const el = $(`[data-unit="${code}"]`);
+    if (!el && S.site) { $('#klast').textContent = '✕ ' + code + ' 不在目前盤的廠區「' + S.site + '」,請切到「全部廠區」或到那一區盤'; return false; }
     if (!el && S.cat) { $('#klast').textContent = '✕ ' + code + ' 不在目前的分類「' + S.cat + '」裡,請先切到「全部」'; return false; }
     const ok = markUnit(code, true);
     $('#klast').textContent = ok ? '✓ ' + code : '✕ 找不到或不在應在庫清單:' + code;
@@ -876,15 +913,16 @@ VIEWS.count = async main => {
   $('#kscan').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); S._countMark(e.target.value.trim().toUpperCase()); e.target.value = ''; } };
 
   S._countSubmit = async () => {
-    const qty = Object.keys(counted).map(id => ({ itemId: id, counted: counted[id] }));
-    if (!qty.length && !scope.size) return toast('請至少填寫或勾選一項', true);
-    const rep = await run(() => api('stocktake', { qty, unitItems: [...scope], seenUnits: [...seen], apply: $('#kapply').checked, markMissingLost: $('#klost').checked })).catch(() => null);
+    const qty = Object.keys(counted).map(k => { const [id, L] = split(k); return { itemId: id, location: L, counted: counted[k] }; });
+    const unitItems = [...new Set([...scope].map(k => split(k)[0]))];
+    if (!qty.length && !unitItems.length) return toast('請至少填寫或勾選一項', true);
+    const rep = await run(() => api('stocktake', { location: S.site || '', qty, unitItems, seenUnits: [...seen], apply: $('#kapply').checked, markMissingLost: $('#klost').checked })).catch(() => null);
     if (!rep) return;
     const diffs = rep.qty.filter(x => x.diff);
     openModal(`<h2>盤點結果</h2>
-      <div class="banner ${diffs.length || rep.missingUnits.length ? 'warn' : 'ok'}">數量品項 ${rep.qty.length} 項,差異 ${diffs.length} 項;逐台點到 ${rep.seenUnits} 台,未點到 ${rep.missingUnits.length} 台。${rep.adjusted ? '已套用 ' + rep.adjusted + ' 筆調整。' : ''}</div>
-      ${diffs.length ? `<h2>數量差異</h2><div class="lines">${diffs.map(x => `<div class="line"><span class="nm">${esc(x.name)}</span><span class="q">系統 ${x.expected} → 實點 ${x.counted}(${x.diff > 0 ? '+' : ''}${x.diff})</span></div>`).join('')}</div>` : ''}
-      ${rep.missingUnits.length ? `<h2>未點到的單台</h2><div class="lines">${rep.missingUnits.map(u => `<div class="line"><span class="nm mono">${esc(u.id)}</span><span>${esc(u.name)}</span><span class="u">${u.history[0] ? '最後借用:' + esc(u.history[0].applicant) + '・' + esc(u.history[0].event) + '(' + esc(u.history[0].end) + ')' : '無借用紀錄'}</span></div>`).join('')}</div>` : ''}
+      <div class="banner ${diffs.length || rep.missingUnits.length ? 'warn' : 'ok'}">${rep.location ? esc(rep.location) + ':' : ''}數量品項 ${rep.qty.length} 項,差異 ${diffs.length} 項;逐台點到 ${rep.seenUnits} 台,未點到 ${rep.missingUnits.length} 台。${rep.adjusted ? '已套用 ' + rep.adjusted + ' 筆調整。' : ''}</div>
+      ${diffs.length ? `<h2>數量差異</h2><div class="lines">${diffs.map(x => `<div class="line"><span class="nm">${esc(x.name)}<br><span class="meta">${esc(x.location || '')}</span></span><span class="q">系統 ${x.expected} → 實點 ${x.counted}(${x.diff > 0 ? '+' : ''}${x.diff})</span></div>`).join('')}</div>` : ''}
+      ${rep.missingUnits.length ? `<h2>未點到的單台</h2><div class="lines">${rep.missingUnits.map(u => `<div class="line"><span class="nm mono">${esc(u.id)}</span><span>${esc(u.name)} <span class="meta">${esc(u.location || '')}</span></span><span class="u">${u.history[0] ? '最後借用:' + esc(u.history[0].applicant) + '・' + esc(u.history[0].event) + '(' + esc(u.history[0].end) + ')' : '無借用紀錄'}</span></div>`).join('')}</div>` : ''}
       <div class="modal-f"><button class="btn pri" data-act="close-render">完成</button></div>`, { noFocus: true });
   };
 
@@ -945,7 +983,7 @@ function editLoan(id) {
   const L = findLoan(id);
   if (!L) return toast('請重新整理這一頁', true);
   S.editing = { id: L.id, no: L.id };
-  S.cart = L.lines.map(ln => ({ itemId: ln.itemId, qty: ln.qty }));
+  S.cart = L.lines.map(ln => ({ itemId: ln.itemId, location: ln.location || '', qty: ln.qty }));
   S.plan = { start: L.start, end: L.end };
   saveCart();
   store.set('draft', { event: L.event, venue: L.venue, contact: L.contact, purpose: L.purpose, note: L.note });
@@ -1017,7 +1055,7 @@ function printLoan(id) {
   const L = findLoan(id);
   if (!L) return toast('請重新整理這一頁', true);
   const row = (k, v) => '<tr><th>' + esc(k) + '</th><td>' + esc(v || '—') + '</td></tr>';
-  const lines = L.lines.map(ln => '<tr><td>' + esc(ln.name) + '</td><td>' + esc(ln.mode === 'unit' ? '逐台編號' : '數量') + '</td>'
+  const lines = L.lines.map(ln => '<tr><td>' + esc(ln.name) + '</td><td>' + esc(nloc(ln.location)) + '</td><td>' + esc(ln.mode === 'unit' ? '逐台編號' : '數量') + '</td>'
     + '<td class="n">' + ln.qty + '</td><td>' + esc((ln.units || []).join('、')) + '</td></tr>').join('');
   const w = window.open('', '_blank', 'width=900,height=1000');
   if (!w) return toast('瀏覽器擋掉了列印視窗,請允許彈出視窗', true);
@@ -1033,7 +1071,7 @@ function printLoan(id) {
     + '<table>' + row('活動', L.event) + row('借用人', L.applicant + (L.dept ? '・' + L.dept : '')) + row('聯絡', L.contact)
     + row('地點', L.venue) + row('用途', L.purpose) + row('期間', L.start + ' → ' + L.end)
     + row('點交', L.outAt) + row('歸還', L.returnedAt) + row('備註', L.note) + '</table>'
-    + '<table class="items"><thead><tr><th>品名</th><th>方式</th><th class="n">數量</th><th>單台編號</th></tr></thead><tbody>' + lines + '</tbody></table>'
+    + '<table class="items"><thead><tr><th>品名</th><th>取自</th><th>方式</th><th class="n">數量</th><th>單台編號</th></tr></thead><tbody>' + lines + '</tbody></table>'
     + '<div class="sign"><div>借用人簽名</div><div>展品管理者簽名</div></div>'
     + '</body></html>');
   w.document.close();
@@ -1057,21 +1095,22 @@ function rejectModal(id) {
 async function checkoutModal(id) {
   const L = await getLoan(id);
   const unitLines = L.lines.filter(l => l.mode === 'unit');
-  const pools = {};
-  await Promise.all(unitLines.map(async l => { pools[l.itemId] = (await api('units', { itemId: l.itemId })).filter(u => u.status === 'in'); }));
-  const pick = {}; unitLines.forEach(l => pick[l.itemId] = []);
+  const pools = {}, byItem = {};
+  await Promise.all([...new Set(unitLines.map(l => l.itemId))].map(async iid => { byItem[iid] = (await api('units', { itemId: iid })).filter(u => u.status === 'in'); }));
+  unitLines.forEach(l => { pools[lkey(l)] = (byItem[l.itemId] || []).filter(u => nloc(u.location) === nloc(l.location)); });
+  const pick = {}; unitLines.forEach(l => pick[lkey(l)] = []);
   const m = openModal(`<h2>${L.request ? '確認領取' : '點交出借'} ${esc(L.id)}</h2>${L.request ? `<div class="banner warn" style="font-size:13px">${esc(L.request.by)} 已送出簽收,以下為他選的編號,核對實物後確認。</div>` : ''}<p><b>${esc(L.event)}</b>・借用人 ${esc(L.applicant)}・應還 ${esc(L.end)}</p>
     ${unitLines.length ? `<div class="row" style="margin-bottom:10px"><input type="text" id="cscan" placeholder="輸入 / 刷編號後 Enter" style="flex:1"><button class="btn" id="ccam">${ICON.scan}掃描</button><button class="btn" id="cauto">自動指派</button></div>` : ''}
-    <div class="lines">${L.lines.map(l => l.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b><span data-pc="${l.itemId}" class="short">已選 0 / ${l.qty}</span></div>
-      <div class="chips">${pools[l.itemId].map(u => `<span class="chipk" data-pick="${u.id}" data-it="${l.itemId}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">沒有在庫的單台</span>'}</div></div>`
-      : `<div class="line"><span class="nm">${esc(l.name)}</span><span class="q">× ${l.qty}</span></div>`).join('')}</div>
+    <div class="lines">${L.lines.map(l => { const k = lkey(l), where = esc(nloc(l.location)); return l.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)} <span class="pill">${where}</span></b><span data-pc="${esc(k)}" class="short">已選 0 / ${l.qty}</span></div>
+      <div class="chips">${pools[k].map(u => `<span class="chipk" data-pick="${u.id}" data-it="${esc(k)}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">' + where + ' 沒有在庫的單台</span>'}</div></div>`
+      : `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">${where}</span></span><span class="q">× ${l.qty}</span></div>`; }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>點交備註</span><input type="text" id="cn" placeholder="外觀、配件狀況…"></label>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="cgo">確認出借</button></div>`, { wide: true, noFocus: true });
-  const upd = () => unitLines.forEach(l => { const el = $(`[data-pc="${l.itemId}"]`, m); const n = pick[l.itemId].length; el.textContent = `已選 ${n} / ${l.qty}`; el.className = n === +l.qty ? 'okt' : 'short'; });
+  const upd = () => unitLines.forEach(l => { const el = $(`[data-pc="${lkey(l)}"]`, m); const n = pick[lkey(l)].length; el.textContent = `已選 ${n} / ${l.qty}`; el.className = n === +l.qty ? 'okt' : 'short'; });
   const toggle = (uid, force) => {
     const el = $(`[data-pick="${uid}"]`, m); if (!el) return false;
     const it = el.dataset.it, arr = pick[it], has = arr.includes(uid);
-    const line = unitLines.find(l => l.itemId === it);
+    const line = unitLines.find(l => lkey(l) === it);
     if (has && force !== true) arr.splice(arr.indexOf(uid), 1);
     else if (!has) { if (arr.length >= +line.qty) { toast(line.name + ' 已選滿', true); return false; } arr.push(uid); }
     el.classList.toggle('on', arr.includes(uid)); upd(); return true;
@@ -1080,55 +1119,64 @@ async function checkoutModal(id) {
   const preset = L.request && L.request.type === 'pickup' ? L.request.units || {} : null;
   const autoPick = () => {
     unitLines.forEach(l => {
-      pick[l.itemId].slice().forEach(uid => toggle(uid));                 // 先清掉
-      pools[l.itemId].slice(0, l.qty).forEach(u => toggle(u.id, true));
+      pick[lkey(l)].slice().forEach(uid => toggle(uid));                  // 先清掉
+      pools[lkey(l)].slice(0, l.qty).forEach(u => toggle(u.id, true));
     });
     toast('已自動指派可用的編號,要換哪一台再自己點');
   };
-  unitLines.forEach(l => (preset ? (preset[l.itemId] || []) : pools[l.itemId].slice(0, l.qty).map(u => u.id)).forEach(uid => toggle(uid)));
+  unitLines.forEach(l => (preset ? (preset[lkey(l)] || preset[l.itemId] || []) : pools[lkey(l)].slice(0, l.qty).map(u => u.id)).forEach(uid => toggle(uid)));
   if ($('#cauto', m)) $('#cauto', m).onclick = autoPick;
   $$('[data-pick]', m).forEach(el => el.onclick = () => toggle(el.dataset.pick));
   const sc = $('#cscan', m);
   if (sc) {
     sc.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); const c = sc.value.trim().toUpperCase(); if (!toggle(c, true)) toast('此單沒有可選的 ' + c, true); sc.value = ''; } };
     $('#ccam', m).onclick = () => {
-      unitLines.forEach(l => { pick[l.itemId].slice().forEach(u => toggle(u)); });
+      unitLines.forEach(l => { pick[lkey(l)].slice().forEach(u => toggle(u)); });
       openScanner(code => { if (!toggle(code, true)) toast('不在可選清單:' + code, true); });
     };
   }
   $('#cgo', m).onclick = () => run(() => api('checkout', { id, units: pick, note: $('#cn', m).value }), '已點交出借').then(() => { closeModal(); render(); }).catch(() => { });
 }
+/** 歸還時可以選還到哪個廠區(預設還回原本借出的那一點) */
+function backSelect(l) {
+  const here = nloc(l.location);
+  const list = [...new Set([here].concat(SITES, allSites()))];
+  return `<label class="meta">還到 <select data-back="${esc(lkey(l))}">${list.map(v => `<option${v === here ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select></label>`;
+}
+function backOf(m, key) { const el = $(`[data-back="${key}"]`, m); return el ? el.value : ''; }
+
 async function receiveModal(id) {
   const L = await getLoan(id);
   const open = L.lines.filter(l => l.outstanding > 0);
   const m = openModal(`<h2>${L.request ? '確認歸還' : '登記歸還'} ${esc(L.id)}</h2>${L.request ? `<div class="banner warn" style="font-size:13px">${esc(L.request.by)} 已送出歸還,以下為他填的狀況,核對實物後可修改再確認。</div>` : ''}<p><b>${esc(L.event)}</b>・${esc(L.applicant)}・應還 ${esc(L.end)} ${L.overdue ? '<span class="pill bad">逾期</span>' : ''}</p>
     <div class="lines">${open.map(l => {
+      const k = esc(lkey(l)), back = backSelect(l);
       if (l.mode === 'unit') {
         const pend = l.units.filter(u => !l.returnedUnits.includes(u) && !l.lostUnits.includes(u));
-        return `<div class="line" style="display:block"><b>${esc(l.name)}</b>${pend.map(u => `<div class="row" style="margin:6px 0"><span class="mono" style="min-width:70px">${esc(u)}</span>
-          <div class="seg" data-ru="${u}" data-it="${l.itemId}">${[['in', '歸還'], ['repair', '送修'], ['lost', '遺失'], ['', '未還']].map(([k, t], i) => `<button type="button" data-v="${k}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}</div>`;
+        return `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b>${back}</div>${pend.map(u => `<div class="row" style="margin:6px 0"><span class="mono" style="min-width:70px">${esc(u)}</span>
+          <div class="seg" data-ru="${u}" data-it="${k}">${[['in', '歸還'], ['repair', '送修'], ['lost', '遺失'], ['', '未還']].map(([kk, t], i) => `<button type="button" data-v="${kk}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}</div>`;
       }
-      return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>
-        <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${l.itemId}" style="width:80px"></label>
-        <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${l.itemId}" style="width:80px"></label></div>`;
+      return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>${back}
+        <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${k}" style="width:80px"></label>
+        <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${k}" style="width:80px"></label></div>`;
     }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>備註</span><input type="text" id="rn2" placeholder="損壞狀況、短少原因…"></label>
     <p class="meta">「未還」的項目會保留在借用單上,之後可再登記。</p>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="rgo2">確認</button></div>`, { wide: true, noFocus: true });
   $$('.seg[data-ru] button', m).forEach(b => b.onclick = () => { $$('button', b.parentNode).forEach(x => x.classList.remove('on')); b.classList.add('on'); });
   if (L.request && L.request.type === 'return') {
-    const rq = {}; (L.request.lines || []).forEach(x => rq[x.itemId] = x);
+    const rq = {}; (L.request.lines || []).forEach(x => { rq[x.itemId + '@' + nloc(x.location)] = x; if (!(x.itemId in rq)) rq[x.itemId] = x; });
     $$('.seg[data-ru]', m).forEach(sg => {
-      const x = rq[sg.dataset.it], r = x && (x.unitResults || []).find(u => u.id === sg.dataset.ru);
+      const x = rq[sg.dataset.it] || rq[String(sg.dataset.it).split('@')[0]], r = x && (x.unitResults || []).find(u => u.id === sg.dataset.ru);
       const v = r ? r.result : '';
       $$('button', sg).forEach(b => b.classList.toggle('on', b.dataset.v === v));
     });
-    open.filter(l => l.mode !== 'unit').forEach(l => { const x = rq[l.itemId] || { returned: 0, lost: 0 }; $(`[data-rq="${l.itemId}"]`, m).value = x.returned || 0; $(`[data-rl="${l.itemId}"]`, m).value = x.lost || 0; });
+    open.filter(l => l.mode !== 'unit').forEach(l => { const x = rq[lkey(l)] || rq[l.itemId] || { returned: 0, lost: 0 }; $(`[data-rq="${lkey(l)}"]`, m).value = x.returned || 0; $(`[data-rl="${lkey(l)}"]`, m).value = x.lost || 0; });
   }
   $('#rgo2', m).onclick = () => {
-    const lines = open.map(l => l.mode === 'unit'
-      ? { itemId: l.itemId, unitResults: $$(`.seg[data-it="${l.itemId}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
-      : { itemId: l.itemId, returned: +$(`[data-rq="${l.itemId}"]`, m).value || 0, lost: +$(`[data-rl="${l.itemId}"]`, m).value || 0 });
+    const lines = open.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
+      ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
+      : { itemId: l.itemId, location: nloc(l.location), to: to, returned: +$(`[data-rq="${k}"]`, m).value || 0, lost: +$(`[data-rl="${k}"]`, m).value || 0 }; });
     run(() => api('receive', { id, lines, note: $('#rn2', m).value })).then(r => { toast(r.status === 'returned' ? '已全部歸還' : '已登記部分歸還'); closeModal(); render(); }).catch(() => { });
   };
 }
@@ -1136,14 +1184,42 @@ async function receiveModal(id) {
 /* ===================== 展品 / 單台 ===================== */
 /** 存放地點:先放公司的兩個廠區,已經用過的其他地點也會一起列出來 */
 const SITES = ['新竹', '林口'];
+function allSites() {
+  const set = new Set();
+  (S.items || []).forEach(i => {
+    (i.sites || []).forEach(g => { if (g.location) set.add(String(g.location)); });
+    String(i.location || '').split('、').forEach(v => { if (v.trim()) set.add(v.trim()); });
+  });
+  return [...set];
+}
 function siteOptions(cur) {
-  const used = [...new Set((S.items || []).map(i => String(i.location || '').trim()).filter(Boolean))];
+  const used = allSites();
   const list = SITES.concat(used.filter(v => !SITES.includes(v)));
   if (cur && !list.includes(cur)) list.push(cur);
   const out = [];
   list.forEach(v => out.push('<option' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>'));
   out.push('<option value="__new">+ 新增地點…</option>');
   return out.join('');
+}
+
+/** 清單上的分佈:新竹 3 · 林口 2(在庫 / 登記台數;全部借出的那一點會變灰) */
+function distLine(i, key) {
+  const gs = i.sites || [];
+  if (!gs.length) return '—';
+  return '<div class="dist">' + gs.map(g => {
+    const n = key === 'inStock' ? g.inStock : g.total;
+    return `<span class="${n ? '' : 'z'}">${esc(g.location)} <b>${Number(n) || 0}</b></span>`;
+  }).join('') + '</div>';
+}
+
+/** 編輯展品時的一列「地點 + 台數」 */
+function siteRow(where, qty) {
+  return `<div class="siterow">
+    <select class="sloc">${siteOptions(where || '')}</select>
+    <input type="text" class="slocnew hidden" maxlength="60" placeholder="新地點名稱">
+    <input type="number" class="sqty" min="0" value="${Number(qty) || 0}">
+    <button type="button" class="btn sm ghost sdel" title="移除這一列">✕</button>
+  </div>`;
 }
 
 /** 把使用者選的照片縮到合理大小再上傳,避免一張 5MB 的原圖塞爆請求 */
@@ -1173,15 +1249,18 @@ function shrinkImage(file, maxPx = 1200) {
 
 function itemModal(id, preCat) {
   const i = id ? S.items.find(x => x.id === id) : { mode: 'qty', qty: 0, category: preCat || (S.cats[0] && S.cats[0].name) || '' };
-  const locOpts = siteOptions(i.location);        // 先組好,樣板裡就不會出現使用者欄位
+  const locOpts = siteOptions(i.mode === 'unit' ? String(i.location || '').split('、')[0] : '');   // 先組好,樣板裡就不會出現使用者欄位
+  const cur = (i.sites || []).filter(g => g.total || g.countedAt);
+  const siteRows = (cur.length ? cur.map(g => siteRow(g.location, g.total)) : [siteRow('', i.qty || 0)]).join('');
   const m = openModal(`<h2>${id ? '編輯展品 ' + esc(id) : '新增展品'}</h2><form id="itf">
     <label class="f"><span>品名 <b>*</b></span><input type="text" name="name" required value="${esc(i.name || '')}"></label>
     <div class="grid2"><label class="f"><span>分類</span><select name="category" id="fcat">${S.cats.map(c => `<option ${c.name === i.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}${S.cats.some(c => c.name === i.category) || !i.category ? '' : `<option selected>${esc(i.category)}</option>`}<option value="__new">+ 新增分類…</option></select>
     <input type="text" id="fcatnew" class="hidden" maxlength="40" placeholder="新分類名稱" style="margin-top:6px"></label>
-    <label class="f"><span>存放位置</span><select name="location" id="floc">${locOpts}</select>
+    <label class="f" id="floc-wrap"><span>存放位置</span><select name="location" id="floc">${locOpts}</select>
     <input type="text" id="flocnew" class="hidden" maxlength="60" placeholder="例:湖口 B 倉 A-01" style="margin-top:6px"></label></div>
     <label class="f"><span>追蹤方式</span><div class="seg" id="mseg">${[['unit', '逐台編號(貴重品)'], ['qty', '只記數量(道具 / 配件)']].map(([k, t]) => `<button type="button" data-m="${k}" class="${i.mode === k ? 'on' : ''}" ${id && i.mode === 'unit' && k === 'qty' && i.total ? 'disabled' : ''}>${t}</button>`).join('')}</div></label>
-    <label class="f" id="fq"><span>${id ? '持有數量' : '數量'}</span><input type="number" min="0" name="qty" value="${i.qty || 0}"></label>
+    <label class="f" id="fq"><span>各地點的數量</span><div id="fsites">${siteRows}</div>
+      <button type="button" class="btn sm ghost" id="faddsite" style="margin-top:8px">${ICON.plus}再加一個地點</button></label>
     ${id ? '' : '<label class="f" id="fu"><span>建立幾台(會自動產生 E0001 這類編號,可印 QR 標籤)</span><input type="number" min="0" max="200" name="unitCount" value="1"></label>'}
     <label class="f"><span>規格 / 配件</span><input type="text" name="spec" value="${esc(i.spec || '')}"></label>
     <label class="f"><span>照片(選填)</span>
@@ -1195,8 +1274,32 @@ function itemModal(id, preCat) {
     <label class="f"><span>備註</span><input type="text" name="note" value="${esc(i.note || '')}"></label>
     <div class="modal-f">${id ? '<button type="button" class="btn danger" id="fdrop">刪除展品</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
   let mode = i.mode;
-  const sync = () => { $('#fq', m).classList.toggle('hidden', mode !== 'qty'); const fu = $('#fu', m); if (fu) fu.classList.toggle('hidden', mode !== 'unit'); $$('#mseg button', m).forEach(b => b.classList.toggle('on', b.dataset.m === mode)); };
+  const sync = () => {
+    $('#fq', m).classList.toggle('hidden', mode !== 'qty');
+    $('#floc-wrap', m).classList.toggle('hidden', mode !== 'unit');      // 逐台編號:這裡只是新增單台時的預設地點
+    const fu = $('#fu', m); if (fu) fu.classList.toggle('hidden', mode !== 'unit');
+    $$('#mseg button', m).forEach(b => b.classList.toggle('on', b.dataset.m === mode));
+  };
   $$('#mseg button', m).forEach(b => b.onclick = () => { mode = b.dataset.m; sync(); }); sync();
+  /* 各地點數量:可以增減列,選「+ 新增地點…」就跳出可以自己打的欄位 */
+  const box = $('#fsites', m);
+  const syncRows = () => $$('.sdel', box).forEach(b => b.classList.toggle('hidden', $$('.siterow', box).length < 2));
+  box.onchange = e => {
+    const sel = e.target.closest('.sloc'); if (!sel) return;
+    const isNew = sel.value === '__new', nw = sel.parentNode.querySelector('.slocnew');
+    nw.classList.toggle('hidden', !isNew); if (isNew) nw.focus();
+  };
+  box.onclick = e => {
+    const b = e.target.closest('.sdel'); if (!b) return;
+    if ($$('.siterow', box).length > 1) { b.closest('.siterow').remove(); syncRows(); }
+  };
+  $('#faddsite', m).onclick = () => {
+    const used = $$('.sloc', box).map(x => x.value);
+    const next = SITES.concat(allSites()).find(v => !used.includes(v)) || '';
+    box.insertAdjacentHTML('beforeend', siteRow(next, 0));
+    syncRows();
+  };
+  syncRows();
   /* 照片 */
   const drawPhoto = () => {
     const v = $('#fimg', m).value;
@@ -1243,6 +1346,22 @@ function itemModal(id, preCat) {
     if (item.location === '__new') {
       item.location = locNew.value.trim();
       if (!item.location) return toast('請填寫新的存放地點', true);
+    }
+    if (mode === 'qty') {
+      const sites = [], seen = {};
+      for (const row of $$('.siterow', m)) {
+        const sel = row.querySelector('.sloc');
+        const where = (sel.value === '__new' ? row.querySelector('.slocnew').value : sel.value).trim();
+        const n = Math.max(0, parseInt(row.querySelector('.sqty').value, 10) || 0);
+        if (!n) continue;
+        if (!where) return toast('請填寫地點名稱', true);
+        if (seen[where]) return toast('「' + where + '」填了兩次,請合併成一列', true);
+        seen[where] = 1; sites.push({ location: where, qty: n });
+      }
+      item.sites = sites;
+      delete item.qty; delete item.location;
+    } else {
+      delete item.sites;
     }
     run(() => api('saveItem', { item }), '已儲存').then(() => { RCACHE.delete('cats'); closeModal(); render(); }).catch(() => { });
   };
@@ -1333,26 +1452,27 @@ async function userPickupModal(id) {
   const L = await myLoan(id);
   const opts = await api('pickupOptions', { id });
   const unitLines = opts.filter(o => o.mode === 'unit');
-  const pick = {}; unitLines.forEach(o => pick[o.itemId] = []);
+  const okey = o => o.key || (o.itemId + '@' + nloc(o.location));
+  const pick = {}; unitLines.forEach(o => pick[okey(o)] = []);
   const m = openModal(`<h2>簽收領取 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・應還 ${esc(L.end)}</p>
     ${unitLines.length ? `<div class="banner info" style="font-size:13px">請掃描或點選你實際拿到的那幾台(看展品上的 QR 標籤編號)。</div>
     <div class="row" style="margin-bottom:10px"><input type="text" id="pscan" placeholder="輸入編號後 Enter" style="flex:1"><button class="btn" id="pcam">${ICON.scan}掃描</button><button class="btn" id="pauto">自動選好</button></div>` : ''}
-    <div class="lines">${opts.map(o => o.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(o.name)}</b><span data-pc="${o.itemId}" class="short">已選 0 / ${o.qty}</span></div>
-      <div class="chips">${o.units.map(u => `<span class="chipk" data-pick="${u.id}" data-it="${o.itemId}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">目前沒有在庫的單台,請聯絡管理者</span>'}</div></div>`
-      : `<div class="line"><span class="nm">${esc(o.name)}</span><span class="q">× ${o.qty}</span></div>`).join('')}</div>
+    <div class="lines">${opts.map(o => { const k = esc(okey(o)), where = esc(nloc(o.location)); return o.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(o.name)} <span class="pill">${where}</span></b><span data-pc="${k}" class="short">已選 0 / ${o.qty}</span></div>
+      <div class="chips">${o.units.map(u => `<span class="chipk" data-pick="${u.id}" data-it="${k}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">目前沒有在庫的單台,請聯絡管理者</span>'}</div></div>`
+      : `<div class="line"><span class="nm">${esc(o.name)}<br><span class="meta">${where}</span></span><span class="q">× ${o.qty}</span></div>`; }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>備註</span><input type="text" id="pn" placeholder="外觀、配件狀況…"></label>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="pgo2">確認簽收</button></div>`, { wide: true, noFocus: true });
-  const upd = () => unitLines.forEach(o => { const el = $(`[data-pc="${o.itemId}"]`, m); const n = pick[o.itemId].length; el.textContent = `已選 ${n} / ${o.qty}`; el.className = n === o.qty ? 'okt' : 'short'; });
+  const upd = () => unitLines.forEach(o => { const el = $(`[data-pc="${okey(o)}"]`, m); const n = pick[okey(o)].length; el.textContent = `已選 ${n} / ${o.qty}`; el.className = n === o.qty ? 'okt' : 'short'; });
   const toggle = (uid, force) => {
     const el = $(`[data-pick="${uid}"]`, m); if (!el) return false;
-    const it = el.dataset.it, arr = pick[it], has = arr.includes(uid), o = unitLines.find(x => x.itemId === it);
+    const it = el.dataset.it, arr = pick[it], has = arr.includes(uid), o = unitLines.find(x => okey(x) === it);
     if (has && force !== true) arr.splice(arr.indexOf(uid), 1);
     else if (!has) { if (arr.length >= o.qty) { toast(o.name + ' 已選滿 ' + o.qty + ' 台,請先取消一台', true); return false; } arr.push(uid); }
     el.classList.toggle('on', arr.includes(uid)); upd(); return true;
   };
   if ($('#pauto', m)) $('#pauto', m).onclick = () => {
     unitLines.forEach(o => {
-      pick[o.itemId].slice().forEach(uid => toggle(uid));
+      pick[okey(o)].slice().forEach(uid => toggle(uid));
       o.units.slice(0, o.qty).forEach(u => toggle(u.id, true));
     });
     toast('已幫你選好,拿到的不是這幾台就自己改');
@@ -1371,22 +1491,23 @@ async function userReturnModal(id) {
   const open = L.lines.filter(l => l.outstanding > 0);
   const m = openModal(`<h2>歸還 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・應還 ${esc(L.end)} ${L.overdue ? '<span class="pill bad">逾期</span>' : ''}</p>
     <div class="lines">${open.map(l => {
+      const k = esc(lkey(l)), back = backSelect(l);
       if (l.mode === 'unit') {
         const pend = l.units.filter(u => !l.returnedUnits.includes(u) && !l.lostUnits.includes(u));
-        return `<div class="line" style="display:block"><b>${esc(l.name)}</b>${pend.map(u => `<div class="row" style="margin:6px 0"><span class="mono" style="min-width:70px">${esc(u)}</span>
-          <div class="seg" data-ru="${u}" data-it="${l.itemId}">${[['in', '歸還'], ['repair', '有損壞'], ['lost', '遺失'], ['', '先不還']].map(([k, t], i) => `<button type="button" data-v="${k}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}</div>`;
+        return `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b>${back}</div>${pend.map(u => `<div class="row" style="margin:6px 0"><span class="mono" style="min-width:70px">${esc(u)}</span>
+          <div class="seg" data-ru="${u}" data-it="${k}">${[['in', '歸還'], ['repair', '有損壞'], ['lost', '遺失'], ['', '先不還']].map(([kk, t], i) => `<button type="button" data-v="${kk}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}</div>`;
       }
-      return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>
-        <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${l.itemId}" style="width:80px"></label>
-        <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${l.itemId}" style="width:80px"></label></div>`;
+      return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>${back}
+        <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${k}" style="width:80px"></label>
+        <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${k}" style="width:80px"></label></div>`;
     }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>備註</span><input type="text" id="un2" placeholder="損壞狀況、短少原因…"></label>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="ugo2">送出歸還</button></div>`, { wide: true, noFocus: true });
   $$('.seg[data-ru] button', m).forEach(b => b.onclick = () => { $$('button', b.parentNode).forEach(x => x.classList.remove('on')); b.classList.add('on'); });
   $('#ugo2', m).onclick = () => {
-    const lines = open.map(l => l.mode === 'unit'
-      ? { itemId: l.itemId, unitResults: $$(`.seg[data-it="${l.itemId}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
-      : { itemId: l.itemId, returned: +$(`[data-rq="${l.itemId}"]`, m).value || 0, lost: +$(`[data-rl="${l.itemId}"]`, m).value || 0 });
+    const lines = open.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
+      ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
+      : { itemId: l.itemId, location: nloc(l.location), to: to, returned: +$(`[data-rq="${k}"]`, m).value || 0, lost: +$(`[data-rl="${k}"]`, m).value || 0 }; });
     run(() => api('requestReturn', { id, lines, note: $('#un2', m).value })).then(() => onsiteModal(id, 'return')).catch(() => { });
   };
 }
@@ -1446,18 +1567,26 @@ const ACT = {
   'to-register': () => showLogin('register'),
   'to-login': () => showLogin('login'),
   'export': () => run(exportStock),
-  'add-cart': el => { const q = $('#q-' + el.dataset.id).value; addToCart(el.dataset.id, q); toast('已加入展覽規劃'); el.textContent = `加入規劃(已選 ${S.cart.find(c => c.itemId === el.dataset.id).qty})`; },
+  'add-cart': el => {
+    const id = el.dataset.id, q = $('#q-' + id).value, where = ($('#loc-' + id) || {}).value || '';
+    addToCart(id, q, where);
+    toast('已加入展覽規劃' + (where ? '(' + where + ')' : ''));
+    el.textContent = `加入規劃(已選 ${S.cart.filter(c => c.itemId === id).reduce((a, c) => a + c.qty, 0)})`;
+  },
   'use-range': () => { S.plan.start = S.filters.start; S.plan.end = S.filters.end; saveCart(); go('plan'); },
-  'rm-cart': el => { S.cart = S.cart.filter(c => c.itemId !== el.dataset.id); saveCart(); S.cart.length ? S._recheck() : render(); },
-  'cq': el => { const c = S.cart.find(x => x.itemId === el.dataset.id); c.qty = Math.max(1, c.qty + +el.dataset.d); saveCart(); S._recheck(); },
+  'rm-cart': el => { S.cart = S.cart.filter(c => ckey(c) !== el.dataset.id); saveCart(); S.cart.length ? S._recheck() : render(); },
+  'cq': el => { const c = S.cart.find(x => ckey(x) === el.dataset.id); c.qty = Math.max(1, c.qty + +el.dataset.d); saveCart(); S._recheck(); },
   'clear-cart': () => { if (confirmInline('清空規劃清單?')) { S.cart = []; saveCart(); render(); } },
   'copy-plan': async () => {
     const all = S.items.length ? S.items : await api('catalog');
     const nm = Object.fromEntries(all.map(i => [i.id, i.name]));
     const chk = S.plan.start && S.plan.end ? await api('check', { start: S.plan.start, end: S.plan.end, lines: S.cart }).catch(() => []) : [];
-    const ck = Object.fromEntries(chk.map(c => [c.itemId, c]));
+    const ck = Object.fromEntries(chk.map(c => [c.itemId + '@' + (c.location || ''), c]));
     const ps = S.plan.start || '?', pe = S.plan.end || '?';   // 純文字(剪貼簿),顯示時再經 esc()
-    const txt = `展覽規劃 ${ps} ~ ${pe}\n` + S.cart.map(c => `・${nm[c.itemId] || c.itemId} × ${c.qty}` + (ck[c.itemId] ? (ck[c.itemId].short ? `(缺 ${ck[c.itemId].short})` : '(足夠)') : '')).join('\n');
+    const txt = `展覽規劃 ${ps} ~ ${pe}\n` + S.cart.map(c => {
+      const k = ck[ckey(c)], at = c.location ? '(' + c.location + ')' : '';
+      return `・${nm[c.itemId] || c.itemId}${at} × ${c.qty}` + (k ? (k.short ? `(缺 ${k.short})` : '(足夠)') : '');
+    }).join('\n');
     try { await navigator.clipboard.writeText(txt); toast('已複製,可貼到 Email / 通訊軟體'); } catch (e) { openModal(`<h2>清單</h2><textarea rows="10">${esc(txt)}</textarea><div class="modal-f"><button class="btn" data-act="close">關閉</button></div>`); }
   },
   'approve': el => approveModal(el.dataset.id),
@@ -1486,7 +1615,12 @@ const ACT = {
   'lookup-code': el => lookupModal(el.dataset.code),
   'multi-clear': () => { S.multi.clear(); S._catDraw(); },
   'multi-go': () => {
-    S.multi.forEach(id => { if (!S.cart.find(c => c.itemId === id)) S.cart.push({ itemId: id, qty: 1 }); });
+    S.multi.forEach(id => {
+      if (S.cart.find(c => c.itemId === id)) return;
+      const i = S.items.find(x => x.id === id), gs = i ? (i.sites || []) : [];
+      const pick = $('#loc-' + id);                                   // 卡片上選了哪一點就用哪一點
+      S.cart.push({ itemId: id, location: (pick && pick.value) || (gs.length === 1 ? gs[0].location : ''), qty: 1 });
+    });
     S.multi.clear(); saveCart(); go('plan');
   },
   'pick-cat': el => {
