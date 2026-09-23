@@ -51,7 +51,7 @@ async function api(action, payload = {}) {
   const tok = S.token;
   try {
     const data = await Api.call(action, payload, tok);
-    if (!Api.READ.has(action)) RCACHE.clear();        // 任何寫入 → 快取全部失效
+    if (!Api.READ.has(action)) bumpCache();           // 任何寫入 → 快取全部失效
     return data;
   } catch (e) {
     if (/登入已過期/.test(e.message)) { if (tok && tok === S.token) logout(true); e.silent = true; }
@@ -66,34 +66,48 @@ const copy = v => JSON.parse(JSON.stringify(v));
 const fresh = hit => hit && Date.now() - hit.at < FRESH_MS;
 /* 同一份資料同時被要兩次(例如第一次還沒回來就切了分頁)只送一次請求 */
 const INFLIGHT = new Map();
+/* 快取世代:寫入就 +1。出發前記下世代,回來時世代變了就代表這份資料是寫入前的,不能用 */
+let CGEN = 0;
+function bumpCache() { CGEN++; RCACHE.clear(); INFLIGHT.clear(); }
+function cacheSet(key, data, gen) { if (gen === CGEN) RCACHE.set(key, { data, at: Date.now() }); }
 function fetchOnce(key, action, payload) {
-  const run = INFLIGHT.get(key);
-  if (run) return run;
+  const running = INFLIGHT.get(key);
+  if (running) return running;
   const pr = api(action, payload);
   INFLIGHT.set(key, pr);
-  pr.then(() => INFLIGHT.delete(key), () => INFLIGHT.delete(key));
+  const done = () => { if (INFLIGHT.get(key) === pr) INFLIGHT.delete(key); };
+  pr.then(done, done);
   return pr;
+}
+/* 出發前記世代,回來時若已被寫入作廢就再抓一次(最多再一次,避免連環重試) */
+async function freshFetch(key, action, payload) {
+  for (let i = 0; i < 2; i++) {
+    const gen = CGEN;
+    const data = await fetchOnce(key, action, payload);
+    if (gen === CGEN) return { data, gen };
+  }
+  return { data: await fetchOnce(key, action, payload), gen: CGEN };
 }
 async function cachedGet(key, action, payload = {}) {
   const hit = RCACHE.get(key);
   if (hit) {
-    if (!fresh(hit)) fetchOnce(key, action, payload).then(d => RCACHE.set(key, { data: d, at: Date.now() })).catch(() => { });
+    if (!fresh(hit)) freshFetch(key, action, payload).then(r => cacheSet(key, r.data, r.gen)).catch(() => { });
     return copy(hit.data);
   }
-  const data = await fetchOnce(key, action, payload);
-  RCACHE.set(key, { data, at: Date.now() });
-  return copy(data);
+  const r = await freshFetch(key, action, payload);
+  cacheSet(key, r.data, r.gen);
+  return copy(r.data);
 }
 async function withData(main, key, action, payload, draw) {
   const hit = RCACHE.get(key), view = S.view;
   if (hit) draw(copy(hit.data));
   if (fresh(hit)) return;               // 同一批資料的不同分頁互相切換時,不用重打
-  let data;
-  try { data = await fetchOnce(key, action, payload); }
+  let r;
+  try { r = await freshFetch(key, action, payload); }
   catch (e) { if (!hit) throw e; if (!e.silent) toast(e.message, true); return; }
-  const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(data);
-  RCACHE.set(key, { data, at: Date.now() });
-  if (changed && S.view === view) draw(copy(data));
+  const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(r.data);
+  cacheSet(key, r.data, r.gen);
+  if (changed && S.view === view) draw(copy(r.data));
 }
 function toast(msg, err) {
   const t = document.createElement('div');
@@ -198,7 +212,7 @@ function showLogin(mode) {
 }
 function logout(expired) {
   if (!expired && S.token) Api.call('logout', {}, S.token).catch(() => { });   // 後端作廢 token
-  S.token = null; S.user = null; S.asUser = false; RCACHE.clear(); store.del('token'); store.del('user');
+  S.token = null; S.user = null; S.asUser = false; bumpCache(); store.del('token'); store.del('user');
   if (expired) toast('登入已過期,請重新登入', true);
   showLogin('login');
 }

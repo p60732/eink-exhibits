@@ -72,6 +72,34 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('#fdrop'); await wait(1200);
   const rowsAfter = await p.$$eval('#ibody tr:not(.grouph):not(.groupe)', els => els.length);
   if (rowsAfter !== rowsBefore - 1) throw new Error('刪除展品沒生效:' + rowsBefore + ' → ' + rowsAfter);
+  // 回歸:背景重新驗證還在路上時按刪除,清單不可以還留著那一筆(舊讀取不能覆蓋寫入後的資料)
+  await p.click('.btn.brand[data-act=edit-item]'); await p.waitForSelector('#itf');
+  await p.fill('#itf [name=name]', '賽跑測試展品'); await p.fill('#itf [name=qty]', '1');
+  await p.click('#itf .btn.pri'); await wait(900);
+  // 攔第一筆 items 讀取:先讓它真的去後端拿(拿到的是刪除前的資料),回應壓到刪除之後才送達
+  let heldOnce = false;
+  await p.route('**/api', async route => {
+    const body = route.request().postData() || '';
+    if (heldOnce || !/"action":"items"/.test(body)) return route.continue();
+    heldOnce = true;
+    const res = await route.fetch();                 // 這一刻的資料 = 刪除前
+    const text = await res.text();
+    await new Promise(r => setTimeout(r, 2500));     // 刪除在這段期間發生
+    return route.fulfill({ status: 200, headers: { 'content-type': 'application/json' }, body: text });
+  });
+  await p.evaluate(() => { const h = RCACHE.get('items'); if (h) h.at = 0; });   // 讓快取過期,切回來就會背景重抓
+  await p.click('[data-v=users]'); await wait(200); await p.click('[data-v=items]'); await wait(200);
+  const raceId = await p.$$eval('#ibody tr', els => {
+    const r = els.find(e => e.textContent.includes('賽跑測試展品'));
+    return r ? r.querySelector('[data-act=edit-item][data-id]').dataset.id : '';
+  });
+  if (!raceId) throw new Error('賽跑測試展品沒出現在清單上');
+  await p.click(`[data-act=edit-item][data-id="${raceId}"]`); await p.waitForSelector('#fdrop');
+  await p.click('#fdrop'); await wait(2500);
+  const raceLeft = await p.$$eval('#ibody tr:not(.grouph):not(.groupe)', els => els.filter(e => e.textContent.includes('賽跑測試展品')).length);
+  if (raceLeft) throw new Error('刪除後被在路上的舊讀取蓋回來了,清單還留著已刪除的展品');
+  await p.unroute('**/api');
+  if (!heldOnce) throw new Error('賽跑測試沒攔到 items 讀取,測試本身失效了');
   await p.click('#menu-btn'); await p.click('#m-out');
   // 同仁預約
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('.cards');
