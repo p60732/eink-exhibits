@@ -64,13 +64,23 @@ const RCACHE = new Map();
 const FRESH_MS = 15000;                 // 剛抓過的資料就直接用,不再回頭問後端
 const copy = v => JSON.parse(JSON.stringify(v));
 const fresh = hit => hit && Date.now() - hit.at < FRESH_MS;
+/* 同一份資料同時被要兩次(例如第一次還沒回來就切了分頁)只送一次請求 */
+const INFLIGHT = new Map();
+function fetchOnce(key, action, payload) {
+  const run = INFLIGHT.get(key);
+  if (run) return run;
+  const pr = api(action, payload);
+  INFLIGHT.set(key, pr);
+  pr.then(() => INFLIGHT.delete(key), () => INFLIGHT.delete(key));
+  return pr;
+}
 async function cachedGet(key, action, payload = {}) {
   const hit = RCACHE.get(key);
   if (hit) {
-    if (!fresh(hit)) api(action, payload).then(d => RCACHE.set(key, { data: d, at: Date.now() })).catch(() => { });
+    if (!fresh(hit)) fetchOnce(key, action, payload).then(d => RCACHE.set(key, { data: d, at: Date.now() })).catch(() => { });
     return copy(hit.data);
   }
-  const data = await api(action, payload);
+  const data = await fetchOnce(key, action, payload);
   RCACHE.set(key, { data, at: Date.now() });
   return copy(data);
 }
@@ -79,7 +89,7 @@ async function withData(main, key, action, payload, draw) {
   if (hit) draw(copy(hit.data));
   if (fresh(hit)) return;               // 同一批資料的不同分頁互相切換時,不用重打
   let data;
-  try { data = await api(action, payload); }
+  try { data = await fetchOnce(key, action, payload); }
   catch (e) { if (!hit) throw e; if (!e.silent) toast(e.message, true); return; }
   const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(data);
   RCACHE.set(key, { data, at: Date.now() });
