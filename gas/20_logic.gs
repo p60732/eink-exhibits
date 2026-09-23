@@ -696,6 +696,26 @@ var Logic = (function () {
       if (isNew && mode === 'unit' && int(p.unitCount) > 0) addUnits(c, it, int(p.unitCount), p.location);
       return it;
     },
+    /** 永久刪除展品:只有從來沒被借過的才可以,借過的請改用下架 */
+    deleteItem: function (c) {
+      var it = byId(c.db.Items, s(c.p.id));
+      if (!it) throw E('找不到展品');
+      var used = c.db.Loans.filter(function (L) {
+        return (L.lines || []).some(function (ln) { return ln.itemId === it.id; });
+      }).length;
+      if (used) throw E('「' + it.name + '」已經有 ' + used + ' 筆借用紀錄,不能刪除。請改用「下架」 —— 刪掉的話那些借用單會變成「(已刪除)」,查不出當初借了什麼。');
+      var units = c.db.Units.filter(function (u) { return u.itemId === it.id; });
+      if (units.some(function (u) { return u.status === 'out'; })) throw E('還有單台在外面,不能刪除');
+      var gone = units.length;
+      if (gone) {
+        c.db.Units = c.db.Units.filter(function (u) { return u.itemId !== it.id; });
+        dirty(c.db, 'Units');
+      }
+      c.db.Items = c.db.Items.filter(function (x) { return x.id !== it.id; });
+      dirty(c.db, 'Items');
+      log(c, '刪除展品', it.id, it.name + '|' + it.category + '|' + (it.mode === 'unit' ? gone + ' 台單台編號' : '數量 ' + it.qty));
+      return { id: it.id, name: it.name, units: gone };
+    },
     archiveItem: function (c) {
       var it = byId(c.db.Items, s(c.p.id));
       if (!it) throw E('找不到展品');

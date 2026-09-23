@@ -1120,31 +1120,115 @@ async function receiveModal(id) {
 }
 
 /* ===================== 展品 / 單台 ===================== */
+/** 存放地點:先放公司的兩個廠區,已經用過的其他地點也會一起列出來 */
+const SITES = ['新竹', '林口'];
+function siteOptions(cur) {
+  const used = [...new Set((S.items || []).map(i => String(i.location || '').trim()).filter(Boolean))];
+  const list = SITES.concat(used.filter(v => !SITES.includes(v)));
+  if (cur && !list.includes(cur)) list.push(cur);
+  const out = [];
+  list.forEach(v => out.push('<option' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>'));
+  out.push('<option value="__new">+ 新增地點…</option>');
+  return out.join('');
+}
+
+/** 把使用者選的照片縮到合理大小再上傳,避免一張 5MB 的原圖塞爆請求 */
+function shrinkImage(file, maxPx = 1200) {
+  return new Promise((ok, bad) => {
+    if (!/^image\//.test(file.type)) return bad(new Error('請選圖片檔'));
+    const fr = new FileReader();
+    fr.onerror = () => bad(new Error('讀不到這個檔案'));
+    fr.onload = () => {
+      const im = new Image();
+      im.onerror = () => bad(new Error('這個檔案不是可以顯示的圖片'));
+      im.onload = () => {
+        const r = Math.min(1, maxPx / Math.max(im.width, im.height));
+        const cv = document.createElement('canvas');
+        cv.width = Math.round(im.width * r); cv.height = Math.round(im.height * r);
+        cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+        let q = 0.82, out = cv.toDataURL('image/jpeg', q);
+        while (out.length > 380000 && q > 0.35) { q -= 0.12; out = cv.toDataURL('image/jpeg', q); }
+        if (out.length > 380000) return bad(new Error('這張圖太大,請換一張或先裁小一點'));
+        ok(out.split(',')[1]);
+      };
+      im.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
 function itemModal(id, preCat) {
   const i = id ? S.items.find(x => x.id === id) : { mode: 'qty', qty: 0, category: preCat || (S.cats[0] && S.cats[0].name) || '' };
+  const locOpts = siteOptions(i.location);        // 先組好,樣板裡就不會出現使用者欄位
   const m = openModal(`<h2>${id ? '編輯展品 ' + esc(id) : '新增展品'}</h2><form id="itf">
     <label class="f"><span>品名 <b>*</b></span><input type="text" name="name" required value="${esc(i.name || '')}"></label>
     <div class="grid2"><label class="f"><span>分類</span><select name="category" id="fcat">${S.cats.map(c => `<option ${c.name === i.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}${S.cats.some(c => c.name === i.category) || !i.category ? '' : `<option selected>${esc(i.category)}</option>`}<option value="__new">+ 新增分類…</option></select>
     <input type="text" id="fcatnew" class="hidden" maxlength="40" placeholder="新分類名稱" style="margin-top:6px"></label>
-    <label class="f"><span>存放位置</span><input type="text" name="location" value="${esc(i.location || '')}" placeholder="例:湖口 B 倉 A-01"></label></div>
+    <label class="f"><span>存放位置</span><select name="location" id="floc">${locOpts}</select>
+    <input type="text" id="flocnew" class="hidden" maxlength="60" placeholder="例:湖口 B 倉 A-01" style="margin-top:6px"></label></div>
     <label class="f"><span>追蹤方式</span><div class="seg" id="mseg">${[['unit', '逐台編號(貴重品)'], ['qty', '只記數量(道具 / 配件)']].map(([k, t]) => `<button type="button" data-m="${k}" class="${i.mode === k ? 'on' : ''}" ${id && i.mode === 'unit' && k === 'qty' && i.total ? 'disabled' : ''}>${t}</button>`).join('')}</div></label>
     <label class="f" id="fq"><span>${id ? '持有數量' : '數量'}</span><input type="number" min="0" name="qty" value="${i.qty || 0}"></label>
     ${id ? '' : '<label class="f" id="fu"><span>建立幾台(會自動產生 E0001 這類編號,可印 QR 標籤)</span><input type="number" min="0" max="200" name="unitCount" value="1"></label>'}
     <label class="f"><span>規格 / 配件</span><input type="text" name="spec" value="${esc(i.spec || '')}"></label>
-    <label class="f"><span>圖片網址(選填)</span><input type="text" name="image" value="${esc(i.image || '')}" placeholder="https://…"></label>
+    <label class="f"><span>照片(選填)</span>
+      <div class="photo" id="fphoto"></div>
+      <input type="hidden" name="image" id="fimg" value="${esc(i.image || '')}">
+      <div class="row" style="gap:8px;margin-top:8px">
+        <label class="btn sm">${ICON.plus}選照片 / 拍照<input type="file" accept="image/*" id="ffile" style="display:none"></label>
+        <button type="button" class="btn sm ghost" id="furl">改貼網址</button>
+        <button type="button" class="btn sm ghost" id="fdel">移除照片</button>
+      </div></label>
     <label class="f"><span>備註</span><input type="text" name="note" value="${esc(i.note || '')}"></label>
-    <div class="modal-f"><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
+    <div class="modal-f">${id ? '<button type="button" class="btn danger" id="fdrop">刪除展品</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
   let mode = i.mode;
   const sync = () => { $('#fq', m).classList.toggle('hidden', mode !== 'qty'); const fu = $('#fu', m); if (fu) fu.classList.toggle('hidden', mode !== 'unit'); $$('#mseg button', m).forEach(b => b.classList.toggle('on', b.dataset.m === mode)); };
   $$('#mseg button', m).forEach(b => b.onclick = () => { mode = b.dataset.m; sync(); }); sync();
+  /* 照片 */
+  const drawPhoto = () => {
+    const v = $('#fimg', m).value;
+    $('#fphoto', m).innerHTML = v
+      ? `<img src="${esc(v)}" alt="展品照片" loading="lazy">`
+      : '<div class="ph-empty">還沒有照片</div>';
+    $('#fdel', m).classList.toggle('hidden', !v);
+  };
+  $('#ffile', m).onchange = async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    const b64 = await run(() => shrinkImage(f)).catch(() => null);
+    if (!b64) return;
+    const r = await run(() => api('uploadImage', { name: $('#itf [name=name]', m).value || '展品照片', data: b64, ext: 'jpeg' }), '照片已上傳').catch(() => null);
+    if (!r) return;
+    $('#fimg', m).value = r.url; drawPhoto();
+  };
+  $('#furl', m).onclick = () => {
+    const v = window.prompt('貼上照片網址(留白代表移除):', $('#fimg', m).value || '');
+    if (v === null) return;
+    $('#fimg', m).value = v.trim(); drawPhoto();
+  };
+  $('#fdel', m).onclick = () => { $('#fimg', m).value = ''; drawPhoto(); };
+  drawPhoto();
+  /* 刪除展品 */
+  if ($('#fdrop', m)) $('#fdrop', m).onclick = () => {
+    const msg = '確定要永久刪除「' + i.name + '」?\n\n'
+      + '借過的展品不能刪(系統會擋下來);沒借過的會連同單台編號一起移除,無法復原。\n'
+      + '如果只是暫時不用,請改用「下架」。';
+    if (!confirmInline(msg)) return;
+    run(() => api('deleteItem', { id }), '已刪除').then(() => { closeModal(); render(); }).catch(() => { });
+  };
   const sel = $('#fcat', m), nw = $('#fcatnew', m);
   sel.onchange = () => { const isNew = sel.value === '__new'; nw.classList.toggle('hidden', !isNew); if (isNew) nw.focus(); };
+  const loc = $('#floc', m), locNew = $('#flocnew', m);
+  loc.onchange = () => { const isNew = loc.value === '__new'; locNew.classList.toggle('hidden', !isNew); if (isNew) locNew.focus(); };
   $('#itf', m).onsubmit = e => {
     e.preventDefault();
     const item = { ...Object.fromEntries(new FormData(e.target)), id: id || '', mode };
     if (item.category === '__new') {
       item.category = nw.value.trim();
       if (!item.category) return toast('請填寫新分類名稱', true);
+    }
+    if (item.location === '__new') {
+      item.location = locNew.value.trim();
+      if (!item.location) return toast('請填寫新的存放地點', true);
     }
     run(() => api('saveItem', { item }), '已儲存').then(() => { RCACHE.delete('cats'); closeModal(); render(); }).catch(() => { });
   };
@@ -1209,7 +1293,7 @@ function userModal(id) {
     <div class="grid2"><label class="f"><span>角色</span><select name="role" id="ur"><option value="user">使用者(只輸工號)</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者(工號+PIN)</option></select></label>
     <label class="f" id="upf"><span>${u.hasPin ? '重設 PIN(留空不變)' : '管理者 PIN <b>*</b>'}</span><input type="text" name="pin" placeholder="4–12 碼"></label></div>
     ${id ? `<label class="chk"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}>啟用(離職可取消勾選)</label>` : ''}
-    <div class="modal-f"><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
+    <div class="modal-f">${id ? '<button type="button" class="btn danger" id="fdrop">刪除展品</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
   const sync = () => $('#upf', m).classList.toggle('hidden', $('#ur', m).value !== 'admin');
   $('#ur', m).onchange = sync; sync();
   $('#uf', m).onsubmit = e => {

@@ -88,8 +88,12 @@ function routes_() {
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
     stocktake: ['qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
     saveCat: ['cat'], moveCat: ['id', 'dir'],
-    approveMany: ['ids', 'note', 'force'], decideRequest: ['id', 'ok', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force']
+    approveMany: ['ids', 'note', 'force'], decideRequest: ['id', 'ok', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force'],
+    deleteItem: ['id']
   });
+  // 照片上傳:交給檔案積木放進雲端硬碟,試算表只存連結。不碰試算表,所以不算寫入。
+  R.uploadImage = { auth: 'admin', write: false, fields: ['name', 'data', 'ext'], big: 420000,
+    tables: { Users: C.USER_AUTH }, fn: function (c) { return Files.saveImage(c.p.name, c.p.data, c.p.ext); } };
   // 當面確認:先由身份積木驗證在場管理者,再交邏輯積木
   R.confirmOnSite = { auth: 'user', write: true, fields: ['id', 'emp', 'pin'], fn: function (c) { return Logic.confirmOnSite(c, Identity.verifyAdmin(c.db, c.p.emp, c.p.pin)); } };
   return (ROUTES_ = R);
@@ -97,13 +101,14 @@ function routes_() {
 
 /** 輸入守門:只收白名單欄位,並限制字串長度、陣列大小與巢狀深度 */
 var LIMITS_ = { str: 500, arr: 2000, depth: 5, body: 500000 };
-function checkPayload_(payload, fields) {
+function checkPayload_(payload, fields, maxStr) {
+  var strMax = maxStr || LIMITS_.str;          // 只有照片上傳這類路由會放寬
   if (payload == null) return {};
   if (typeof payload !== 'object' || Array.isArray(payload)) throw userError_('參數格式錯誤');
   Object.keys(payload).forEach(function (k) { if (fields.indexOf(k) < 0) throw userError_('不接受的參數:' + k); });
   (function walk(v, d) {
     if (d > LIMITS_.depth) throw userError_('參數層級過深');
-    if (typeof v === 'string') { if (v.length > LIMITS_.str) throw userError_('文字過長(上限 ' + LIMITS_.str + ' 字)'); return; }
+    if (typeof v === 'string') { if (v.length > strMax) throw userError_('文字過長(上限 ' + strMax + ' 字)'); return; }
     if (typeof v === 'number') { if (!isFinite(v)) throw userError_('數字格式錯誤'); return; }
     if (v == null || typeof v === 'boolean') return;
     if (Array.isArray(v)) { if (v.length > LIMITS_.arr) throw userError_('資料筆數過多'); v.forEach(function (x) { walk(x, d + 1); }); return; }
@@ -134,7 +139,7 @@ function dispatch_(req) {
   try {
     var need = typeof route.tables === 'function' ? route.tables(req.payload || {}) : route.tables;
     var db = Memory.load(need), events = [];
-    var c = { db: db, p: checkPayload_(req.payload, route.fields), user: null, today: Clock.today(), now: Clock.now() };
+    var c = { db: db, p: checkPayload_(req.payload, route.fields, route.big), user: null, today: Clock.today(), now: Clock.now() };
     if (route.auth !== 'public') c.user = Identity.authenticate(db, req.token, req.action);
     if (route.auth === 'admin') Identity.requireAdmin(c.user);
     c.logAs = function (who) {

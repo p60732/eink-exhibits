@@ -8,6 +8,8 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   const errs = []; p.on('pageerror', e => errs.push(e.message)); p.on('dialog', d => d.accept());
   const shot = n => p.screenshot({ path: `/tmp/ee_${n}.png`, fullPage: true });
   const wait = ms => p.waitForTimeout(ms);
+  // 1×1 透明 PNG,給照片上傳測試用
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   await p.goto(URL); await p.waitForSelector('#login-f');
   await p.fill('[name=name]', '測試管理者'); await p.fill('#l-emp', '90001'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
   await p.waitForSelector('.kpis'); await shot('dash0');
@@ -43,6 +45,33 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   const rows = await p.$$eval('#ibody tr:not(.grouph)', els => els.length);
   if (rows !== 1) throw new Error('籤條篩選後應只剩 1 筆,實際 ' + rows);
   await p.click('.catbar .catchip[data-cat=""]'); await wait(400);
+  // 展品編輯:上傳照片 + 刪除
+  await p.click('[data-act=edit-item][data-id]'); await p.waitForSelector('#fphoto');
+  if (!await p.isVisible('#fdrop')) throw new Error('編輯視窗少了刪除按鈕');
+  // 存放位置是下拉選單,先放新竹、林口
+  const sites = await p.$$eval('#floc option', els => els.map(e => e.textContent.trim()));
+  if (sites[0] !== '新竹' || sites[1] !== '林口') throw new Error('存放位置選單不正確:' + sites.join('|'));
+  if (!sites.some(v => /新增地點/.test(v))) throw new Error('存放位置少了「新增地點」');
+  await p.selectOption('#floc', '林口'); await wait(200);
+  await p.setInputFiles('#ffile', { name: 'test.png', mimeType: 'image/png', buffer: PNG }); await wait(1500);
+  const imgSrc = await p.getAttribute('#fphoto img', 'src');
+  if (!/drive\.google\.com\/thumbnail/.test(imgSrc || '')) throw new Error('照片沒上傳成功:' + imgSrc);
+  await shot('photo');
+  await p.click('#fdel'); await wait(300);
+  if (await p.$('#fphoto img')) throw new Error('移除照片沒生效');
+  await p.click('.modal [data-act=close]'); await wait(400);
+  // 借過的展品刪不掉(這時候還沒借,所以先建一個丟掉的來試刪除)
+  await p.click('.btn.brand[data-act=edit-item]'); await p.waitForSelector('#itf');
+  await p.fill('#itf [name=name]', '建錯的展品'); await p.fill('#itf [name=qty]', '1');
+  await p.selectOption('#floc', '__new'); await wait(300);
+  await p.fill('#flocnew', '湖口 B 倉 A-01');
+  await p.click('#itf .btn.pri'); await wait(900);
+  const rowsBefore = await p.$$eval('#ibody tr:not(.grouph):not(.groupe)', els => els.length);
+  const lastEdit = (await p.$$('[data-act=edit-item][data-id]')).slice(-1)[0];
+  await lastEdit.click(); await p.waitForSelector('#fdrop');
+  await p.click('#fdrop'); await wait(1200);
+  const rowsAfter = await p.$$eval('#ibody tr:not(.grouph):not(.groupe)', els => els.length);
+  if (rowsAfter !== rowsBefore - 1) throw new Error('刪除展品沒生效:' + rowsBefore + ' → ' + rowsAfter);
   await p.click('#menu-btn'); await p.click('#m-out');
   // 同仁預約
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('.cards');

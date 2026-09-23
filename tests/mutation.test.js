@@ -3,7 +3,7 @@ const fs = require('fs'), path = require('path'), os = require('os'), { spawnSyn
 const root = path.join(__dirname, '..');
 const M = [
   ['00_gateway.gs', "if (route.auth === 'admin') Identity.requireAdmin(c.user);", '', '拿掉管理者權限檢查'],
-  ['00_gateway.gs', 'checkPayload_(req.payload, route.fields)', '(req.payload || {})', '拿掉參數白名單'],
+  ['00_gateway.gs', 'checkPayload_(req.payload, route.fields, route.big)', '(req.payload || {})', '拿掉參數白名單'],
   ['00_gateway.gs', "err.userFacing ? err.message : '操作失敗,請稍後再試'", 'err.message', '錯誤訊息洩漏內部細節'],
   ['10_identity.gs', '    checkPin_(a, pin);\n    return a;', '    return a;', '當面確認不驗管理者 PIN'],
   ['10_identity.gs', "if (bool(u.mustChange) && ['me', 'changePin', 'logout'].indexOf(action) < 0) throw E('請先變更 PIN');", '', '拿掉首次改 PIN 強制'],
@@ -30,7 +30,12 @@ const M = [
   ['20_logic.gs', "if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');", '', '同一張單可以同時掛兩個請求'],
   ['20_logic.gs', "catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }", 'catch (e) { ok++; }', '批次核准把失敗的也算成功'],
   // 效能索引:資料變了卻沒清掉快取,會算出過期的可借量
-  ['20_logic.gs', "if (t === 'Loans') m.li = null;", '', '借用單索引沒隨資料更新']
+  ['20_logic.gs', "if (t === 'Loans') m.li = null;", '', '借用單索引沒隨資料更新'],
+  // 刪除展品與照片上傳的守門
+  ['20_logic.gs', "if (used) throw E('「' + it.name + '」已經有 '", "if (false) throw E('「' + it.name + '」已經有 '", '借過的展品也能被刪掉'],
+  ['60_files.gs', "if (!mime) throw err_('只接受 JPG / PNG / WebP');", "mime = mime || 'image/jpeg';", '什麼檔案都收'],
+  ['60_files.gs', "if (data.length > MAX_B64) throw err_('照片太大", "if (false) throw err_('照片太大", '照片大小沒有上限'],
+  ['00_gateway.gs', "var strMax = maxStr || LIMITS_.str;", "var strMax = 400000;", '所有路由的文字長度限制都被放寬']
   // 註:`m.cap` 的失效目前沒有路徑會在同一次請求裡「先算總數 → 改 Items/Units → 再算總數」,
   //     所以拿掉它測試也不會失敗(等價突變)。程式碼保留,是為了將來真的出現這種呼叫順序時不會算錯。
 ];

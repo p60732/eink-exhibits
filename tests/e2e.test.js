@@ -225,6 +225,32 @@ ok('moveCat', { id: cl[0].id, dir: -1 }, A);
 assert.strictEqual(ok('allCats', {}, A).map(x => x.name).join(), before.join(), '再移回來要一樣');
 assert.strictEqual(ok('allCats', {}, A)[0].name, before[0]);
 
+// ---- 刪除展品 / 照片上傳 ----
+// 借過的不能刪,只能下架
+bad('deleteItem', { id: panel.id }, A, /筆借用紀錄.*下架/s);
+assert.ok(ok('items', {}, A).some(i => i.id === panel.id), '擋下來之後展品還要在');
+// 沒借過的可以刪,連帶把單台編號一起刪掉
+const D1 = ok('saveItem', { item: { name: '建錯的看板', mode: 'unit', unitCount: 3, category: 'Signage' } }, A);
+assert.strictEqual(ok('units', { itemId: D1.id }, A).length, 3);
+const delRes = ok('deleteItem', { id: D1.id }, A);
+assert.strictEqual(delRes.units, 3, '單台編號要一起刪掉');
+assert.ok(!ok('items', {}, A).some(i => i.id === D1.id), '刪掉之後就不該出現');
+assert.ok(!ok('units', {}, A).some(u => u.itemId === D1.id), '單台編號也不該留下');
+bad('deleteItem', { id: D1.id }, A, /找不到展品/);
+bad('deleteItem', { id: stand.id }, U, /管理者權限/);
+// 刪除有寫進操作紀錄
+assert.ok(ok('logs', { limit: 50 }, A).some(l => l.action === '刪除展品' && /建錯的看板/.test(l.detail)), '刪除要留下紀錄');
+// 照片上傳:回傳可直接顯示的連結
+const img = ok('uploadImage', { name: '看板正面', data: Buffer.from('fake-image').toString('base64'), ext: 'jpeg' }, A);
+assert.match(img.url, /^https:\/\/drive\.google\.com\/thumbnail\?id=/);
+bad('uploadImage', { name: 'x', data: '', ext: 'jpeg' }, A, /沒有收到照片內容/);
+bad('uploadImage', { name: 'x', data: 'AAAA', ext: 'gif' }, A, /只接受 JPG/);
+bad('uploadImage', { name: 'x', data: 'A'.repeat(410000), ext: 'jpeg' }, A, /照片太大/);      // 檔案積木自己的上限
+bad('uploadImage', { name: 'x', data: 'A'.repeat(420001), ext: 'jpeg' }, A, /文字過長/);      // 守門的外層上限
+bad('uploadImage', { name: 'x', data: 'AAAA', ext: 'jpeg' }, U, /管理者權限/);
+// 一般欄位的長度上限沒有被放寬
+bad('saveItem', { item: { name: 'x'.repeat(501) } }, A, /文字過長/);
+
 // ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
 // 多做一筆封存展品與一筆待審單,讓限縮欄位(archived / status / request)都被走到
 const U2b = ok('login', { emp: '10477' }).token;   // 先前登出過,重新取得憑證

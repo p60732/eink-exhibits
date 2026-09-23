@@ -7,7 +7,7 @@ const webFiles = ['index.html', 'css/style.css', 'js/connect.js', 'js/ui.js'];
 let n = 0; const t = (name, fn) => { try { fn(); n++; } catch (e) { e.message = name + ':' + e.message; throw e; } };
 
 t('公開函式白名單:GAS 頂層函式除白名單外必須以 _ 結尾', () => {
-  const allow = ['doGet', 'doPost', 'setupSheets', 'installDailyTrigger', 'dailyReminder'];
+  const allow = ['doGet', 'doPost', 'setupSheets', 'installDailyTrigger', 'dailyReminder', 'authorizeDrive'];
   gasFiles.forEach(f => {
     const names = [...read('gas/' + f).matchAll(/^function\s+([A-Za-z0-9_$]+)\s*\(/gm)].map(m => m[1]);
     names.forEach(nm => assert.ok(allow.includes(nm) || nm.endsWith('_'), `${f}: ${nm}() 會被公開`));
@@ -49,7 +49,7 @@ t('連線積木:統一回應格式 success/data/error', () => {
 });
 t('路由:每個動作都有欄位白名單', () => {
   const s = read('gas/00_gateway.gs');
-  assert.ok(/checkPayload_\(req\.payload, route\.fields\)/.test(s));
+  assert.ok(/checkPayload_\(req\.payload, route\.fields, route\.big\)/.test(s));
 });
 t('積木檔頭:每個檔案宣告所屬積木與禁止事項', () => {
   [...gasFiles.map(f => 'gas/' + f), 'js/connect.js', 'js/ui.js'].forEach(f => { const s = read(f); assert.ok(/【.+積木】/.test(s) && /禁止/.test(s), f); });

@@ -221,6 +221,12 @@ tr.dim td{opacity:.5}
 .card.ok-empty{margin-top:14px;text-align:center;color:var(--muted);font-size:14px}
 /* 目錄多選一起填單:固定在畫面下方 */
 .multibar{position:sticky;bottom:12px;z-index:5;box-shadow:0 6px 24px rgba(51,63,72,.18)}
+/* 展品照片:預覽與上傳 */
+.photo{margin-top:6px;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;background:var(--surface-2);
+  height:170px;display:flex;align-items:center;justify-content:center}
+.photo img{width:100%;height:100%;object-fit:contain;display:block}
+.photo .ph-empty{font-size:13px;color:var(--muted)}
+label.btn.sm{cursor:pointer}
 /* ---------- modal ---------- */
 .modal-bg{position:fixed;inset:0;background:rgba(27,36,43,.45);z-index:50;display:flex;align-items:flex-start;justify-content:center;
   padding:44px 16px;overflow-y:auto;backdrop-filter:blur(2px)}
