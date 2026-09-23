@@ -33,13 +33,35 @@ const copy = (from, to, transform) => {
 // 前端:只有 GAS_URL 由建置注入
 ['index.html', 'css/style.css', 'js/ui.js'].forEach(f => copy(path.join(root, f), path.join(dist, 'site', f)));
 copy(path.join(root, 'js/connect.js'), path.join(dist, 'site/js/connect.js'), s => s.replace("'__GAS_URL__'", JSON.stringify(cfg.gasUrl)));
+/**
+ * 檔名後面掛上內容雜湊:GitHub Pages 會讓瀏覽器快取 js/css 一段時間,
+ * 沒有這個的話「已經修好並部署了,使用者卻還看到舊版壞掉的畫面」會持續好幾分鐘(踩過)。
+ * 內容沒變雜湊就不變,所以平常不會白白重抓。
+ */
+const stamp = f => require('crypto').createHash('sha256')
+  .update(fs.readFileSync(path.join(dist, 'site', f))).digest('hex').slice(0, 8);
+const ASSETS = ['css/style.css', 'js/connect.js', 'js/ui.js'];
+{
+  const idx = path.join(dist, 'site/index.html');
+  let html = fs.readFileSync(idx, 'utf8');
+  ASSETS.forEach(f => { html = html.split('"' + f + '"').join('"' + f + '?v=' + stamp(f) + '"'); });
+  fs.writeFileSync(idx, html);
+  const missing = ASSETS.filter(f => !new RegExp(f.replace('.', '\\.') + '\\?v=[0-9a-f]{8}').test(html));
+  if (missing.length) { console.error('✘ index.html 少了快取破壞參數:' + missing.join('、')); process.exit(1); }
+}
 fs.writeFileSync(path.join(dist, 'site/.nojekyll'), '');
 // 後端:原樣複製
 fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs')).forEach(f => copy(path.join(root, 'gas', f), path.join(dist, 'gas', f)));
 
 // 單一來源檢查
 const diff = [];
-['index.html', 'css/style.css', 'js/ui.js'].forEach(f => { if (fs.readFileSync(path.join(root, f), 'utf8') !== fs.readFileSync(path.join(dist, 'site', f), 'utf8')) diff.push(f); });
+// index.html 只允許多出 ?v=<雜湊>,其他一個字都不能差
+['index.html', 'css/style.css', 'js/ui.js'].forEach(f => {
+  const a = fs.readFileSync(path.join(root, f), 'utf8');
+  let b = fs.readFileSync(path.join(dist, 'site', f), 'utf8');
+  if (f === 'index.html') b = b.replace(/\?v=[0-9a-f]{8}/g, '');
+  if (a !== b) diff.push(f);
+});
 fs.readdirSync(path.join(root, 'gas')).forEach(f => { if (fs.readFileSync(path.join(root, 'gas', f), 'utf8') !== fs.readFileSync(path.join(dist, 'gas', f), 'utf8')) diff.push('gas/' + f); });
 const c1 = fs.readFileSync(path.join(root, 'js/connect.js'), 'utf8').split('\n'), c2 = fs.readFileSync(path.join(dist, 'site/js/connect.js'), 'utf8').split('\n');
 if (c1.filter((l, i) => l !== c2[i]).length !== 1) diff.push('js/connect.js(應只差 GAS_URL 一行)');

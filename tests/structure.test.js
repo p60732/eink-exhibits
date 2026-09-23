@@ -61,4 +61,9 @@ t('路由:每個動作都有欄位白名單', () => {
 t('積木檔頭:每個檔案宣告所屬積木與禁止事項', () => {
   [...gasFiles.map(f => 'gas/' + f), 'js/connect.js', 'js/ui.js'].forEach(f => { const s = read(f); assert.ok(/【.+積木】/.test(s) && /禁止/.test(s), f); });
 });
+t('建置:js/css 必須帶內容雜湊,部署後瀏覽器才不會繼續用舊版', () => {
+  const b = read('build.js');
+  assert.ok(/\?v=' \+ stamp\(f\)/.test(b), 'build.js 要把 ?v=<雜湊> 掛到 index.html 的資源上');
+  assert.ok(/少了快取破壞參數/.test(b), 'build.js 要自我檢查有沒有掛上去');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');
