@@ -37,6 +37,7 @@ function routes_() {
     UNIT_CALC: ['id', 'itemId', 'status'],
     UNIT_PICK: ['id', 'itemId', 'status', 'serial'],
     ITEM_CALC: ['id', 'name', 'mode', 'qty', 'archived'],
+    ITEM_CAT: ['id', 'name', 'category', 'archived'],
     USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange']   // 不讀 pinHash / email
   };
   var A_ALL = { Items: '*', Units: '*', Loans: '*', Users: C.USER_AUTH };
@@ -58,6 +59,7 @@ function routes_() {
     { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Users: C.USER_AUTH });
   add('user', false, U, { pickupOptions: ['id'] },
     { Items: C.ITEM_CALC, Units: C.UNIT_PICK, Loans: C.LOAN_MINE, Users: C.USER_AUTH });
+  add('user', false, U, { cats: [] }, { Cats: '*', Items: C.ITEM_CAT, Users: C.USER_AUTH });
   add('user', false, U, { lookup: ['code'] }, A_ALL);
   add('user', true, U, {
     createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force'],
@@ -72,11 +74,13 @@ function routes_() {
     { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC, only: LIVE }, Users: C.USER_AUTH });
   add('admin', false, A, { units: ['itemId'] },
     { Items: C.ITEM_CALC, Units: '*', Loans: C.LOAN_HOLD, Users: C.USER_AUTH });
+  add('admin', false, A, { allCats: [] }, { Cats: '*', Items: C.ITEM_CAT, Users: C.USER_AUTH });
   add('admin', false, A, { logs: ['limit'] }, { Users: C.USER_AUTH });
   add('admin', true, A, {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
-    stocktake: ['qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows']
+    stocktake: ['qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
+    saveCat: ['cat'], moveCat: ['id', 'dir']
   });
   // 當面確認:先由身份積木驗證在場管理者,再交邏輯積木
   R.confirmOnSite = { auth: 'user', write: true, fields: ['id', 'emp', 'pin'], fn: function (c) { return Logic.confirmOnSite(c, Identity.verifyAdmin(c.db, c.p.emp, c.p.pin)); } };

@@ -10,7 +10,7 @@ const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [],
   cart: [], plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
-  loanFilter: 'pending', itemQ: '', showArchived: false, logQ: ''
+  loanFilter: 'pending', itemQ: '', cat: '', showArchived: false, logQ: ''
 };
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -304,43 +304,70 @@ function addToCart(itemId, qty) {
 /* ===================== 各頁面 ===================== */
 const VIEWS = {};
 
-VIEWS.catalog = main => {
+/** 分類籤條:全部 + 每個分類各自帶數量 */
+function catBar(cats, active, counts) {
+  const all = Object.values(counts).reduce((x, y) => x + y, 0);
+  const one = (key, label, n2) => `<button class="catchip ${active === key ? 'on' : ''}" data-act="pick-cat" data-cat="${esc(key)}">${esc(label)}<span class="n">${n2}</span></button>`;
+  const chips = [one('', '全部', all)];
+  cats.forEach(c => chips.push(one(c.name, c.name, counts[c.name] || 0)));
+  return `<div class="catbar">${chips.join('')}</div>`;
+}
+/** 依分類把展品分段;某一類還沒有東西也要留著,才看得出缺什麼 */
+function groupByCat(cats, list) {
+  const byCat = {};
+  cats.forEach(c => byCat[c.name] = []);
+  list.forEach(i => (byCat[i.category] = byCat[i.category] || []).push(i));
+  const order = cats.map(c => c.name);
+  Object.keys(byCat).forEach(k => { if (order.indexOf(k) < 0) order.push(k); });
+  return order.map(name => [name, byCat[name]]);
+}
+
+VIEWS.catalog = async main => {
   const f = S.filters, range = f.start && f.end && f.start <= f.end;
+  S.cats = await cachedGet('cats', 'cats');
   return withData(main, 'catalog|' + (range ? f.start + '~' + f.end : ''), 'catalog', range ? { start: f.start, end: f.end } : {}, items => {
   S.items = items;
-  S.cats = [...new Set(S.items.map(i => i.category))].sort();
+  if (f.cat && !S.cats.some(c => c.name === f.cat)) f.cat = '';
   main.innerHTML = `<div class="eyebrow">Catalog</div><h1>展品目錄</h1><p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「展覽規劃」。</p>
     <div class="toolbar">
       <input class="grow" type="search" id="cq" placeholder="搜尋品名、規格、位置…" value="${esc(f.q)}">
-      <select id="ccat" style="width:auto"><option value="">全部類別</option>${S.cats.map(c => `<option ${c === f.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
       <span class="row" style="gap:6px"><input type="date" id="cs" value="${esc(f.start)}" aria-label="起"><span class="meta">→</span><input type="date" id="ce" value="${esc(f.end)}" aria-label="迄"></span>
       <label class="chk"><input type="checkbox" id="cav" ${f.onlyAvail ? 'checked' : ''}>只看可借</label>
       <button class="btn" data-act="export">${ICON.dl}<span class="lbl-hide">匯出</span></button>
     </div>
+    <div id="cbar"></div>
     ${range ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到展覽規劃</a></div>` : ''}
-    <div class="cards" id="cgrid"></div>`;
+    <div id="cgrid"></div>`;
+  const card = i => {
+    const inCart = S.cart.find(c => c.itemId === i.id);
+    const av = range ? i.available : null;
+    return `<div class="card item-card">
+      ${i.image ? `<div class="img" style="background-image:url('${esc(i.image)}')"></div>` : ''}
+      <div class="row" style="gap:6px"><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
+      <h3>${esc(i.name)}</h3>
+      ${i.spec ? `<div class="meta">${esc(i.spec)}</div>` : ''}
+      <div class="meta">存放:${esc(i.location || '—')}</div>
+      <div class="nums"><div class="${i.inStock ? '' : 'zero'}"><b>${i.inStock}</b>倉庫在庫</div><div><b>${i.out}</b>出借中</div><div><b>${i.reserved}</b>已預約</div><div><b>${i.total}</b>總數</div></div>
+      ${range ? `<div class="avail ${av ? '' : 'none'}">期間可借 <b>${av}</b></div>` : ''}
+      <div class="addrow"><input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="add-cart" data-id="${i.id}">${inCart ? `加入規劃(已選 ${inCart.qty})` : '加入規劃'}</button></div>
+    </div>`;
+  };
   const draw = () => {
     const q = f.q.toLowerCase();
-    const list = S.items.filter(i => (!f.cat || i.category === f.cat) && (!q || [i.name, i.spec, i.location, i.category, i.id].join(' ').toLowerCase().includes(q)) && (!f.onlyAvail || (range ? i.available : i.inStock) > 0));
-    $('#cgrid').innerHTML = list.length ? list.map(i => {
-      const inCart = S.cart.find(c => c.itemId === i.id);
-      const av = range ? i.available : null;
-      return `<div class="card item-card">
-        ${i.image ? `<div class="img" style="background-image:url('${esc(i.image)}')"></div>` : ''}
-        <div class="row" style="gap:6px"><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
-        <h3>${esc(i.name)}</h3>
-        ${i.spec ? `<div class="meta">${esc(i.spec)}</div>` : ''}
-        <div class="meta">存放:${esc(i.location || '—')}</div>
-        <div class="nums"><div class="${i.inStock ? '' : 'zero'}"><b>${i.inStock}</b>倉庫在庫</div><div><b>${i.out}</b>出借中</div><div><b>${i.reserved}</b>已預約</div><div><b>${i.total}</b>總數</div></div>
-        ${range ? `<div class="avail ${av ? '' : 'none'}">期間可借 <b>${av}</b></div>` : ''}
-        <div class="addrow"><input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="add-cart" data-id="${i.id}">${inCart ? `加入規劃(已選 ${inCart.qty})` : '加入規劃'}</button></div>
-      </div>`;
-    }).join('') : '<div class="empty">沒有符合的展品</div>';
+    const match = i => (!q || [i.name, i.spec, i.location, i.category, i.id].join(' ').toLowerCase().includes(q)) && (!f.onlyAvail || (range ? i.available : i.inStock) > 0);
+    const shown = S.items.filter(match);
+    const counts = {};
+    shown.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
+    $('#cbar').innerHTML = catBar(S.cats, f.cat, counts);
+    const block = arr => arr.length ? `<div class="cards">${arr.map(card).join('')}</div>` : '<div class="catempty">這個分類還沒有展品</div>';
+    $('#cgrid').innerHTML = f.cat
+      ? (shown.filter(i => i.category === f.cat).length ? block(shown.filter(i => i.category === f.cat)) : '<div class="card empty">這個分類還沒有展品</div>')
+      : groupByCat(S.cats, shown).map(([name, arr]) => `<h2 class="cath">${esc(name)}<span class="chipnum">${arr.length}</span></h2>` + block(arr)).join('');
   };
   draw();
   $('#cq').oninput = e => { f.q = e.target.value; draw(); };
-  $('#ccat').onchange = e => { f.cat = e.target.value; draw(); };
   $('#cav').onchange = e => { f.onlyAvail = e.target.checked; draw(); };
+  S._catDraw = draw;
   const dch = () => { f.start = $('#cs').value; f.end = $('#ce').value; if ((f.start && f.end) || (!f.start && !f.end)) render(); };
   $('#cs').onchange = dch; $('#ce').onchange = dch;
   });
@@ -476,24 +503,69 @@ VIEWS.loans = main => withData(main, 'loans|' + S.loanFilter, 'loans', { filter:
   draw(); $('#lq').oninput = e => draw(e.target.value);
   if (S._focusLoan) { const el = $('#loan-' + S._focusLoan); if (el) { el.scrollIntoView({ block: 'center' }); el.style.outline = '2px solid var(--red)'; } S._focusLoan = null; }
 });
-VIEWS.items = main => withData(main, 'items', 'items', {}, list => {
-  S.items = list; S.cats = [...new Set(list.map(i => i.category))].sort();
+VIEWS.items = async main => {
+  S.cats = await cachedGet('cats', 'cats');
+  return withData(main, 'items', 'items', {}, list => {
+  S.items = list;
+  if (S.cat && !S.cats.some(c => c.name === S.cat)) S.cat = '';
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Items</div><h1>展品管理</h1><p class="sub">貴重品用「逐台編號」(每台一張 QR 標籤);道具、線材用「數量」。</p></div><span class="spacer"></span>
-    <button class="btn" data-act="import">批次匯入</button><button class="btn" data-act="export">${ICON.dl}匯出</button><button class="btn brand" data-act="edit-item">${ICON.plus}新增展品</button></div>
+    <button class="btn" data-act="cats">分類管理</button><button class="btn" data-act="import">批次匯入</button><button class="btn" data-act="export">${ICON.dl}匯出</button><button class="btn brand" data-act="edit-item">${ICON.plus}新增展品</button></div>
     <div class="toolbar"><input class="grow" type="search" id="iq" placeholder="搜尋…" value="${esc(S.itemQ)}"><label class="chk"><input type="checkbox" id="iarc" ${S.showArchived ? 'checked' : ''}>顯示已下架</label></div>
-    <div class="tbl-wrap"><table><thead><tr><th>編號</th><th>品名</th><th>類別</th><th>方式</th><th class="num">總數</th><th class="num">在庫</th><th class="num">借出</th><th class="num">預約</th><th>存放位置</th><th>最後盤點</th><th></th></tr></thead><tbody id="ibody"></tbody></table></div>`;
+    <div id="ibar"></div>
+    <div class="tbl-wrap"><table><thead><tr><th>編號</th><th>品名</th><th>方式</th><th class="num">總數</th><th class="num">在庫</th><th class="num">借出</th><th class="num">預約</th><th>存放位置</th><th>最後盤點</th><th></th></tr></thead><tbody id="ibody"></tbody></table></div>`;
+  const row = i => `
+    <tr class="${i.archived ? 'dim' : ''}"><td class="mono">${esc(i.id)}</td><td>${esc(i.name)}</td><td>${i.mode === 'unit' ? '<span class="pill unit">逐台</span>' : '<span class="pill">數量</span>'}</td>
+    <td class="num">${i.total}</td><td class="num"><span class="chipnum ${i.inStock ? '' : 'zero'}">${i.inStock}</span></td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${esc(i.location)}</td><td>${esc(i.countedAt || '—')}</td>
+    <td><div class="row" style="gap:4px;flex-wrap:nowrap">${i.mode === 'unit' ? `<button class="btn sm" data-act="units" data-id="${i.id}">單台 / QR</button>` : ''}<button class="btn sm" data-act="edit-item" data-id="${i.id}">編輯</button>
+    <button class="btn sm ghost" data-act="archive" data-id="${i.id}" data-on="${i.archived ? '0' : '1'}">${i.archived ? '上架' : '下架'}</button></div></td></tr>`;
   const draw = () => {
     const q = S.itemQ.toLowerCase();
-    $('#ibody').innerHTML = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec].join(' ').toLowerCase().includes(q))).map(i => `
-      <tr class="${i.archived ? 'dim' : ''}"><td class="mono">${esc(i.id)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.mode === 'unit' ? '<span class="pill unit">逐台</span>' : '<span class="pill">數量</span>'}</td>
-      <td class="num">${i.total}</td><td class="num"><span class="chipnum ${i.inStock ? '' : 'zero'}">${i.inStock}</span></td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${esc(i.location)}</td><td>${esc(i.countedAt || '—')}</td>
-      <td><div class="row" style="gap:4px;flex-wrap:nowrap">${i.mode === 'unit' ? `<button class="btn sm" data-act="units" data-id="${i.id}">單台 / QR</button>` : ''}<button class="btn sm" data-act="edit-item" data-id="${i.id}">編輯</button>
-      <button class="btn sm ghost" data-act="archive" data-id="${i.id}" data-on="${i.archived ? '0' : '1'}">${i.archived ? '上架' : '下架'}</button></div></td></tr>`).join('') || '<tr><td colspan="11" class="empty">尚無展品</td></tr>';
+    const shown = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec].join(' ').toLowerCase().includes(q)));
+    const counts = {};
+    shown.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
+    $('#ibar').innerHTML = catBar(S.cats, S.cat, counts);
+    const sect = (name, arr) => `<tr class="grouph"><th colspan="10">${esc(name)}<span class="chipnum">${arr.length}</span>
+      <button class="btn sm ghost" data-act="edit-item" data-cat="${esc(name)}">${ICON.plus}加到這一類</button></th></tr>` +
+      (arr.length ? arr.map(row).join('') : '<tr class="groupe"><td colspan="10">這個分類還沒有展品</td></tr>');
+    $('#ibody').innerHTML = S.cat ? (shown.filter(i => i.category === S.cat).map(row).join('') || '<tr><td colspan="10" class="empty">這個分類還沒有展品</td></tr>')
+      : groupByCat(S.cats, shown).map(([name, arr]) => sect(name, arr)).join('');
   };
   draw();
+  S._itemDraw = draw;
   $('#iq').oninput = e => { S.itemQ = e.target.value; draw(); };
   $('#iarc').onchange = e => { S.showArchived = e.target.checked; draw(); };
-});
+  });
+};
+
+/** 分類管理:新增、改名、調順序、停用 */
+async function catsModal() {
+  let list = await api('allCats');
+  const m = openModal('<h2>分類管理</h2><div id="cmb"></div>');
+  const draw = () => {
+    $('#cmb', m).innerHTML = `<p class="sub">展品目錄與展品管理都照這個順序分段顯示。還沒放東西的分類也會留著,方便看出還缺什麼。</p>
+      <div class="tbl-wrap"><table><thead><tr><th>分類</th><th class="num">展品</th><th>順序</th><th></th></tr></thead><tbody>
+      ${list.map((c, i) => `<tr class="${c.archived ? 'dim' : ''}">
+        <td><input type="text" data-cn="${c.id}" value="${esc(c.name)}" style="width:100%"></td>
+        <td class="num">${c.count}</td>
+        <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-mv="${c.id}" data-d="-1" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn sm ghost" data-mv="${c.id}" data-d="1" ${i === list.length - 1 ? 'disabled' : ''}>↓</button></div></td>
+        <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm" data-rn="${c.id}">改名</button>
+        <button class="btn sm ghost" data-ar="${c.id}" data-on="${c.archived ? '0' : '1'}">${c.archived ? '啟用' : '停用'}</button></div></td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="toolbar" style="margin-top:12px"><input class="grow" type="text" id="cnew" placeholder="新分類名稱…" maxlength="40"><button class="btn brand" id="cadd">${ICON.plus}新增分類</button></div>
+      <div class="modal-f"><button type="button" class="btn pri" data-act="close-render">完成</button></div>`;
+    const go = (fn) => run(fn).then(r => { list = r; draw(); }).catch(() => { });
+    $$('[data-mv]', m).forEach(b => b.onclick = () => go(() => api('moveCat', { id: b.dataset.mv, dir: +b.dataset.d })));
+    $$('[data-ar]', m).forEach(b => b.onclick = () => go(() => api('saveCat', { cat: { id: b.dataset.ar, archived: b.dataset.on === '1' } })));
+    $$('[data-rn]', m).forEach(b => b.onclick = () => {
+      const inp = $(`[data-cn="${b.dataset.rn}"]`, m);
+      go(() => api('saveCat', { cat: { id: b.dataset.rn, name: inp.value } }));
+    });
+    const add = () => { const v = $('#cnew', m).value.trim(); if (v) go(() => api('saveCat', { cat: { name: v } })); };
+    $('#cadd', m).onclick = add;
+    $('#cnew', m).onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  };
+  draw();
+}
 
 VIEWS.count = async main => {
   const [items, allUnits] = await Promise.all([cachedGet('items', 'items'), cachedGet('units|all', 'units')]);
@@ -659,11 +731,12 @@ async function receiveModal(id) {
 }
 
 /* ===================== 展品 / 單台 ===================== */
-function itemModal(id) {
-  const i = id ? S.items.find(x => x.id === id) : { mode: 'qty', qty: 0, category: '' };
+function itemModal(id, preCat) {
+  const i = id ? S.items.find(x => x.id === id) : { mode: 'qty', qty: 0, category: preCat || (S.cats[0] && S.cats[0].name) || '' };
   const m = openModal(`<h2>${id ? '編輯展品 ' + esc(id) : '新增展品'}</h2><form id="itf">
     <label class="f"><span>品名 <b>*</b></span><input type="text" name="name" required value="${esc(i.name || '')}"></label>
-    <div class="grid2"><label class="f"><span>類別</span><input type="text" name="category" list="catl" value="${esc(i.category || '')}"><datalist id="catl">${S.cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist></label>
+    <div class="grid2"><label class="f"><span>分類</span><select name="category" id="fcat">${S.cats.map(c => `<option ${c.name === i.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}${S.cats.some(c => c.name === i.category) || !i.category ? '' : `<option selected>${esc(i.category)}</option>`}<option value="__new">+ 新增分類…</option></select>
+    <input type="text" id="fcatnew" class="hidden" maxlength="40" placeholder="新分類名稱" style="margin-top:6px"></label>
     <label class="f"><span>存放位置</span><input type="text" name="location" value="${esc(i.location || '')}" placeholder="例:湖口 B 倉 A-01"></label></div>
     <label class="f"><span>追蹤方式</span><div class="seg" id="mseg">${[['unit', '逐台編號(貴重品)'], ['qty', '只記數量(道具 / 配件)']].map(([k, t]) => `<button type="button" data-m="${k}" class="${i.mode === k ? 'on' : ''}" ${id && i.mode === 'unit' && k === 'qty' && i.total ? 'disabled' : ''}>${t}</button>`).join('')}</div></label>
     <label class="f" id="fq"><span>${id ? '持有數量' : '數量'}</span><input type="number" min="0" name="qty" value="${i.qty || 0}"></label>
@@ -675,10 +748,16 @@ function itemModal(id) {
   let mode = i.mode;
   const sync = () => { $('#fq', m).classList.toggle('hidden', mode !== 'qty'); const fu = $('#fu', m); if (fu) fu.classList.toggle('hidden', mode !== 'unit'); $$('#mseg button', m).forEach(b => b.classList.toggle('on', b.dataset.m === mode)); };
   $$('#mseg button', m).forEach(b => b.onclick = () => { mode = b.dataset.m; sync(); }); sync();
+  const sel = $('#fcat', m), nw = $('#fcatnew', m);
+  sel.onchange = () => { const isNew = sel.value === '__new'; nw.classList.toggle('hidden', !isNew); if (isNew) nw.focus(); };
   $('#itf', m).onsubmit = e => {
     e.preventDefault();
     const item = { ...Object.fromEntries(new FormData(e.target)), id: id || '', mode };
-    run(() => api('saveItem', { item }), '已儲存').then(() => { closeModal(); render(); }).catch(() => { });
+    if (item.category === '__new') {
+      item.category = nw.value.trim();
+      if (!item.category) return toast('請填寫新分類名稱', true);
+    }
+    run(() => api('saveItem', { item }), '已儲存').then(() => { RCACHE.delete('cats'); closeModal(); render(); }).catch(() => { });
   };
 }
 async function unitsModal(itemId) {
@@ -892,7 +971,7 @@ const ACT = {
   'checkout': el => checkoutModal(el.dataset.id),
   'receive': el => receiveModal(el.dataset.id),
   'cancel': el => { if (confirmInline('確定取消這筆申請?')) run(() => api('cancelLoan', { id: el.dataset.id }), '已取消').then(render).catch(() => { }); },
-  'edit-item': el => itemModal(el.dataset.id),
+  'edit-item': el => itemModal(el.dataset.id, el.dataset.cat),
   'units': el => unitsModal(el.dataset.id),
   'archive': el => run(() => api('archiveItem', { id: el.dataset.id, archived: el.dataset.on === '1' }), el.dataset.on === '1' ? '已下架' : '已上架').then(render).catch(() => { }),
   'import': () => importModal(),
@@ -903,6 +982,8 @@ const ACT = {
   'u-onsite': el => { const L = el.closest('.card'); onsiteModal(el.dataset.id, /簽收/.test(L.textContent.match(/撤回(簽收|歸還)/)[0]) ? 'pickup' : 'return'); },
   'u-cancel-req': el => run(() => api('cancelRequest', { id: el.dataset.id }), '已撤回').then(render).catch(() => { }),
   'lookup-code': el => lookupModal(el.dataset.code),
+  'pick-cat': el => { (S.view === 'items' ? S : S.filters).cat = el.dataset.cat; (S.view === 'items' ? S._itemDraw : S._catDraw)(); },
+  'cats': () => catsModal(),
   'count-cam': () => openScanner(c => { S._countMark(c); }),
   'count-submit': () => S._countSubmit(),
 };

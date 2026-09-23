@@ -169,6 +169,33 @@ var Logic = (function () {
   }
 
 
+  /* ---------- 分類 ---------- */
+  /** 目前可選的分類,依 sort 排序 */
+  function activeCats(db) {
+    return (db.Cats || []).filter(function (x) { return !bool(x.archived); })
+      .slice().sort(function (a, b) { return (n(a.sort) - n(b.sort)) || (a.name < b.name ? -1 : 1); });
+  }
+  function catByName(db, name) {
+    var k = s(name).toLowerCase();
+    var hit = (db.Cats || []).filter(function (x) { return s(x.name).toLowerCase() === k; });
+    return hit[0] || null;
+  }
+  /** 取得分類名稱;沒有就照著建一個(批次匯入與手動輸入新分類都走這裡) */
+  function ensureCat(c, name) {
+    var want = s(name) || '未分類';
+    var hit = catByName(c.db, want);
+    if (hit) {
+      if (bool(hit.archived)) { hit.archived = false; hit.updatedAt = c.now; dirty(c.db, 'Cats'); log(c, '啟用分類', hit.id, hit.name); }
+      return hit.name;
+    }
+    if (want.length > 40) throw E('分類名稱過長(上限 40 字)');
+    var max = 0;
+    (c.db.Cats || []).forEach(function (x) { if (n(x.sort) > max) max = n(x.sort); });
+    var cat = { id: nextId(c.db.Cats || [], 'C', 4), name: want, sort: max + 10, archived: false, updatedAt: c.now };
+    c.db.Cats.push(cat); dirty(c.db, 'Cats'); log(c, '新增分類', cat.id, cat.name);
+    return cat.name;
+  }
+
   function emailsOfAdmins(db) {
     return db.Users.filter(function (u) { return u.role === 'admin' && bool(u.active) && s(u.email); }).map(function (u) { return u.email; });
   }
@@ -362,6 +389,11 @@ var Logic = (function () {
       L.request = null; dirty(c.db, 'Loans'); log(c, '取消簽收 / 歸還申請', L.id, '');
       return enrichLoan(c.db, L, c.today);
     },
+    cats: function (c) {
+      var used = {};
+      c.db.Items.forEach(function (it) { if (!bool(it.archived)) used[it.category] = (used[it.category] || 0) + 1; });
+      return activeCats(c.db).map(function (x) { return { id: x.id, name: x.name, count: used[x.name] || 0 }; });
+    },
     lookup: function (c) {
       var code = s(c.p.code).toUpperCase(), today = c.today;
       var u = byId(c.db.Units, code);
@@ -449,6 +481,58 @@ var Logic = (function () {
       var today = c.today, st = stats(c.db, today);
       return c.db.Items.map(function (it) { return itemView(c.db, it, st, null, today); });
     },
+    allCats: function (c) {
+      var used = {};
+      c.db.Items.forEach(function (it) { used[it.category] = (used[it.category] || 0) + 1; });
+      return (c.db.Cats || []).slice().sort(function (a, b) { return (n(a.sort) - n(b.sort)) || (a.name < b.name ? -1 : 1); })
+        .map(function (x) { return { id: x.id, name: x.name, archived: bool(x.archived), count: used[x.name] || 0 }; });
+    },
+    /** 新增 / 改名 / 停用分類;改名時底下的展品跟著走 */
+    saveCat: function (c) {
+      var p = c.p.cat || {}, id = s(p.id), name = s(p.name);
+      if (!id) {
+        if (!name) throw E('請填寫分類名稱');
+        var same = catByName(c.db, name);
+        if (same && !bool(same.archived)) throw E('分類「' + same.name + '」已存在');
+        ensureCat(c, name);                       // 停用過的同名分類會直接重新啟用
+        return ADMIN.allCats(c);
+      }
+      var cat = byId(c.db.Cats, id);
+      if (!cat) throw E('找不到分類');
+      if (name && name !== cat.name) {
+        if (name.length > 40) throw E('分類名稱過長(上限 40 字)');
+        var dup = catByName(c.db, name);
+        if (dup && dup.id !== cat.id) throw E('分類「' + name + '」已存在');
+        var old = cat.name;
+        c.db.Items.forEach(function (it) { if (it.category === old) { it.category = name; dirty(c.db, 'Items'); } });
+        cat.name = name; log(c, '分類改名', cat.id, old + ' → ' + name);
+      }
+      if ('archived' in p) {
+        var off = bool(p.archived);
+        if (off) {
+          var used = c.db.Items.filter(function (it) { return it.category === cat.name; }).length;
+          if (used) throw E('還有 ' + used + ' 項展品屬於「' + cat.name + '」,請先改到其他分類');
+        }
+        if (bool(cat.archived) !== off) log(c, off ? '停用分類' : '啟用分類', cat.id, cat.name);
+        cat.archived = off;
+      }
+      cat.updatedAt = c.now; dirty(c.db, 'Cats');
+      return ADMIN.allCats(c);
+    },
+    /** 調整分類順序:與上 / 下一個對調 */
+    moveCat: function (c) {
+      var list = (c.db.Cats || []).slice().sort(function (a, b) { return (n(a.sort) - n(b.sort)) || (a.name < b.name ? -1 : 1); });
+      var i = -1;
+      list.forEach(function (x, k) { if (x.id === s(c.p.id)) i = k; });
+      if (i < 0) throw E('找不到分類');
+      var j = i + (n(c.p.dir) < 0 ? -1 : 1);
+      if (j < 0 || j >= list.length) return ADMIN.allCats(c);
+      list.forEach(function (x, k) { x.sort = (k + 1) * 10; });
+      var a = list[i], b = list[j], t = a.sort; a.sort = b.sort; b.sort = t;
+      a.updatedAt = c.now; b.updatedAt = c.now; dirty(c.db, 'Cats');
+      log(c, '調整分類順序', a.id, a.name);
+      return ADMIN.allCats(c);
+    },
     saveItem: function (c) {
       var p = c.p.item || {}, now = c.now, isNew = !s(p.id);
       if (!s(p.name)) throw E('請填寫品名');
@@ -456,7 +540,7 @@ var Logic = (function () {
       var it = isNew ? { id: nextId(c.db.Items, 'P', 4), archived: false, countedAt: '' } : byId(c.db.Items, s(p.id));
       if (!it) throw E('找不到展品');
       if (!isNew && it.mode !== mode && c.db.Units.some(function (u) { return u.itemId === it.id; })) throw E('此展品已有逐台編號,無法改為「只記數量」');
-      it.name = s(p.name); it.category = s(p.category) || '未分類'; it.mode = mode;
+      it.name = s(p.name); it.category = ensureCat(c, p.category); it.mode = mode;
       it.qty = mode === 'qty' ? Math.max(0, int(p.qty)) : 0;
       it.location = s(p.location); it.spec = s(p.spec); it.note = s(p.note); it.image = s(p.image); it.updatedAt = now;
       if (isNew) c.db.Items.push(it);

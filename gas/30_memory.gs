@@ -8,8 +8,9 @@
  */
 var Memory = (function () {
   var TZ = 'Asia/Taipei';
-  var SHEET_NAMES = { Items: '展品', Units: '單台編號', Loans: '借用單', Users: '使用者', Logs: '操作紀錄' };
+  var SHEET_NAMES = { Cats: '分類', Items: '展品', Units: '單台編號', Loans: '借用單', Users: '使用者', Logs: '操作紀錄' };
   var SCHEMA = {
+    Cats: ['id', 'name', 'sort', 'archived', 'updatedAt'],
     Items: ['id', 'name', 'category', 'mode', 'qty', 'location', 'spec', 'note', 'image', 'archived', 'countedAt', 'updatedAt'],
     Units: ['id', 'itemId', 'serial', 'status', 'location', 'note', 'countedAt', 'updatedAt'],
     Loans: ['id', 'applicant', 'applicantId', 'dept', 'contact', 'event', 'venue', 'purpose', 'start', 'end', 'status', 'lines',
@@ -18,7 +19,9 @@ var Memory = (function () {
     Logs: ['ts', 'user', 'action', 'ref', 'detail']
   };
   var JSON_FIELDS = { Loans: { lines: [], request: null } };   // 欄位 → 空值預設
-  var TABLES = ['Items', 'Units', 'Loans', 'Users'];
+  var TABLES = ['Cats', 'Items', 'Units', 'Loans', 'Users'];
+  // 分類第一次建立時先放進來的七類(之後可在畫面上自行新增 / 改名 / 調順序)
+  var SEED = { Cats: ['eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'] };
 
   function ss_() {
     var id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
@@ -32,6 +35,10 @@ var Memory = (function () {
       sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
       sh.setFrozenRows(1);
       sh.getRange(1, 1, sh.getMaxRows(), head.length).setNumberFormat('@');
+      if (SEED[key]) {
+        var seed = SEED[key].map(function (n, i) { return ['C' + ('000' + (i + 1)).slice(-4), n, String((i + 1) * 10), 'FALSE', '']; });
+        sh.getRange(2, 1, seed.length, head.length).setValues(seed);
+      }
     }
     return sh;
   }
@@ -106,7 +113,6 @@ var Memory = (function () {
     return rows;
   }
 
-  /** 讀一張表;cols 省略時讀全部欄位,否則只讀需要的欄位(快取依欄位組合分開) */
   /**
    * 只要「還沒結案」的列時,先單獨讀那一欄,找出第一筆符合的位置,之後只讀這一段到最後。
    * 借用單是往後累加的,已歸還的舊單通常集中在前面,這一刀常常可以少讀大半張表。
@@ -122,6 +128,7 @@ var Memory = (function () {
     return -1;                                   // 沒有任何一列符合
   }
 
+  /** 讀一張表:cols 省略時讀全部欄位;快取依「欄位組合 + 條件」分開存 */
   function readTable_(key, cols, only) {
     var sig = (cols ? cols.slice().sort().join(',') : '*') + (only ? '|' + only.field + '=' + only.values.join('+') : '');
     var ck = key + '#' + sig, cached = cacheGet_(ck);

@@ -93,6 +93,23 @@ label.f b{color:var(--red);font-weight:400}
 /* ---------- cards ---------- */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+/* 分類籤條 */
+.catbar{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.catbar::-webkit-scrollbar{display:none}
+.catchip{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--line);
+  border-radius:999px;background:var(--surface);color:var(--text);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+.catchip:hover{border-color:var(--gray)}
+.catchip .n{font-size:11px;font-weight:700;color:var(--muted)}
+.catchip.on{background:var(--red);border-color:var(--red);color:#fff}
+.catchip.on .n{color:#fff;opacity:.85}
+/* 分類分段標題 */
+h2.cath{display:flex;align-items:center;gap:9px;margin:22px 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+h2.cath:first-of-type{margin-top:6px}
+.catempty{font-size:13px;color:var(--muted);padding:2px 0 4px}
+tr.grouph th{background:var(--surface-2);font-size:13px;text-align:left;padding:9px 12px}
+tr.grouph th .chipnum{margin-left:8px}
+tr.grouph th .btn{float:right}
+tr.groupe td{font-size:13px;color:var(--muted);padding:8px 12px}
 .item-card{display:flex;flex-direction:column;gap:7px}
 .item-card .img{height:112px;border-radius:var(--r-sm);background:var(--surface-2) center/cover no-repeat;margin:-2px 0 4px}
 .item-card h3{font-size:16px;margin:0;letter-spacing:-.01em}

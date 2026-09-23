@@ -112,6 +112,38 @@ assert.throws(() => Gx.ctx.setupSheets(), /擁有者/);
 const logText = JSON.stringify(G.sheets['操作紀錄'].data);
 assert.ok(!/5678|8765|1234/.test(logText), '操作紀錄不得含 PIN');
 
+// ---- 分類 ----
+const cats0 = ok('cats', {}, U);
+assert.strictEqual(cats0.slice(0, 7).map(x => x.name).join(), 'eReader,eNote,Logistics & Factory,Prism,Signage,Lifestyle,Mobile & Wearables', '預設七個分類要照順序在最前面');
+assert.strictEqual(cats0.find(x => x.name === 'Prism').count, 0, '還沒放東西的分類也要看得到');
+assert.strictEqual(cats0.find(x => x.name === '看板').count, 1, '分類要算出底下的展品數');   // 42吋看板
+// 新增分類(自己加的)
+let cl = ok('saveCat', { cat: { name: '體驗區' } }, A);
+assert.ok(cl.some(x => x.name === '體驗區'), '可自行新增分類');
+bad('saveCat', { cat: { name: 'ereader' } }, A, /已存在/);        // 不分大小寫視為同一個
+bad('saveCat', { cat: { name: '體驗區' } }, A, /已存在/);
+// 一般同仁不能改分類
+bad('saveCat', { cat: { name: 'X' } }, U, /管理者權限/);
+// 改名 → 底下的展品跟著走
+const catId = cl.find(x => x.name === '看板').id;
+ok('saveCat', { cat: { id: catId, name: '大型看板' } }, A);
+assert.strictEqual(ok('items', {}, A).find(i => i.id === panel.id).category, '大型看板', '改名後展品要跟著換');
+// 還有展品的分類不能停用
+bad('saveCat', { cat: { id: catId, archived: true } }, A, /請先改到其他分類/);
+const emptyId = cl.find(x => x.name === '體驗區').id;
+cl = ok('saveCat', { cat: { id: emptyId, archived: true } }, A);
+assert.strictEqual(cl.find(x => x.id === emptyId).archived, true);
+assert.ok(!ok('cats', {}, U).some(x => x.id === emptyId), '停用的分類不出現在挑選清單');
+// 調順序
+const before = ok('allCats', {}, A).map(x => x.name);
+ok('moveCat', { id: cl[0].id, dir: 1 }, A);
+const after = ok('allCats', {}, A).map(x => x.name);
+assert.strictEqual(after[0], before[1], '往下移一位');
+assert.strictEqual(after[1], before[0]);
+ok('moveCat', { id: cl[0].id, dir: -1 }, A);
+assert.strictEqual(ok('allCats', {}, A).map(x => x.name).join(), before.join(), '再移回來要一樣');
+assert.strictEqual(ok('allCats', {}, A)[0].name, before[0]);
+
 // ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
 // 多做一筆封存展品與一筆待審單,讓限縮欄位(archived / status / request)都被走到
 const U2b = ok('login', { emp: '10477' }).token;   // 先前登出過,重新取得憑證
@@ -130,6 +162,7 @@ const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [
   ['status', {}, null], ['me', {}, U], ['users', {}, A], ['logs', { limit: 50 }, A],
+  ['cats', {}, U], ['allCats', {}, A],
   ['catalog', {}, U], ['catalog', { start: '2026-10-01', end: '2026-10-05' }, U],
   ['check', { start: '2026-10-01', end: '2026-10-05', lines: [{ itemId: stand.id, qty: 3 }] }, U],
   ['myLoans', {}, U], ['myLoans', {}, U2b],

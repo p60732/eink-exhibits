@@ -14,11 +14,42 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   // 匯入人員、新增展品
   await p.click('[data-v=users]'); await wait(300); await p.click('[data-act=import-users]');
   await p.fill('#iut', '10231\t測試員工A\t業務部\n10477\t測試員工B\t產品部'); await p.click('#iugo'); await wait(400);
-  await p.click('[data-v=items]'); await wait(300); await p.click('[data-act=import]');
-  await p.fill('#imt', '42吋彩色看板\t大尺寸看板\t逐台\t3\t湖口B倉\n展示立架\t陳列道具\t數量\t10\t湖口B倉'); await p.click('#imgo'); await wait(500); await shot('items');
+  await p.click('[data-v=items]'); await wait(500);
+  // 預設七個分類要在籤條上,且順序正確
+  const catChips = await p.$$eval('.catbar .catchip', els => els.map(e => e.dataset.cat));
+  const want7 = ['', 'eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'];
+  if (catChips.slice(0, 8).join('|') !== want7.join('|')) throw new Error('分類籤條不正確:' + catChips.join("|"));
+  // 自己新增一個分類,並調順序
+  await p.click('[data-act=cats]'); await p.waitForSelector('#cnew');
+  await p.fill('#cnew', '體驗區'); await p.click('#cadd'); await wait(600);
+  const rowsOf = () => p.$$eval('#cmb [data-cn]', els => els.map(e => [e.dataset.cn, e.value]));
+  const before = await rowsOf();
+  if (!before.some(([, v]) => v === '體驗區')) throw new Error('新增分類沒出現:' + before.map(x => x[1]).join('|'));
+  const enote = before.find(([, v]) => v === 'eNote')[0];
+  await p.click(`#cmb [data-mv="${enote}"][data-d="1"]`); await wait(600);
+  const moved = (await rowsOf()).map(x => x[1]);
+  if (moved[1] !== before[2][1] || moved[2] !== 'eNote') throw new Error('往下移一位無效:' + moved.join('|'));
+  await p.click(`#cmb [data-mv="${enote}"][data-d="-1"]`); await wait(600);
+  const back = (await rowsOf()).map(x => x[1]);
+  if (back.join('|') !== before.map(x => x[1]).join('|')) throw new Error('移回來順序不一樣:' + back.join('|'));
+  await shot('cats'); await p.click('.modal [data-act=close-render]'); await wait(600);
+  await p.click('[data-act=import]');
+  await p.fill('#imt', '42吋彩色看板\tSignage\t逐台\t3\t湖口B倉\n展示立架\t體驗區\t數量\t10\t湖口B倉'); await p.click('#imgo'); await wait(700); await shot('items');
+  // 展品管理要依分類分段,且空的分類也留著
+  const heads = await p.$$eval('#ibody tr.grouph th', els => els.map(e => e.textContent.replace(/加到這一類|\+/g, '').trim()));
+  if (!heads.some(h => /^Signage/.test(h)) || !heads.some(h => /^Prism/.test(h))) throw new Error('分段標題不正確:' + heads.join('|'));
+  // 點分類籤條只看那一類
+  await p.click('.catbar .catchip[data-cat="Signage"]'); await wait(400);
+  const rows = await p.$$eval('#ibody tr:not(.grouph)', els => els.length);
+  if (rows !== 1) throw new Error('籤條篩選後應只剩 1 筆,實際 ' + rows);
+  await p.click('.catbar .catchip[data-cat=""]'); await wait(400);
   await p.click('#menu-btn'); await p.click('#m-out');
   // 同仁預約
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('.cards');
+  // 目錄也要分段,且看得到還沒放東西的分類
+  const cheads = await p.$$eval('h2.cath', els => els.map(e => e.textContent.trim()));
+  if (!cheads.some(h => /^eReader/.test(h)) || !cheads.some(h => /^體驗區/.test(h))) throw new Error('目錄分段不正確:' + cheads.join('|'));
+  await shot('catalog_cats');
   const d = k => new Date(Date.now() + k * 864e5).toISOString().slice(0, 10);
   const btns = await p.$$('[data-act=add-cart]'); await btns[0].click(); await btns[1].click();
   await p.click('[data-v=plan]'); await wait(400);

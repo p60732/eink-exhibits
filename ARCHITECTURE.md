@@ -11,7 +11,7 @@
 | 目前階段 | ☐ 01 環境建置 ☐ 02 加入AI ☑ 03 記憶與身份 ☑ 04 連線+自動化 ☐ 05 完整上線(待實際部署驗收) |
 | 前端載體 | ☑ 單一 HTML(GitHub Pages,經 GitHub Actions 建置) |
 | 後端載體 | ☑ Google Apps Script(Web App,執行身分:擁有者) |
-| 資料儲存 | ☑ Google Sheets(展品、單台編號、借用單、使用者、操作紀錄) |
+| 資料儲存 | ☑ Google Sheets(分類、展品、單台編號、借用單、使用者、操作紀錄) |
 
 ## 二、積木啟用清單
 
@@ -27,7 +27,7 @@
 | ☐ | 爬蟲積木 | — |
 | ☐ | AI 積木 | — |
 | ☑ | 通知積木 | `gas/40_notify.gs`:MailApp 寄出邏輯積木產生的事件 |
-| ☑ | 記憶積木 | `gas/30_memory.gs`:Sheets 結構與讀寫(依表頭名稱對應) |
+| ☑ | 記憶積木 | `gas/30_memory.gs`:Sheets 結構與讀寫(依表頭名稱對應;可指定只讀某些表 / 欄位 / 未結案的列,並依版本快取) |
 | ☐ | 檔案積木 | —(展品圖片目前用網址欄位,未上傳檔案) |
 | ☑ | 版本控制積木 | GitHub repo:`p60732/eink-exhibits` |
 | ☑ | 部署積木 | GitHub Pages:`https://p60732.github.io/eink-exhibits/`(Actions:測試 → 建置 → 發佈) |
