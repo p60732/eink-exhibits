@@ -254,7 +254,7 @@ function tabsFor() {
   const n = S.cart.length;
   const t = [];
   if (isAdmin()) t.push(['dash', '總覽'], ['loans', '借用單']);
-  t.push(['catalog', '展品目錄'], ['plan', '展覽規劃' + (n ? ` <span class="n">${n}</span>` : '')], ['mine', '我的借用']);
+  t.push(['catalog', '展品目錄'], ['plan', '借用申請' + (n ? ` <span class="n">${n}</span>` : '')], ['mine', '我的借用']);
   if (isAdmin()) t.push(['shows', '展覽檔期'], ['items', '展品管理'], ['count', '盤點'], ['users', '使用者'], ['logs', '紀錄']);
   return t;
 }
@@ -408,7 +408,7 @@ VIEWS.catalog = async main => {
   if (f.cat && !S.cats.some(c => c.name === f.cat)) f.cat = '';
   const picked = () => (S.showLines || []).reduce((a, l) => a + l.qty, 0);
   main.innerHTML = `<div class="eyebrow">Catalog</div><h1>展品目錄</h1>
-    ${pick ? '' : `<p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「展覽規劃」。</p>`}
+    ${pick ? '' : `<p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「借用申請」。</p>`}
     ${pick ? `<div class="card bulkbar" id="pickbar"></div>` : ''}
     <div class="toolbar">
       <input class="grow" type="search" id="cq" placeholder="搜尋品名、規格、位置…" value="${esc(f.q)}">
@@ -418,7 +418,7 @@ VIEWS.catalog = async main => {
     </div>
     <div id="cbar"></div>
     <div id="mbar"></div>
-    ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到展覽規劃</a></div>` : ''}
+    ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到借用申請</a></div>` : ''}
     <div id="cgrid"></div>`;
   const card = i => {
     const inCart = pick
@@ -438,7 +438,7 @@ VIEWS.catalog = async main => {
       <div class="meta">存放:</div>${distHtml}
       <div class="nums"><div class="${i.inStock ? '' : 'zero'}"><b>${i.inStock}</b>倉庫在庫</div><div><b>${i.out}</b>出借中</div><div><b>${i.reserved}</b>已預約</div><div><b>${i.total}</b>總數</div></div>
       ${range ? `<div class="avail ${av ? '' : 'none'}">期間可借 <b>${av}</b></div>` : ''}
-      <div class="addrow">${picker}<input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="${pick ? 'show-add-cat' : 'add-cart'}" data-id="${i.id}">${inCart ? (pick ? `加入展覽(已選 ${inCart})` : `加入規劃(已選 ${inCart})`) : (pick ? '加入展覽' : '加入規劃')}</button></div>
+      <div class="addrow">${picker}<input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="${pick ? 'show-add-cat' : 'add-cart'}" data-id="${i.id}">${inCart ? (pick ? `加入展覽(已選 ${inCart})` : `加入申請(已選 ${inCart})`) : (pick ? '加入展覽' : '加入申請')}</button></div>
     </div>`;
   };
   let draw = () => {
@@ -491,13 +491,13 @@ VIEWS.plan = async main => {
   const P = S.plan, admin = isAdmin();
   const draft = store.get('draft', {});
   if (!S.cart.length) {
-    main.innerHTML = `${S.editing ? `<div class="banner info">正在修改申請 <b class="mono">${esc(S.editing.no)}</b>。 <a href="#" data-act="cancel-edit">放棄修改</a></div>` : ''}<div class="eyebrow">Planning</div><h1>${S.editing ? '修改借用申請' : '展覽規劃'}</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出借用申請。</p>
+    main.innerHTML = `${S.editing ? `<div class="banner info">正在修改申請 <b class="mono">${esc(S.editing.no)}</b>。 <a href="#" data-act="cancel-edit">放棄修改</a></div>` : ''}<div class="eyebrow">Planning</div><h1>${S.editing ? '修改借用申請' : '借用申請'}</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出。</p>
       <div class="card empty">還沒有選任何展品。<br><br><button class="btn pri" data-act="go" data-v="catalog">前往展品目錄挑選</button></div>`;
     return;
   }
   const ed = S.editing;
   main.innerHTML = `${ed ? `<div class="banner info">正在修改申請 <b class="mono">${esc(ed.no)}</b>,改完按下方「儲存修改」。 <a href="#" data-act="cancel-edit">放棄修改</a></div>` : ''}
-  <h1>${ed ? '修改借用申請' : '展覽規劃'}</h1><p class="sub">先選日期,系統即時比對可借數量。全部足夠即可送出申請${admin && !ed ? ';口頭借用可用「代為登記」直接建單' : ''}。</p>
+  <h1>${ed ? '修改借用申請' : '借用申請'}</h1><p class="sub">先選日期,系統即時比對可借數量。全部足夠即可送出申請${admin && !ed ? ';口頭借用可用「代為登記」直接建單' : ''}。</p>
   <div class="plan">
     <div class="card">
       <div class="grid2"><label class="f"><span>借出日 <b>*</b></span><input type="date" id="ps" value="${esc(P.start)}"></label><label class="f"><span>歸還日 <b>*</b></span><input type="date" id="pe" value="${esc(P.end)}"></label></div>
@@ -648,7 +648,7 @@ VIEWS.loans = main => {
   const list = pick ? all.filter(pick) : all;
   S._loans = all;
   const F = [['request', '待確認'], ['pending', '待審核'], ['approved', '待點交'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
-  main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「展覽規劃」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
+  main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「借用申請」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
     <div class="toolbar"><div class="seg">${F.map(([k, l]) => {
       const n = loanTabOf[k] ? all.filter(loanTabOf[k]).length : (k === 'all' || k === 'returned' ? null : all.length);
       return `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}${n ? ` <span class="n">${n}</span>` : ''}</button>`;
@@ -1218,7 +1218,7 @@ function bulkApprove(ids) {
   };
 }
 
-/** 修改待審核的申請:把它載回「展覽規劃」繼續編輯 */
+/** 修改待審核的申請:把它載回「借用申請」繼續編輯 */
 function editLoan(id) {
   const L = findLoan(id);
   if (!L) return toast('請重新整理這一頁', true);
@@ -1810,8 +1810,8 @@ const ACT = {
   'add-cart': el => {
     const id = el.dataset.id, q = $('#q-' + id).value, where = ($('#loc-' + id) || {}).value || '';
     addToCart(id, q, where);
-    toast('已加入展覽規劃' + (where ? '(' + where + ')' : ''));
-    el.textContent = `加入規劃(已選 ${S.cart.filter(c => c.itemId === id).reduce((a, c) => a + c.qty, 0)})`;
+    toast('已加入借用申請' + (where ? '(' + where + ')' : ''));
+    el.textContent = `加入申請(已選 ${S.cart.filter(c => c.itemId === id).reduce((a, c) => a + c.qty, 0)})`;
   },
   'use-range': () => { S.plan.start = S.filters.start; S.plan.end = S.filters.end; saveCart(); go('plan'); },
   'rm-cart': el => { S.cart = S.cart.filter(c => ckey(c) !== el.dataset.id); saveCart(); S.cart.length ? S._recheck() : render(); },
@@ -1943,14 +1943,14 @@ const ACT = {
       <div class="modal-f"><button class="btn pri" data-act="close-render">知道了</button></div>`);
     else render();
   },
-  'clear-cart': () => { if (confirmInline('清空規劃清單?')) { S.cart = []; saveCart(); render(); } },
+  'clear-cart': () => { if (confirmInline('清空申請清單?')) { S.cart = []; saveCart(); render(); } },
   'copy-plan': async () => {
     const all = S.items.length ? S.items : await api('catalog');
     const nm = Object.fromEntries(all.map(i => [i.id, i.name]));
     const chk = S.plan.start && S.plan.end ? await api('check', { start: S.plan.start, end: S.plan.end, lines: S.cart }).catch(() => []) : [];
     const ck = Object.fromEntries(chk.map(c => [c.itemId + '@' + (c.location || ''), c]));
     const ps = S.plan.start || '?', pe = S.plan.end || '?';   // 純文字(剪貼簿),顯示時再經 esc()
-    const txt = `展覽規劃 ${ps} ~ ${pe}\n` + S.cart.map(c => {
+    const txt = `借用申請 ${ps} ~ ${pe}\n` + S.cart.map(c => {
       const k = ck[ckey(c)], at = c.location ? '(' + c.location + ')' : '';
       return `・${nm[c.itemId] || c.itemId}${at} × ${c.qty}` + (k ? (k.short ? `(缺 ${k.short})` : '(足夠)') : '');
     }).join('\n');
