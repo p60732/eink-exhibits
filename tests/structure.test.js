@@ -7,7 +7,8 @@ const webFiles = ['index.html', 'css/style.css', 'js/connect.js', 'js/ui.js'];
 let n = 0; const t = (name, fn) => { try { fn(); n++; } catch (e) { e.message = name + ':' + e.message; throw e; } };
 
 t('公開函式白名單:GAS 頂層函式除白名單外必須以 _ 結尾', () => {
-  const allow = ['doGet', 'doPost', 'setupSheets', 'installDailyTrigger', 'dailyReminder', 'authorizeDrive'];
+  const allow = ['doGet', 'doPost', 'setupSheets', 'installDailyTrigger', 'dailyReminder', 'authorizeDrive',
+    'installBackupTrigger', 'dailyBackup'];
   gasFiles.forEach(f => {
     const names = [...read('gas/' + f).matchAll(/^function\s+([A-Za-z0-9_$]+)\s*\(/gm)].map(m => m[1]);
     names.forEach(nm => assert.ok(allow.includes(nm) || nm.endsWith('_'), `${f}: ${nm}() 會被公開`));

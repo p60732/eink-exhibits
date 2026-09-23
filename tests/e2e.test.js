@@ -324,6 +324,41 @@ const health = JSON.parse(G.ctx.doGet().t);
 assert.strictEqual(health.health, true, 'doGet 必須帶 health 記號');
 assert.notStrictEqual(health.success, true, 'doGet 不可以長得像一個成功的回應');
 
+const itemCountBefore = ok('items', {}, A).length;
+/* ===== 防資料遺失的三道保險 ===== */
+{
+  const M = G.ctx.Memory;
+  // 1. 只讀了一部分卻要整張寫回 → 必須擋下(不然沒讀到的欄位 / 列會被清成空白)
+  const part = M.load({ Items: ['id', 'name'] });
+  part._dirty.Items = true;
+  assert.throws(() => M.save(part), /只讀了一部分/, '欄位限縮後寫回應該被擋下');
+  const tail = M.load({ Loans: { cols: '*', only: { field: 'status', values: ['pending'] } } });
+  tail._dirty.Loans = true;
+  assert.throws(() => M.save(tail), /只讀了一部分/, '只讀未結案的列之後寫回應該被擋下');
+  const none = M.load({ Users: '*' });            // 沒被要求的表 = 空陣列,更不可以寫回
+  none._dirty.Items = true;
+  assert.throws(() => M.save(none), /只讀了一部分/, '根本沒載入的表寫回應該被擋下');
+  const whole = M.load();                          // 完整載入才放行
+  whole._dirty.Items = true;
+  M.save(whole);
+  assert.strictEqual(ok('items', {}, A).length, itemCountBefore, '完整載入的寫回不可以動到筆數');
+
+  // 2. 工作表不見了 → 報錯,絕對不可以自動重建並塞回預設值
+  const keep = G.sheets['分類'];
+  delete G.sheets['分類'];
+  assert.throws(() => M.load(), /找不到工作表/, '工作表不見時應該停下報錯');
+  assert.ok(!G.sheets['分類'], '報錯之後不可以偷偷把工作表建回來');
+  G.sheets['分類'] = keep;
+  assert.ok(ok('cats', {}, U).length >= 7, '放回去之後要能正常讀');
+
+  // 3. 表頭對不上(例如開到別的試算表)→ 報錯
+  const head = G.sheets['展品'].data[0].slice();
+  G.sheets['展品'].data[0] = ['甲', '乙', '丙'];
+  G.ctx.PropertiesService.getScriptProperties().setProperty('DBVER', '999999');   // 避開表頭快取
+  assert.throws(() => M.load(), /不是這個系統的資料表/, '表頭對不上時應該停下報錯');
+  G.sheets['展品'].data[0] = head;
+}
+
 const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [

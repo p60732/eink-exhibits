@@ -24,24 +24,64 @@ var Memory = (function () {
   // 分類第一次建立時先放進來的七類(之後可在畫面上自行新增 / 改名 / 調順序)
   var SEED = { Cats: ['eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'] };
 
+  /**
+   * 每張表一定要有的欄位。開起來的試算表對不上就停下 ——
+   * 這是用來擋「指到了別的試算表」或「工作表被覆蓋掉」的,不是用來檢查欄位齊不齊
+   * (SCHEMA 新增欄位時,舊試算表還沒有那一欄是正常的,讀進來補空值即可)。
+   */
+  var MUST_HAVE = {
+    Cats: ['id', 'name'], Items: ['id', 'name'], Units: ['id', 'itemId'],
+    Loans: ['id', 'status'], Users: ['id', 'empNo'], Logs: ['ts', 'action']
+  };
+  /**
+   * 資料守門的錯誤:標成 userFacing,讓訊息原封不動送到畫面上。
+   * 這種錯的重點就是「讓人知道發生什麼、不要自己亂修」,顯示成「操作失敗,請稍後再試」
+   * 反而會害人以為是網路問題,然後跑去重新初始化 —— 那才是真的會把資料弄掉。
+   * 訊息裡不放試算表 ID 之類的資源識別碼。
+   */
+  function fail_(msg) { var e = new Error(msg); e.userFacing = true; e.dataGuard = true; return e; }
+
   function ss_() {
     var id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
-    return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
+    var ss;
+    try { ss = id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet(); }
+    catch (e) { throw fail_('開不起來指定的試算表。請確認檔案還在、沒有被丟到垃圾桶,權限也沒有被改掉(設定在指令碼屬性 SHEET_ID)。'); }
+    if (!ss) throw fail_('找不到要用的試算表。請在專案設定裡設好指令碼屬性 SHEET_ID。');
+    return ss;
   }
+
+  /**
+   * 找工作表。**找不到就報錯,絕對不自動建立。**
+   * 自動建立加上塞預設值,會把「工作表被改名 / 被刪 / 開到別的試算表」這種異常,
+   * 偽裝成一個看起來正常的空系統 —— 使用者會以為資料被刪光了,其實原檔還在別的地方。
+   * 建立與塞種子只發生在人工執行的 setupSheets()。
+   */
   function sheet_(key) {
-    var ss = ss_(), sh = ss.getSheetByName(SHEET_NAMES[key]);
-    if (!sh) {
-      sh = ss.insertSheet(SHEET_NAMES[key]);
-      var head = SCHEMA[key];
-      sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
-      sh.setFrozenRows(1);
-      sh.getRange(1, 1, sh.getMaxRows(), head.length).setNumberFormat('@');
-      if (SEED[key]) {
-        var seed = SEED[key].map(function (n, i) { return ['C' + ('000' + (i + 1)).slice(-4), n, String((i + 1) * 10), 'FALSE', '']; });
-        sh.getRange(2, 1, seed.length, head.length).setValues(seed);
-      }
+    var sh = ss_().getSheetByName(SHEET_NAMES[key]);
+    if (!sh) throw fail_('找不到工作表「' + SHEET_NAMES[key] + '」。系統不會自動幫你重建(重建等於把資料清空)。'
+      + '請先確認是不是開錯試算表、或工作表被改名 / 刪掉;確定要從零開始時,才在編輯器執行一次 setupSheets()。');
+    return sh;
+  }
+  /** 只有 setupSheets() 會呼叫:建立工作表、寫表頭、第一次建立分類時塞入預設七類 */
+  function create_(key) {
+    var ss = ss_();
+    if (ss.getSheetByName(SHEET_NAMES[key])) return ss.getSheetByName(SHEET_NAMES[key]);
+    var sh = ss.insertSheet(SHEET_NAMES[key]), head = SCHEMA[key];
+    sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, sh.getMaxRows(), head.length).setNumberFormat('@');
+    if (SEED[key]) {
+      var seed = SEED[key].map(function (n, i) { return ['C' + ('000' + (i + 1)).slice(-4), n, String((i + 1) * 10), 'FALSE', '']; });
+      sh.getRange(2, 1, seed.length, head.length).setValues(seed);
     }
     return sh;
+  }
+  /** 表頭對不上就停:寧可整個功能壞掉,也不要把錯的資料當成對的用 */
+  function checkHead_(key, head) {
+    var miss = (MUST_HAVE[key] || []).filter(function (h) { return head.indexOf(h) < 0; });
+    if (miss.length) throw fail_('工作表「' + SHEET_NAMES[key] + '」的標題列缺少 ' + miss.join('、')
+      + ',看起來不是這個系統的資料表。為了避免寫壞資料已經停下來,請確認是不是開到別的試算表。');
+    return head;
   }
   function cellOut_(v) {
     if (v instanceof Date) {
@@ -77,9 +117,10 @@ var Memory = (function () {
   /** 表頭(欄名 → 位置)。只讀第 1 列,並隨 DBVER 一起快取 */
   function head_(key) {
     var ck = key + '#head', cached = cacheGet_(ck);
-    if (cached) return cached;
+    if (cached) return checkHead_(key, cached);
     var sh = sheet_(key), lastCol = Math.max(1, sh.getLastColumn());
     var head = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
+    checkHead_(key, head);
     cachePut_(ck, head);
     return head;
   }
@@ -158,7 +199,7 @@ var Memory = (function () {
           rows = toRows_(key, head, cells);
         } else {
           var lastCol = Math.max(1, sh.getLastColumn());
-          if (!head) head = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
+          if (!head) head = checkHead_(key, sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); }));
           rows = toRows_(key, head, sh.getRange(2 + from, 1, n, lastCol).getValues());
         }
       }
@@ -196,18 +237,31 @@ var Memory = (function () {
 
   /** 讀取資料表(依表頭名稱對應,欄位順序可調整)。spec 省略時讀全部 */
   function load(spec) {
-    var want = want_(spec), db = {}, loaded = [];
+    var want = want_(spec), db = {}, loaded = [], full = {};
     TABLES.forEach(function (key) {
-      if (want && !(key in want)) { db[key] = []; return; }
-      db[key] = want ? readTable_(key, want[key].cols, want[key].only) : readTable_(key, null, null);
+      // 沒被要求的表給空陣列;它「不是完整的」,所以之後不可能被寫回(見 save 的檢查)
+      if (want && !(key in want)) { db[key] = []; full[key] = false; return; }
+      var w = want ? want[key] : { cols: null, only: null };
+      db[key] = readTable_(key, w.cols, w.only);
+      full[key] = !w.cols && !w.only;          // 欄位與列都沒限縮,才算完整
       loaded.push(key);
     });
-    db._dirty = {}; db._newLogs = []; db._loaded = loaded;
+    db._dirty = {}; db._newLogs = []; db._loaded = loaded; db._full = full;
     return db;
   }
 
   /** 寫回有變動的資料表,並附加新的操作紀錄 */
   function save(db) {
+    /**
+     * 寫回是「整張清空再重寫」,所以只要這次不是完整讀進來的,寫回就會把沒讀到的欄位或列清掉。
+     * 這種事不會報錯、只會靜靜少資料,所以在這裡擋死:**先把所有要寫的表檢查過一遍,再動手寫**,
+     * 免得寫到一半才發現問題。守門積木的規則是「寫入類路由一律完整載入」,這裡是那條規則的保險絲。
+     */
+    var full = db._full || {};
+    Object.keys(db._dirty || {}).forEach(function (key) {
+      if (!full[key]) throw fail_('「' + SHEET_NAMES[key] + '」這次只讀了一部分,不可以整張寫回(會清掉沒讀到的資料)。'
+        + '請把這個動作的路由改成完整載入這張表。');
+    });
     Object.keys(db._dirty || {}).forEach(function (key) {
       var sh = sheet_(key), head = SCHEMA[key], jf = JSON_FIELDS[key] || {};
       var rows = db[key].map(function (o) {
@@ -238,6 +292,7 @@ var Memory = (function () {
 
   function readLogs(limit) {
     var sh = sheet_('Logs'), head = SCHEMA.Logs, last = sh.getLastRow();
+    if (last >= 1) checkHead_('Logs', sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(function (h) { return String(h).trim(); }));
     if (last < 2) return [];
     var from = Math.max(2, last - limit + 1);
     return sh.getRange(from, 1, last - from + 1, head.length).getValues().map(function (r) {
@@ -247,7 +302,7 @@ var Memory = (function () {
 
   /** 建立所有工作表並移除空白預設工作表 */
   function setup() {
-    Object.keys(SHEET_NAMES).forEach(sheet_);
+    Object.keys(SHEET_NAMES).forEach(create_);
     var ss = ss_(), def = ss.getSheetByName('工作表1') || ss.getSheetByName('Sheet1');
     if (def && def.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(def);
     return Object.keys(SHEET_NAMES).map(function (k) { return SHEET_NAMES[k]; });

@@ -44,7 +44,11 @@ const M = [
   ['20_logic.gs', "} else if (sites.length && sites.indexOf(where) < 0) {", '} else if (false) {', '可以借一個根本沒庫存的地點'],
   ['20_logic.gs', "if (onlyHere && at !== where) return;", '', '只盤一個廠區時卻把別廠的也算進差異'],
   ['20_logic.gs', "if (onlyHere && loc(u.location) !== where) return;", '', '只盤一個廠區時別廠的單台被當成沒點到'],
-  ['00_gateway.gs', "success: false, health: true", "success: true, health: false", '健康檢查頁偽裝成正常回應(換版時會被當成資料)']
+  ['00_gateway.gs', "success: false, health: true", "success: true, health: false", '健康檢查頁偽裝成正常回應(換版時會被當成資料)'],
+  // 防資料遺失的三道保險
+  ['30_memory.gs', "if (!full[key]) throw fail_('「' + SHEET_NAMES[key] + '」這次只讀了一部分", "if (false) throw fail_('「' + SHEET_NAMES[key] + '」這次只讀了一部分", '只讀一部分也能整張寫回(會清掉沒讀到的資料)'],
+  ['30_memory.gs', "if (!sh) throw fail_('找不到工作表「'", "if (!sh) return create_(key); if (!sh) throw fail_('找不到工作表「'", '工作表不見時自動重建並塞回預設值'],
+  ['30_memory.gs', "if (miss.length) throw fail_('工作表「'", "if (false) throw fail_('工作表「'", '表頭對不上也照讀(等於認錯試算表)']
   // 註:單獨拿掉 ITEM_CALC 的 qty 欄是等價突變 —— 讀取會把相鄰欄位合併成連續段(spans_ 的 gap=3),
   //     qty 夾在 mode 與 location 中間,不在清單上也會被順便讀到。真正有效的守門是上面的 stock 欄。
   // 註:`m.cap` 的失效目前沒有路徑會在同一次請求裡「先算總數 → 改 Items/Units → 再算總數」,
