@@ -7,8 +7,8 @@
  */
 /* ===================== 狀態與工具 ===================== */
 const S = {
-  token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [],
-  cart: [], plan: { start: '', end: '' },
+  token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
+  cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
   loanFilter: 'pending', itemQ: '', cat: '', showArchived: false, logQ: ''
 };
@@ -240,6 +240,20 @@ function go(v) { S.view = v; window.scrollTo(0, 0); render(); }
 function statusPill(L) {
   return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.stage ? ` <span class="pill pending">${esc(L.stage)}</span>` : '') + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
 }
+/** 待確認請求的說明列(四種請求共用) */
+function reqBanner(req, mine) {
+  if (!req || !req.type) return '';
+  const T = { pickup: '簽收領取', 'return': '歸還', extend: '延長歸還日', transfer: '轉借' };
+  let what = T[req.type] || '請求';
+  if (req.type === 'pickup') { const u = Object.values(req.units || {}).flat().join('、'); what += u ? ':' + u : ''; }
+  if (req.type === 'extend') what += ':延到 ' + req.end;
+  if (req.type === 'transfer') what += ':轉給 ' + (req.toName || '');
+  const body = mine
+    ? '已送出' + what + '(' + req.at + '),等管理者確認後才算完成。'
+    : req.by + ' 於 ' + req.at + ' 送出' + what + ',等待確認';
+  return '<div class="banner warn" style="margin:10px 0 0;font-size:13px">' + esc(body) + '</div>';
+}
+
 function loanCard(L, opts = {}) {
   const chk = {}; (L.check || []).forEach(c => chk[c.itemId] = c);
   const lines = L.lines.map(ln => {
@@ -256,14 +270,23 @@ function loanCard(L, opts = {}) {
   const A = [];
   const admin = isAdmin() && !opts.mine;
   const req = L.request;
-  if (admin && req) A.push(`<button class="btn sm pri" data-act="${req.type === 'pickup' ? 'checkout' : 'receive'}" data-id="${L.id}">${req.type === 'pickup' ? '確認領取' : '確認歸還'}</button>`);
+  const btn = (act, label, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" data-id="${L.id}">${label}</button>`;
+  if (admin && req) {
+    if (req.type === 'pickup') A.push(btn('checkout', '確認領取', 'pri'));
+    else if (req.type === 'return') A.push(btn('receive', '確認歸還', 'pri'));
+    else A.push(btn('req-no', '不同意', 'danger'), btn('req-ok', req.type === 'extend' ? '同意延期' : '同意轉借', 'pri'));
+  }
   if (admin && L.status === 'pending') A.push(`<button class="btn sm danger" data-act="reject" data-id="${L.id}">駁回</button>`, `<button class="btn sm pri" data-act="approve" data-id="${L.id}">核准</button>`);
   if (admin && L.status === 'approved' && !req) A.push(`<button class="btn sm danger" data-act="reject" data-id="${L.id}">取消核准</button>`, `<button class="btn sm pri" data-act="checkout" data-id="${L.id}">點交出借</button>`);
-  if (admin && L.status === 'out' && !req) A.push(`<button class="btn sm pri" data-act="receive" data-id="${L.id}">登記歸還</button>`);
+  if (admin && L.status === 'out' && !req) A.push(btn('receive', '登記歸還', 'pri'));
+  if (admin && (L.status === 'approved' || L.status === 'out') && !req) A.push(btn('extend', '延期'));
+  if (!['pending', 'rejected', 'cancelled'].includes(L.status)) A.push(btn('print-loan', '列印', 'ghost'));
   if (opts.mine) {
-    if ((L.status === 'pending' || L.status === 'approved') && !req) A.push(`<button class="btn sm danger" data-act="cancel" data-id="${L.id}">取消申請</button>`);
-    if (L.status === 'approved' && !req) A.push(`<button class="btn sm pri" data-act="u-pickup" data-id="${L.id}">簽收領取</button>`);
-    if (L.status === 'out' && !req) A.push(`<button class="btn sm pri" data-act="u-return" data-id="${L.id}">歸還</button>`);
+    if (L.status === 'pending' && !req) A.push(btn('edit-loan', '修改申請'));
+    if ((L.status === 'pending' || L.status === 'approved') && !req) A.push(btn('cancel', '取消申請', 'danger'));
+    if ((L.status === 'approved' || L.status === 'out') && !req) A.push(btn('u-extend', '申請延期'), btn('u-transfer', '轉借'));
+    if (L.status === 'approved' && !req) A.push(btn('u-pickup', '簽收領取', 'pri'));
+    if (L.status === 'out' && !req) A.push(btn('u-return', '歸還', 'pri'));
     if (req) A.push(`<button class="btn sm ghost" data-act="u-cancel-req" data-id="${L.id}">撤回${req.type === 'pickup' ? '簽收' : '歸還'}</button>`, `<button class="btn sm pri" data-act="u-onsite" data-id="${L.id}">請管理者當面確認</button>`);
   }
   const who = admin ? `<span>借用人 <b>${esc(L.applicant)}</b>${L.dept ? '・' + esc(L.dept) : ''}</span>${L.contact ? `<span>聯絡 ${esc(L.contact)}</span>` : ''}` : '';
@@ -273,8 +296,7 @@ function loanCard(L, opts = {}) {
     <div class="loan-meta">${who}<span>期間 <b>${esc(L.start)} → ${esc(L.end)}</b></span>${L.venue ? `<span>地點 ${esc(L.venue)}</span>` : ''}${L.outAt ? `<span>點交 ${esc(L.outAt)}</span>` : ''}${L.returnedAt ? `<span>歸還 ${esc(L.returnedAt)}</span>` : ''}</div>
     <div class="lines">${lines}</div>
     ${notes.length ? `<div class="note">${notes.map(esc).join('<br>')}</div>` : ''}
-    ${req && opts.mine ? `<div class="banner warn" style="margin:10px 0 0;font-size:13px">已送出${req.type === 'pickup' ? '簽收' : '歸還'}(${esc(req.at)}),請交給管理者當面確認後才算完成。</div>` : ''}
-    ${req && !opts.mine && isAdmin() ? `<div class="banner warn" style="margin:10px 0 0;font-size:13px">${esc(req.by)} 於 ${esc(req.at)} 送出${req.type === 'pickup' ? '簽收:' + esc(Object.values(req.units || {}).flat().join('、') || '數量品項') : '歸還'},等待確認</div>` : ''}
+    ${opts.mine || isAdmin() ? reqBanner(req, !!opts.mine) : ''}
     ${A.length ? `<div class="actions">${A.join('')}</div>` : ''}
   </div>`;
 }
@@ -342,6 +364,7 @@ VIEWS.catalog = async main => {
       <button class="btn" data-act="export">${ICON.dl}<span class="lbl-hide">匯出</span></button>
     </div>
     <div id="cbar"></div>
+    <div id="mbar"></div>
     ${range ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到展覽規劃</a></div>` : ''}
     <div id="cgrid"></div>`;
   const card = i => {
@@ -349,7 +372,7 @@ VIEWS.catalog = async main => {
     const av = range ? i.available : null;
     return `<div class="card item-card">
       ${i.image ? `<div class="img" style="background-image:url('${esc(i.image)}')"></div>` : ''}
-      <div class="row" style="gap:6px"><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
+      <div class="row" style="gap:6px"><label class="chk"><input type="checkbox" data-mpick="${esc(i.id)}" ${S.multi.has(i.id) ? 'checked' : ''}>選</label><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
       <h3>${esc(i.name)}</h3>
       ${i.spec ? `<div class="meta">${esc(i.spec)}</div>` : ''}
       <div class="meta">存放:${esc(i.location || '—')}</div>
@@ -358,7 +381,7 @@ VIEWS.catalog = async main => {
       <div class="addrow"><input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="add-cart" data-id="${i.id}">${inCart ? `加入規劃(已選 ${inCart.qty})` : '加入規劃'}</button></div>
     </div>`;
   };
-  const draw = () => {
+  let draw = () => {
     const q = f.q.toLowerCase();
     const match = i => (!q || [i.name, i.spec, i.location, i.category, i.id].join(' ').toLowerCase().includes(q)) && (!f.onlyAvail || (range ? i.available : i.inStock) > 0);
     const shown = S.items.filter(match);
@@ -370,6 +393,18 @@ VIEWS.catalog = async main => {
       ? (shown.filter(i => i.category === f.cat).length ? block(shown.filter(i => i.category === f.cat)) : '<div class="card empty">這個分類還沒有展品</div>')
       : groupByCat(S.cats, shown).map(([name, arr]) => `<h2 class="cath">${esc(name)}<span class="chipnum">${arr.length}</span></h2>` + block(arr)).join('');
   };
+  const mbar = () => {
+    $('#mbar').innerHTML = S.multi.size
+      ? `<div class="card bulkbar multibar"><b>已選 ${S.multi.size} 項</b><span class="meta">預設各 1 個,到規劃頁可以改數量</span>
+         <span class="spacer"></span><button class="btn" data-act="multi-clear">清空</button><button class="btn brand" data-act="multi-go">一起填單</button></div>`
+      : '';
+  };
+  const wirePick = () => $$('[data-mpick]').forEach(el => el.onchange = () => {
+    el.checked ? S.multi.add(el.dataset.mpick) : S.multi.delete(el.dataset.mpick);
+    mbar();
+  });
+  const draw0 = draw;
+  draw = () => { draw0(); wirePick(); mbar(); };
   draw();
   $('#cq').oninput = e => { f.q = e.target.value; draw(); };
   $('#cav').onchange = e => { f.onlyAvail = e.target.checked; draw(); };
@@ -386,11 +421,13 @@ VIEWS.plan = async main => {
   const P = S.plan, admin = isAdmin();
   const draft = store.get('draft', {});
   if (!S.cart.length) {
-    main.innerHTML = `<div class="eyebrow">Planning</div><h1>展覽規劃</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出借用申請。</p>
+    main.innerHTML = `${S.editing ? `<div class="banner info">正在修改申請 <b class="mono">${esc(S.editing.no)}</b>。 <a href="#" data-act="cancel-edit">放棄修改</a></div>` : ''}<div class="eyebrow">Planning</div><h1>${S.editing ? '修改借用申請' : '展覽規劃'}</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出借用申請。</p>
       <div class="card empty">還沒有選任何展品。<br><br><button class="btn pri" data-act="go" data-v="catalog">前往展品目錄挑選</button></div>`;
     return;
   }
-  main.innerHTML = `<h1>展覽規劃</h1><p class="sub">先選日期,系統即時比對可借數量。全部足夠即可送出申請${admin ? ';口頭借用可用「代為登記」直接建單' : ''}。</p>
+  const ed = S.editing;
+  main.innerHTML = `${ed ? `<div class="banner info">正在修改申請 <b class="mono">${esc(ed.no)}</b>,改完按下方「儲存修改」。 <a href="#" data-act="cancel-edit">放棄修改</a></div>` : ''}
+  <h1>${ed ? '修改借用申請' : '展覽規劃'}</h1><p class="sub">先選日期,系統即時比對可借數量。全部足夠即可送出申請${admin && !ed ? ';口頭借用可用「代為登記」直接建單' : ''}。</p>
   <div class="plan">
     <div class="card">
       <div class="grid2"><label class="f"><span>借出日 <b>*</b></span><input type="date" id="ps" value="${esc(P.start)}"></label><label class="f"><span>歸還日 <b>*</b></span><input type="date" id="pe" value="${esc(P.end)}"></label></div>
@@ -409,7 +446,7 @@ VIEWS.plan = async main => {
         <div class="meta">代為登記會直接成為「已核准」,可立即到借用單點交。</div>
         <label class="chk" style="margin-top:8px"><input type="checkbox" name="force">數量不足仍建立</label></div>
         <datalist id="ulist"></datalist></div>` : ''}
-      <button class="btn pri" style="width:100%" id="psubmit">送出借用申請</button>
+      <button class="btn pri" style="width:100%" id="psubmit">${ed ? '儲存修改' : '送出借用申請'}</button>
     </form>
   </div>`;
   let lastCheck = [];
@@ -433,7 +470,7 @@ VIEWS.plan = async main => {
   };
   const recheck = async () => {
     if (P.start && P.end && P.start <= P.end) {
-      try { lastCheck = await api('check', { start: P.start, end: P.end, lines: S.cart }); } catch (e) { lastCheck = []; toast(e.message, true); }
+      try { lastCheck = await api('check', { start: P.start, end: P.end, lines: S.cart, excludeId: ed ? ed.id : '' }); } catch (e) { lastCheck = []; toast(e.message, true); }
     } else lastCheck = [];
     drawLines();
   };
@@ -441,7 +478,7 @@ VIEWS.plan = async main => {
   const dch = () => { P.start = $('#ps').value; P.end = $('#pe').value; if (P.start && !P.end) { P.end = P.start; $('#pe').value = P.start; } saveCart(); recheck(); };
   $('#ps').onchange = dch; $('#pe').onchange = dch;
   $('#pform').oninput = () => { const fd = Object.fromEntries(new FormData($('#pform'))); store.set('draft', { event: fd.event, venue: fd.venue, contact: fd.contact, purpose: fd.purpose, note: fd.note }); drawLines(); };
-  if (admin) {
+  if (admin && !ed) {
     $('#ob').onchange = e => $('#obf').classList.toggle('hidden', !e.target.checked);
     api('users').then(us => { $('#ulist').innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
   }
@@ -450,6 +487,15 @@ VIEWS.plan = async main => {
     const fd = Object.fromEntries(new FormData(e.target));
     const payload = { ...fd, start: P.start, end: P.end, lines: S.cart, onBehalf: !!fd.onBehalf, force: !!fd.force };
     if (payload.onBehalf && !String(fd.applicant || '').trim()) return toast('請填寫借用人', true);
+    if (ed) {
+      const { event, venue, purpose, contact, note } = fd;
+      const upd = await run(() => api('updateLoan',
+        { id: ed.id, event, venue, purpose, contact, note, start: P.start, end: P.end, lines: S.cart, force: !!fd.force }),
+        '已儲存修改').catch(() => null);
+      if (!upd) return;
+      S.editing = null; S.cart = []; store.del('draft'); saveCart();
+      return go('mine');
+    }
     const L = await run(() => api('createLoan', payload)).catch(() => null);
     if (!L) return;
     S.cart = []; store.del('draft'); saveCart();
@@ -462,6 +508,7 @@ VIEWS.plan = async main => {
 };
 
 VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
+  S._loans = list;
   const act = list.filter(l => ['pending', 'approved', 'out'].includes(l.status)), past = list.filter(l => !act.includes(l));
   main.innerHTML = `<div class="eyebrow">My Loans</div><h1>我的借用</h1><p class="sub">申請進度、借用中的展品與歸還日。</p>
     ${act.some(l => l.overdue) ? '<div class="banner bad">你有逾期未歸還的展品,請儘速歸還。</div>' : ''}
@@ -469,7 +516,25 @@ VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
     <h2>歷史紀錄</h2><div class="loans">${past.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">尚無紀錄</div>'}</div>`;
 });
 
+/** 今天要做的事:把散在各頁的待辦收成一張清單 */
+function todoList(d) {
+  const G = [
+    ['逾期未還', d.overdue, 'bad', 'overdue', '催回來'],
+    ['等待確認', d.requests, 'pending', 'request', '去確認'],
+    ['待審核', d.pending, 'pending', 'pending', '去審核'],
+    ['今天要點交', d.pickups.filter(l => l.start <= d.today), 'approved', 'approved', '去點交'],
+    ['今天到期', d.dueSoon.filter(l => l.end === d.today), 'out', 'out', '去登記歸還']
+  ].filter(g => g[1].length);
+  if (!G.length) return '<div class="card ok-empty">今天沒有待辦事項 👍</div>';
+  const rows = G.map(([label, arr, pill, filter, cta]) =>
+    '<div class="todo-row"><span class="pill ' + pill + '">' + esc(label) + '</span>'
+    + '<b>' + arr.length + '</b><span class="meta">' + esc(arr.slice(0, 3).map(l => l.id + ' ' + l.event).join('、')) + (arr.length > 3 ? ' …' : '') + '</span>'
+    + '<span class="spacer"></span><button class="btn sm" data-act="go-loans" data-f="' + filter + '">' + esc(cta) + '</button></div>').join('');
+  return '<div class="card todo"><h2 style="margin-top:0">今天要做的事</h2>' + rows + '</div>';
+}
+
 VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
+  S._loans = [].concat(d.pending, d.overdue, d.dueSoon, d.requests, d.pickups);
   const s = d.sum;
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Inventory &amp; Loans</div><h1>展品借用與庫存追蹤</h1><p class="sub">${esc(d.today)}・主管問「還有幾個」,看這裡或匯出庫存表。</p></div><span class="spacer"></span><button class="btn" data-act="export">${ICON.dl}匯出庫存表</button></div>
     <div class="kpis">
@@ -482,7 +547,7 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
       ${kpi(ICON.check, '待確認簽收/歸還', d.requests.length, d.requests.length ? 'warn' : '', 'go-loans', 'request')}
       ${kpi(ICON.wrench, '維修 / 遺失', s.repair + ' / ' + s.lost)}
     </div>
-    ${d.requests.length ? `<div class="card" style="margin-top:14px;border-color:var(--warn-soft)"><h2 style="margin-top:0">等待確認的簽收 / 歸還</h2>${d.requests.map(l => miniRow(l, `<span class="pill pending">${esc(l.stage)}</span>`)).join('')}</div>` : ''}
+    <div id="todo"></div>
     <div class="cols" style="margin-top:14px">
       <div class="card"><h2 style="margin-top:0">逾期未還</h2>${d.overdue.map(l => miniRow(l, `<span class="pill bad">逾期 ${l.overdueDays} 天</span>`)).join('') || '<div class="empty">沒有逾期,很好</div>'}</div>
       <div class="card"><h2 style="margin-top:0">待審核</h2>${d.pending.map(l => miniRow(l)).join('') || '<div class="empty">沒有待審核的申請</div>'}</div>
@@ -490,18 +555,36 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
       <div class="card"><h2 style="margin-top:0">3 天內到期</h2>${d.dueSoon.map(l => miniRow(l, `<span class="pill out">${fmtD(l.end)} 還</span>`)).join('') || '<div class="empty">無</div>'}</div>
     </div>
     ${d.lowStock.length ? `<div class="card" style="margin-top:14px"><h2 style="margin-top:0">倉庫已無在庫</h2><div class="chips">${d.lowStock.map(i => `<span class="pill bad">${esc(i.name)}(${i.out}/${i.total} 借出)</span>`).join('')}</div></div>` : ''}`;
+  $('#todo').innerHTML = todoList(d);
 });
 
 VIEWS.loans = main => withData(main, 'loans|' + S.loanFilter, 'loans', { filter: S.loanFilter }, list => {
+  S._loans = list;
   const F = [['request', '待確認'], ['pending', '待審核'], ['approved', '待點交'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「展覽規劃」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
     <div class="toolbar"><div class="seg">${F.map(([k, l]) => `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}</button>`).join('')}</div>
     <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…"></div>
+    <div id="lbulk"></div>
     <div class="loans" id="llist"></div>`;
+  const sel = new Set();
+  const bulk = () => {
+    const pend = list.filter(l => l.status === 'pending');
+    $('#lbulk').innerHTML = pend.length < 2 ? '' :
+      `<div class="card bulkbar"><label class="chk"><input type="checkbox" id="lall" ${sel.size === pend.length ? 'checked' : ''}>全選待審核(${pend.length} 張)</label>
+        <span class="spacer"></span><span class="meta">已選 ${sel.size} 張</span>
+        <button class="btn brand" id="lgo" ${sel.size ? '' : 'disabled'}>批次核准</button></div>`;
+    if (!pend.length || pend.length < 2) return;
+    $('#lall').onchange = e => { sel.clear(); if (e.target.checked) pend.forEach(l => sel.add(l.id)); draw($('#lq').value); };
+    $('#lgo').onclick = () => bulkApprove([...sel]);
+  };
   const draw = q => {
     q = (q || '').toLowerCase();
     const f = list.filter(l => !q || [l.id, l.applicant, l.dept, l.event, l.venue].concat(l.lines.map(x => x.name)).join(' ').toLowerCase().includes(q));
-    $('#llist').innerHTML = f.map(l => loanCard(l)).join('') || '<div class="card empty">沒有符合的借用單</div>';
+    $('#llist').innerHTML = f.map(l => l.status === 'pending'
+      ? `<div class="pickwrap"><label class="chk pickbox"><input type="checkbox" data-pl="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>選取</label>${loanCard(l)}</div>`
+      : loanCard(l)).join('') || '<div class="card empty">沒有符合的借用單</div>';
+    $$('[data-pl]').forEach(el => el.onchange = () => { el.checked ? sel.add(el.dataset.pl) : sel.delete(el.dataset.pl); bulk(); });
+    bulk();
   };
   draw(); $('#lq').oninput = e => draw(e.target.value);
   if (S._focusLoan) { const el = $('#loan-' + S._focusLoan); if (el) { el.scrollIntoView({ block: 'center' }); el.style.outline = '2px solid var(--red)'; } S._focusLoan = null; }
@@ -786,6 +869,128 @@ VIEWS.logs = main => withData(main, 'logs', 'logs', { limit: 500 }, list => {
 
 /* ===================== 借用單動作 ===================== */
 async function getLoan(id) { const all = await api('loans', { filter: 'all' }); return all.find(l => l.id === id); }
+/* ===================== 延期 / 轉借 / 改單 / 列印 ===================== */
+const plusDays = (d, k) => { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + k); return t.toISOString().slice(0, 10); };
+const findLoan = id => (S._loans || []).find(l => l.id === id) || null;
+
+/** 批次核准:一次核准多張,沒過的逐張說明原因 */
+function bulkApprove(ids) {
+  const m = openModal(`<h2>批次核准 ${ids.length} 張</h2>
+    <p class="sub">數量不足的那幾張會被跳過,結束後會告訴你是哪幾張、為什麼。</p>
+    <label class="f"><span>共同備註</span><input type="text" id="bn" placeholder="選填,會寫進每一張的審核備註"></label>
+    <label class="chk"><input type="checkbox" id="bf">數量不足仍核准</label>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn brand" id="bgo">確定核准</button></div>`);
+  $('#bgo', m).onclick = async () => {
+    const r = await run(() => api('approveMany', { ids, note: $('#bn', m).value, force: $('#bf', m).checked })).catch(() => null);
+    if (!r) return;
+    const rows = r.fail.map(f => '<div class="line"><span class="nm mono">' + esc(f.id) + '</span><span class="short">' + esc(f.error) + '</span></div>').join('');
+    openModal(`<h2>批次核准結果</h2>
+      <div class="banner ${r.fail.length ? 'warn' : 'ok'}">成功 ${r.ok} 張${r.fail.length ? ',有 ' + r.fail.length + ' 張沒過' : ''}。</div>
+      ${rows ? '<h2>沒過的</h2><div class="lines">' + rows + '</div>' : ''}
+      <div class="modal-f"><button class="btn pri" data-act="close-render">完成</button></div>`);
+  };
+}
+
+/** 修改待審核的申請:把它載回「展覽規劃」繼續編輯 */
+function editLoan(id) {
+  const L = findLoan(id);
+  if (!L) return toast('請重新整理這一頁', true);
+  S.editing = { id: L.id, no: L.id };
+  S.cart = L.lines.map(ln => ({ itemId: ln.itemId, qty: ln.qty }));
+  S.plan = { start: L.start, end: L.end };
+  saveCart();
+  store.set('draft', { event: L.event, venue: L.venue, contact: L.contact, purpose: L.purpose, note: L.note });
+  go('plan');
+}
+function cancelEdit() { S.editing = null; S.cart = []; store.del('draft'); saveCart(); go('mine'); }
+
+/** 同仁申請延期 / 管理者直接延期 */
+function extendModal(id, asAdmin) {
+  const L = findLoan(id);
+  if (!L) return toast('請重新整理這一頁', true);
+  const m = openModal(`<h2>${asAdmin ? '延長歸還日' : '申請延長歸還日'} ${esc(id)}</h2>
+    <p class="sub">${esc(L.event)}・目前歸還日 <b>${esc(L.end)}</b>。系統會檢查多出來的那一段期間還借不借得到。</p>
+    <label class="f"><span>新的歸還日 <b>*</b></span><input type="date" id="xd" min="${esc(plusDays(L.end, 1))}" value="${esc(plusDays(L.end, 7))}"></label>
+    <label class="f"><span>說明</span><input type="text" id="xn" placeholder="例:展期延後一週"></label>
+    ${asAdmin ? '<label class="chk"><input type="checkbox" id="xf">數量不足仍延期</label>' : ''}
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="xgo">${asAdmin ? '確定延期' : '送出申請'}</button></div>`);
+  $('#xgo', m).onclick = () => {
+    const end = $('#xd', m).value, note = $('#xn', m).value;
+    if (!end) return toast('請選新的歸還日', true);
+    const call = asAdmin
+      ? api('extendLoan', { id, end, note, force: $('#xf', m) && $('#xf', m).checked })
+      : api('requestExtend', { id, end, note });
+    run(() => call, asAdmin ? '已延期' : '已送出,請等管理者確認')
+      .then(() => { closeModal(); if (!asAdmin) onsiteModal(id, 'extend'); else render(); }).catch(() => { });
+  };
+}
+
+/** 同仁申請把借用轉給別人 */
+function transferModal(id) {
+  const L = findLoan(id);
+  if (!L) return toast('請重新整理這一頁', true);
+  const m = openModal(`<h2>轉借 ${esc(id)}</h2>
+    <p class="sub">${esc(L.event)}・目前借用人 <b>${esc(L.applicant)}</b>。轉出去之後歸還責任就在對方身上,逾期也算他的。</p>
+    <label class="f"><span>要轉給誰(工號) <b>*</b></span><input type="text" id="td" autocapitalize="characters" placeholder="例:10477"></label>
+    <label class="f"><span>說明</span><input type="text" id="tn" placeholder="例:我出差,後續由他負責"></label>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="tgo">送出申請</button></div>`);
+  $('#tgo', m).onclick = () => {
+    const emp = $('#td', m).value.trim().toUpperCase();
+    if (!emp) return toast('請填寫要轉給誰的工號', true);
+    run(() => api('requestTransfer', { id, emp, note: $('#tn', m).value }), '已送出,請等管理者確認')
+      .then(() => { closeModal(); onsiteModal(id, 'transfer'); }).catch(() => { });
+  };
+}
+
+/** 管理者處理延期 / 轉借申請 */
+function decideModal(id, agree) {
+  const L = findLoan(id), req = L && L.request;
+  if (!req) return toast('請重新整理這一頁', true);
+  const what = req.type === 'extend' ? '延期' : '轉借';
+  const detail = req.type === 'extend'
+    ? '把歸還日從 ' + L.end + ' 延到 ' + req.end
+    : '把借用人從 ' + L.applicant + ' 換成 ' + (req.toName || '');
+  const m = openModal(`<h2>${agree ? '同意' : '不同意'}${what} ${esc(id)}</h2>
+    <p class="sub">${esc(L.event)}・${esc(req.by)} 申請${esc(detail)}${req.note ? '(' + esc(req.note) + ')' : ''}</p>
+    <label class="f"><span>${agree ? '備註' : '原因'}${agree ? '' : ' <b>*</b>'}</span><input type="text" id="dn"></label>
+    ${agree && req.type === 'extend' ? '<label class="chk"><input type="checkbox" id="df">數量不足仍延期</label>' : ''}
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn ${agree ? 'pri' : 'danger'}" id="dgo">${agree ? '確定' : '不同意'}</button></div>`);
+  $('#dgo', m).onclick = () => {
+    const note = $('#dn', m).value;
+    if (!agree && !note.trim()) return toast('請填寫原因', true);
+    run(() => api('decideRequest', { id, ok: agree, note, force: $('#df', m) && $('#df', m).checked }), agree ? '已處理' : '已回覆')
+      .then(() => { closeModal(); render(); }).catch(() => { });
+  };
+}
+
+/** 把借用單印成一張可簽名的單據 */
+function printLoan(id) {
+  const L = findLoan(id);
+  if (!L) return toast('請重新整理這一頁', true);
+  const row = (k, v) => '<tr><th>' + esc(k) + '</th><td>' + esc(v || '—') + '</td></tr>';
+  const lines = L.lines.map(ln => '<tr><td>' + esc(ln.name) + '</td><td>' + esc(ln.mode === 'unit' ? '逐台編號' : '數量') + '</td>'
+    + '<td class="n">' + ln.qty + '</td><td>' + esc((ln.units || []).join('、')) + '</td></tr>').join('');
+  const w = window.open('', '_blank', 'width=900,height=1000');
+  if (!w) return toast('瀏覽器擋掉了列印視窗,請允許彈出視窗', true);
+  w.document.write('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>' + esc(L.id) + ' 借用單</title>'
+    + '<style>body{font:14px/1.6 system-ui,"Noto Sans TC",sans-serif;color:#333F48;margin:36px;max-width:760px}'
+    + 'h1{font-size:20px;margin:0 0 4px;color:#C8102E}.sub{color:#6b7280;font-size:12px;margin:0 0 18px}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:18px}th,td{border:1px solid #d8dce0;padding:7px 10px;text-align:left;vertical-align:top}'
+    + 'th{background:#f4f5f7;width:96px;font-weight:600}td.n{text-align:right;width:56px}'
+    + '.items th{width:auto;background:#f4f5f7}.sign{margin-top:36px;display:flex;gap:40px}'
+    + '.sign div{flex:1;border-top:1px solid #333F48;padding-top:7px;font-size:12px;color:#6b7280}'
+    + '@media print{body{margin:0}}</style></head><body>'
+    + '<h1>展品借用單 ' + esc(L.id) + '</h1><div class="sub">' + esc(L.statusLabel) + '・列印於 ' + esc(todayStr()) + '</div>'
+    + '<table>' + row('活動', L.event) + row('借用人', L.applicant + (L.dept ? '・' + L.dept : '')) + row('聯絡', L.contact)
+    + row('地點', L.venue) + row('用途', L.purpose) + row('期間', L.start + ' → ' + L.end)
+    + row('點交', L.outAt) + row('歸還', L.returnedAt) + row('備註', L.note) + '</table>'
+    + '<table class="items"><thead><tr><th>品名</th><th>方式</th><th class="n">數量</th><th>單台編號</th></tr></thead><tbody>' + lines + '</tbody></table>'
+    + '<div class="sign"><div>借用人簽名</div><div>展品管理者簽名</div></div>'
+    + '</body></html>');
+  w.document.close();
+  setTimeout(() => w.print(), 300);
+}
+
 async function approveModal(id) {
   const L = await getLoan(id);
   const short = (L.check || []).filter(c => c.short);
@@ -807,7 +1012,7 @@ async function checkoutModal(id) {
   await Promise.all(unitLines.map(async l => { pools[l.itemId] = (await api('units', { itemId: l.itemId })).filter(u => u.status === 'in'); }));
   const pick = {}; unitLines.forEach(l => pick[l.itemId] = []);
   const m = openModal(`<h2>${L.request ? '確認領取' : '點交出借'} ${esc(L.id)}</h2>${L.request ? `<div class="banner warn" style="font-size:13px">${esc(L.request.by)} 已送出簽收,以下為他選的編號,核對實物後確認。</div>` : ''}<p><b>${esc(L.event)}</b>・借用人 ${esc(L.applicant)}・應還 ${esc(L.end)}</p>
-    ${unitLines.length ? `<div class="row" style="margin-bottom:10px"><input type="text" id="cscan" placeholder="輸入 / 刷編號後 Enter" style="flex:1"><button class="btn" id="ccam">${ICON.scan}掃描</button></div>` : ''}
+    ${unitLines.length ? `<div class="row" style="margin-bottom:10px"><input type="text" id="cscan" placeholder="輸入 / 刷編號後 Enter" style="flex:1"><button class="btn" id="ccam">${ICON.scan}掃描</button><button class="btn" id="cauto">自動指派</button></div>` : ''}
     <div class="lines">${L.lines.map(l => l.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b><span data-pc="${l.itemId}" class="short">已選 0 / ${l.qty}</span></div>
       <div class="chips">${pools[l.itemId].map(u => `<span class="chipk" data-pick="${u.id}" data-it="${l.itemId}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">沒有在庫的單台</span>'}</div></div>`
       : `<div class="line"><span class="nm">${esc(l.name)}</span><span class="q">× ${l.qty}</span></div>`).join('')}</div>
@@ -824,7 +1029,15 @@ async function checkoutModal(id) {
   };
   // 使用者已送出簽收 → 用他選的編號;否則自動挑前 N 台
   const preset = L.request && L.request.type === 'pickup' ? L.request.units || {} : null;
+  const autoPick = () => {
+    unitLines.forEach(l => {
+      pick[l.itemId].slice().forEach(uid => toggle(uid));                 // 先清掉
+      pools[l.itemId].slice(0, l.qty).forEach(u => toggle(u.id, true));
+    });
+    toast('已自動指派可用的編號,要換哪一台再自己點');
+  };
   unitLines.forEach(l => (preset ? (preset[l.itemId] || []) : pools[l.itemId].slice(0, l.qty).map(u => u.id)).forEach(uid => toggle(uid)));
+  if ($('#cauto', m)) $('#cauto', m).onclick = autoPick;
   $$('[data-pick]', m).forEach(el => el.onclick = () => toggle(el.dataset.pick));
   const sc = $('#cscan', m);
   if (sc) {
@@ -990,7 +1203,7 @@ async function userPickupModal(id) {
   const pick = {}; unitLines.forEach(o => pick[o.itemId] = []);
   const m = openModal(`<h2>簽收領取 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・應還 ${esc(L.end)}</p>
     ${unitLines.length ? `<div class="banner info" style="font-size:13px">請掃描或點選你實際拿到的那幾台(看展品上的 QR 標籤編號)。</div>
-    <div class="row" style="margin-bottom:10px"><input type="text" id="pscan" placeholder="輸入編號後 Enter" style="flex:1"><button class="btn" id="pcam">${ICON.scan}掃描</button></div>` : ''}
+    <div class="row" style="margin-bottom:10px"><input type="text" id="pscan" placeholder="輸入編號後 Enter" style="flex:1"><button class="btn" id="pcam">${ICON.scan}掃描</button><button class="btn" id="pauto">自動選好</button></div>` : ''}
     <div class="lines">${opts.map(o => o.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(o.name)}</b><span data-pc="${o.itemId}" class="short">已選 0 / ${o.qty}</span></div>
       <div class="chips">${o.units.map(u => `<span class="chipk" data-pick="${u.id}" data-it="${o.itemId}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">目前沒有在庫的單台,請聯絡管理者</span>'}</div></div>`
       : `<div class="line"><span class="nm">${esc(o.name)}</span><span class="q">× ${o.qty}</span></div>`).join('')}</div>
@@ -1003,6 +1216,13 @@ async function userPickupModal(id) {
     if (has && force !== true) arr.splice(arr.indexOf(uid), 1);
     else if (!has) { if (arr.length >= o.qty) { toast(o.name + ' 已選滿 ' + o.qty + ' 台,請先取消一台', true); return false; } arr.push(uid); }
     el.classList.toggle('on', arr.includes(uid)); upd(); return true;
+  };
+  if ($('#pauto', m)) $('#pauto', m).onclick = () => {
+    unitLines.forEach(o => {
+      pick[o.itemId].slice().forEach(uid => toggle(uid));
+      o.units.slice(0, o.qty).forEach(u => toggle(u.id, true));
+    });
+    toast('已幫你選好,拿到的不是這幾台就自己改');
   };
   upd();
   $$('[data-pick]', m).forEach(el => el.onclick = () => toggle(el.dataset.pick));
@@ -1038,7 +1258,7 @@ async function userReturnModal(id) {
   };
 }
 function onsiteModal(id, type) {
-  const word = type === 'pickup' ? '領取' : '歸還';
+  const word = { pickup: '領取', 'return': '歸還', extend: '延期', transfer: '轉借' }[type] || '確認';
   const m = openModal(`<h2>請管理者當面確認${word}</h2>
     <p class="sub">把畫面交給展品管理者,輸入管理者工號與 PIN 即完成${word}。<br>管理者不在場也沒關係,已送出的申請會出現在管理者後台等待確認。</p>
     <form id="osf" autocomplete="off"><div class="grid2"><label class="f"><span>管理者工號</span><input type="text" name="emp" required></label><label class="f"><span>PIN</span><input type="password" name="pin" inputmode="numeric" required></label></div>
@@ -1108,6 +1328,14 @@ const ACT = {
     try { await navigator.clipboard.writeText(txt); toast('已複製,可貼到 Email / 通訊軟體'); } catch (e) { openModal(`<h2>清單</h2><textarea rows="10">${esc(txt)}</textarea><div class="modal-f"><button class="btn" data-act="close">關閉</button></div>`); }
   },
   'approve': el => approveModal(el.dataset.id),
+  'edit-loan': el => editLoan(el.dataset.id),
+  'cancel-edit': () => cancelEdit(),
+  'u-extend': el => extendModal(el.dataset.id, false),
+  'u-transfer': el => transferModal(el.dataset.id),
+  'extend': el => extendModal(el.dataset.id, true),
+  'req-ok': el => decideModal(el.dataset.id, true),
+  'req-no': el => decideModal(el.dataset.id, false),
+  'print-loan': el => printLoan(el.dataset.id),
   'reject': el => rejectModal(el.dataset.id),
   'checkout': el => checkoutModal(el.dataset.id),
   'receive': el => receiveModal(el.dataset.id),
@@ -1123,6 +1351,11 @@ const ACT = {
   'u-onsite': el => { const L = el.closest('.card'); onsiteModal(el.dataset.id, /簽收/.test(L.textContent.match(/撤回(簽收|歸還)/)[0]) ? 'pickup' : 'return'); },
   'u-cancel-req': el => run(() => api('cancelRequest', { id: el.dataset.id }), '已撤回').then(render).catch(() => { }),
   'lookup-code': el => lookupModal(el.dataset.code),
+  'multi-clear': () => { S.multi.clear(); S._catDraw(); },
+  'multi-go': () => {
+    S.multi.forEach(id => { if (!S.cart.find(c => c.itemId === id)) S.cart.push({ itemId: id, qty: 1 }); });
+    S.multi.clear(); saveCart(); go('plan');
+  },
   'pick-cat': el => {
     const v = el.dataset.cat;
     if (S.view === 'catalog') { S.filters.cat = v; S._catDraw(); }

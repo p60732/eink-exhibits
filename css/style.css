@@ -206,6 +206,21 @@ tr.dim td{opacity:.5}
 .outbox .lines{margin-top:5px}
 .outbox .line{gap:8px;padding:4px 0;font-size:13px}
 .num.short,.num.okt{font-weight:700}
+/* 借用單批次核准 */
+.bulkbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;padding:10px 14px}
+.pickwrap{position:relative}
+.pickwrap .pickbox{position:absolute;top:14px;right:16px;z-index:2;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;padding:4px 9px;font-size:12px}
+.pickwrap .card{padding-right:96px}
+/* 今天要做的事 */
+.card.todo{margin:14px 0 0;border-left:3px solid var(--red)}
+.todo-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+.todo-row:first-of-type{border-top:0}
+.todo-row b{font-size:17px;min-width:22px}
+.todo-row .meta{flex:1 1 180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card.ok-empty{margin-top:14px;text-align:center;color:var(--muted);font-size:14px}
+/* 目錄多選一起填單:固定在畫面下方 */
+.multibar{position:sticky;bottom:12px;z-index:5;box-shadow:0 6px 24px rgba(51,63,72,.18)}
 /* ---------- modal ---------- */
 .modal-bg{position:fixed;inset:0;background:rgba(27,36,43,.45);z-index:50;display:flex;align-items:flex-start;justify-content:center;
   padding:44px 16px;overflow-y:auto;backdrop-filter:blur(2px)}

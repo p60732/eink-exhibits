@@ -9,6 +9,7 @@
 var Logic = (function () {
   'use strict';
   var LOAN_ST = { pending: '待審核', approved: '已核准', out: '出借中', returned: '已歸還', rejected: '已駁回', cancelled: '已取消' };
+  var REQ_ST = { pickup: '待確認領取', 'return': '待確認歸還', extend: '待確認延期', transfer: '待確認轉借' };
   var UNIT_ST = { 'in': '在庫', out: '借出', repair: '維修', lost: '遺失', retired: '報廢' };
   var FOREVER = '9999-12-31';
 
@@ -108,7 +109,7 @@ var Logic = (function () {
     for (var k in L) o[k] = L[k];
     o.statusLabel = LOAN_ST[L.status] || L.status;
     o.request = L.request && L.request.type ? L.request : null;
-    o.stage = o.request ? (o.request.type === 'pickup' ? '待確認領取' : '待確認歸還') : '';
+    o.stage = o.request ? (REQ_ST[o.request.type] || '待確認') : '';
     o.overdue = isOverdue(L, today);
     if (o.overdue) o.overdueDays = Math.round((Date.parse(today) - Date.parse(L.end)) / 86400000);
     o.lines = (L.lines || []).map(function (ln) {
@@ -206,6 +207,40 @@ var Logic = (function () {
   }
   function linesText(db, L) {
     return (L.lines || []).map(function (ln) { var it = byId(db.Items, ln.itemId) || {}; return '・' + (it.name || ln.itemId) + ' × ' + ln.qty; }).join('\n');
+  }
+
+  /* ---------- 延期 / 轉借(管理者後台與當面確認共用) ---------- */
+  /** 只檢查日期與延長期間的可借量,回傳不足的品項 */
+  function checkExtend(db, L, newEnd, today) {
+    if (!isDate(newEnd)) throw E('請填寫新的歸還日');
+    if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');
+    return checkLines(db, L.lines, addDays(L.end, 1), newEnd, L.id, today).filter(function (x) { return x.short > 0; });
+  }
+  function doExtend(c, L, newEnd, note, force) {
+    var short = checkExtend(c.db, L, newEnd, c.today);
+    if (short.length && !force) throw E('延長期間數量不足:' + short.map(function (x) { return x.name + ' 缺 ' + x.short; }).join('、') + '。若仍要延期請勾選「強制」');
+    var old = L.end;
+    L.end = newEnd; L.request = null;
+    dirty(c.db, 'Loans');
+    log(c, '延長歸還日', L.id, old + ' → ' + newEnd + (note ? '|' + note : ''));
+    notify(c, applicantEmail(c.db, L), '[展品管理] 已延長歸還日 ' + L.id + ' — ' + L.event,
+      '歸還日由 ' + old + ' 延長為 ' + newEnd + '。' + (note ? '\n備註:' + note : ''));
+    return enrichLoan(c.db, L, c.today);
+  }
+  function doTransfer(c, L, toId, note) {
+    var to = byId(c.db.Users, s(toId));
+    if (!to || !bool(to.active)) throw E('找不到要轉給的人,或該帳號已停用');
+    if (to.id === L.applicantId) throw E('借用人本來就是這個人');
+    var from = L.applicant, fromMail = applicantEmail(c.db, L);
+    L.applicant = to.name; L.applicantId = to.id; L.dept = s(to.dept);
+    if (s(to.email)) L.contact = to.email;
+    L.request = null;
+    dirty(c.db, 'Loans');
+    log(c, '轉借', L.id, from + ' → ' + to.name + (note ? '|' + note : ''));
+    notify(c, [fromMail, s(to.email)].filter(function (x) { return x; }),
+      '[展品管理] 借用已轉給 ' + to.name + ' ' + L.id + ' — ' + L.event,
+      L.id + '(' + L.event + ')的借用人由 ' + from + ' 變更為 ' + to.name + ',歸還日 ' + L.end + '。' + (note ? '\n備註:' + note : ''));
+    return enrichLoan(c.db, L, c.today);
   }
 
   /* ---------- 點交 / 歸還(管理者後台與當面確認共用) ---------- */
@@ -345,6 +380,54 @@ var Logic = (function () {
       return c.db.Loans.filter(function (L) { return L.applicantId === id; }).slice().sort(sortLoans)
         .map(function (L) { return enrichLoan(c.db, L, today); });
     },
+    /** 待審核的申請可以自己改,不用取消重來(改完仍是待審核) */
+    updateLoan: function (c) {
+      var L = ownLoan(c), isAdmin = c.user.role === 'admin';
+      if (L.status !== 'pending') throw E('只有「待審核」的申請可以修改');
+      var r = validRange(c.p);
+      if (!isAdmin && r[0] < c.today) throw E('借出日不可早於今天');
+      if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
+      var lines = cleanLines(c.db, c.p.lines);
+      var short = checkLines(c.db, lines, r[0], r[1], L.id, c.today).filter(function (x) { return x.short > 0; });
+      if (short.length && !(isAdmin && c.p.force)) {
+        throw E('以下展品在該期間數量不足:' + short.map(function (x) { return x.name + '(需 ' + x.qty + ',可借 ' + x.available + ')'; }).join('、'));
+      }
+      var before = L.event + '|' + L.start + '~' + L.end + '|' + L.lines.length + ' 項';
+      L.event = s(c.p.event); L.venue = s(c.p.venue); L.purpose = s(c.p.purpose);
+      L.contact = s(c.p.contact) || L.contact; L.note = s(c.p.note);
+      L.start = r[0]; L.end = r[1]; L.lines = lines;
+      dirty(c.db, 'Loans');
+      log(c, '修改借用申請', L.id, before + ' → ' + L.event + '|' + L.start + '~' + L.end + '|' + lines.length + ' 項');
+      return enrichLoan(c.db, L, c.today);
+    },
+    /** 展期延後:申請延長歸還日,管理者確認後生效 */
+    requestExtend: function (c) {
+      var L = ownLoan(c);
+      if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以申請延期');
+      if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');
+      var newEnd = s(c.p.end);
+      checkExtend(c.db, L, newEnd, c.today);
+      L.request = { type: 'extend', at: c.now, by: c.user.name, end: newEnd, note: s(c.p.note) };
+      dirty(c.db, 'Loans'); log(c, '申請延長歸還日', L.id, L.end + ' → ' + newEnd);
+      notify(c, emailsOfAdmins(c.db), '[展品管理] 延期申請 ' + L.id + ' — ' + L.event,
+        L.applicant + ' 申請把歸還日由 ' + L.end + ' 延長為 ' + newEnd + '。' + (s(c.p.note) ? '\n說明:' + s(c.p.note) : ''));
+      return enrichLoan(c.db, L, c.today);
+    },
+    /** 現場把東西交給別人:申請轉借,管理者確認後生效 */
+    requestTransfer: function (c) {
+      var L = ownLoan(c);
+      if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以轉借');
+      if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');
+      var to = findByEmp(c.db, c.p.emp);
+      if (!to) throw E('查無此工號');
+      if (!bool(to.active)) throw E('此帳號已停用');
+      if (to.id === L.applicantId) throw E('借用人本來就是這個人');
+      L.request = { type: 'transfer', at: c.now, by: c.user.name, toId: to.id, toName: to.name, note: s(c.p.note) };
+      dirty(c.db, 'Loans'); log(c, '申請轉借', L.id, L.applicant + ' → ' + to.name);
+      notify(c, emailsOfAdmins(c.db), '[展品管理] 轉借申請 ' + L.id + ' — ' + L.event,
+        L.applicant + ' 要把借用轉給 ' + to.name + '(' + s(to.empNo) + ')。');
+      return enrichLoan(c.db, L, c.today);
+    },
     cancelLoan: function (c) {
       var L = byId(c.db.Loans, s(c.p.id));
       if (!L) throw E('找不到借用單');
@@ -464,6 +547,41 @@ var Logic = (function () {
       dirty(c.db, 'Loans'); log(c, '駁回借用', L.id, s(c.p.note));
       notify(c, applicantEmail(c.db, L), '[展品管理] 借用未核准 ' + L.id + ' — ' + L.event, '原因:' + L.reviewNote);
       return enrichLoan(c.db, L, c.today);
+    },
+    /** 處理同仁送出的延期 / 轉借申請 */
+    decideRequest: function (c) {
+      var L = byId(c.db.Loans, s(c.p.id));
+      if (!L) throw E('找不到借用單');
+      var req = L.request;
+      if (!req || (req.type !== 'extend' && req.type !== 'transfer')) throw E('這張單沒有待處理的延期或轉借申請');
+      if (!bool(c.p.ok)) {
+        L.request = null; dirty(c.db, 'Loans');
+        log(c, req.type === 'extend' ? '不同意延期' : '不同意轉借', L.id, s(c.p.note));
+        notify(c, applicantEmail(c.db, L), '[展品管理] ' + (req.type === 'extend' ? '延期' : '轉借') + '申請未通過 ' + L.id + ' — ' + L.event,
+          '原因:' + (s(c.p.note) || '未說明'));
+        return enrichLoan(c.db, L, c.today);
+      }
+      return req.type === 'extend' ? doExtend(c, L, req.end, s(c.p.note), bool(c.p.force)) : doTransfer(c, L, req.toId, s(c.p.note));
+    },
+    /** 管理者直接延期,不用等同仁申請 */
+    extendLoan: function (c) {
+      var L = byId(c.db.Loans, s(c.p.id));
+      if (!L) throw E('找不到借用單');
+      if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以延期');
+      return doExtend(c, L, s(c.p.end), s(c.p.note), bool(c.p.force));
+    },
+    /** 批次核准:一張失敗不影響其他張,回報哪幾張沒過 */
+    approveMany: function (c) {
+      var ids = (c.p.ids || []).map(s).filter(Boolean), ok = 0, fail = [];
+      if (!ids.length) throw E('請先勾選要核准的借用單');
+      if (ids.length > 50) throw E('一次最多核准 50 張');
+      ids.forEach(function (id) {
+        var sub = { db: c.db, p: { id: id, note: s(c.p.note), force: bool(c.p.force) }, user: c.user,
+          today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify };
+        try { ADMIN.approve(sub); ok++; }
+        catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }
+      });
+      return { ok: ok, fail: fail };
     },
     checkout: function (c) {
       var L = byId(c.db.Loans, s(c.p.id));
@@ -648,9 +766,13 @@ var Logic = (function () {
   /** 當面確認:admin 已由身份積木驗證 */
   function confirmOnSite(c, admin) {
     var L = ownLoan(c), req = L.request;
-    if (!req || !req.type) throw E('沒有待確認的簽收 / 歸還');
+    if (!req || !req.type) throw E('沒有待確認的請求');
     var sub = { db: c.db, p: {}, user: admin, onSite: true, log: c.logAs(admin), notify: c.notify, today: c.today, now: c.now };
-    return req.type === 'pickup' ? doCheckout(sub, L, req.units, req.note) : doReceive(sub, L, req.lines, req.note);
+    if (req.type === 'pickup') return doCheckout(sub, L, req.units, req.note);
+    if (req.type === 'return') return doReceive(sub, L, req.lines, req.note);
+    if (req.type === 'extend') return doExtend(sub, L, req.end, req.note, false);
+    if (req.type === 'transfer') return doTransfer(sub, L, req.toId, req.note);
+    throw E('不支援的請求類型');
   }
 
   /** 每日提醒:回傳通知事件(由排程積木交給通知積木寄出) */

@@ -51,22 +51,39 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   if (!cheads.some(h => /^eReader/.test(h)) || !cheads.some(h => /^體驗區/.test(h))) throw new Error('目錄分段不正確:' + cheads.join('|'));
   await shot('catalog_cats');
   const d = k => new Date(Date.now() + k * 864e5).toISOString().slice(0, 10);
-  const btns = await p.$$('[data-act=add-cart]'); await btns[0].click(); await btns[1].click();
-  await p.click('[data-v=plan]'); await wait(400);
+  // 多選一起填單
+  const picks = await p.$$('[data-mpick]');
+  await picks[0].check(); await picks[1].check(); await wait(400);
+  if (!await p.isVisible('.multibar')) throw new Error('多選後沒有出現「一起填單」');
+  await shot('multi'); await p.click('[data-act=multi-go]'); await wait(600);
+  const nLines = await p.$$eval('#plines .line', els => els.length);
+  if (nLines !== 2) throw new Error('一起填單應帶入 2 項,實際 ' + nLines);
   await p.fill('#ps', d(1)); await p.dispatchEvent('#ps', 'change'); await p.fill('#pe', d(3)); await p.dispatchEvent('#pe', 'change'); await wait(500);
   await p.fill('[name=event]', '台北展'); await wait(200); await shot('plan');
-  await p.click('#psubmit'); await wait(500); await p.click('.modal [data-v=mine]'); await wait(400); await shot('mine');
+  await p.click('#psubmit'); await wait(500); await p.click('.modal [data-v=mine]'); await wait(600); await shot('mine');
+  // 改單:待審核時可以自己改,不用取消重來
+  await p.click('[data-act=edit-loan]'); await wait(800);
+  if (!await p.isVisible('[data-act=cancel-edit]')) throw new Error('沒有進入改單模式');
+  await p.fill('[name=event]', '台北展(改過)'); await wait(300);
+  await p.click('#psubmit'); await wait(900);
+  const mineTxt = await p.textContent('.loans');
+  if (!/台北展\(改過\)/.test(mineTxt)) throw new Error('改單沒生效:' + mineTxt.replace(/\n/g, ' ').slice(0, 120));
   await p.click('#menu-btn'); await p.click('#m-out');
   // 管理者核准
   await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
   await p.waitForSelector('#tabs .tab'); await p.click('[data-v=dash]'); await p.waitForSelector('.kpis'); await p.click('[data-v=loans]'); await wait(300);
-  await p.click('[data-f=pending]'); await wait(300); await p.click('[data-act=approve]'); await p.waitForSelector('#ago'); await p.click('#ago'); await wait(500);
+  await p.click('[data-f=pending]'); await wait(400); await p.click('[data-act=approve]'); await p.waitForSelector('#ago'); await p.click('#ago'); await wait(600);
   await p.click('#menu-btn'); await p.click('#m-out');
   // 同仁簽收 + 當面確認
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
   await p.click('[data-v=mine]'); await wait(400); await p.click('[data-act=u-pickup]'); await p.waitForSelector('#pgo2');
-  const chips = await p.$$('[data-pick]'); await chips[0].click(); await shot('pickup'); await p.click('#pgo2'); await p.waitForSelector('#osf');
-  await p.fill('#osf [name=emp]', '90001'); await p.fill('#osf [name=pin]', '1234'); await p.click('#osf .btn.pri'); await wait(700); await shot('mine_out');
+  await p.click('#pauto'); await wait(500);                       // 自動指派:不用逐台勾
+  const pc = await p.textContent('[data-pc]');
+  if (!/已選 1 \/ 1/.test(pc)) throw new Error('自動選好沒生效:' + pc);
+  await shot('pickup'); await p.click('#pgo2'); await p.waitForSelector('#osf');
+  // 一次把兩欄填好再送出,避免自動聚焦跟輸入搶時序
+  await p.$eval('#osf', (f, v) => { f.emp.value = v.e; f.pin.value = v.p; }, { e: '90001', p: '1234' });
+  await p.click('#osf .btn.pri'); await wait(900); await shot('mine_out');
   const st = await p.textContent('.loans'); if (!/出借中/.test(st)) throw new Error('未變成出借中');
   // 歸還
   await p.click('[data-act=u-return]'); await p.waitForSelector('#ugo2'); await p.click('#ugo2'); await p.waitForSelector('#osf'); await p.click('.modal [data-act=close-render]'); await wait(500);
@@ -107,6 +124,67 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-v=dash]'); await p.waitForSelector('.kpis');
   await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2'); await p.click('#rgo2'); await wait(600);
   await p.click('[data-f=returned]'); await wait(300); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
+  // ---- 待辦 / 批次核准 / 延期 / 轉借 / 列印 ----
+  const makeLoan = async (name, d1, d2) => {
+    await p.click('[data-v=catalog]'); await wait(900);
+    const ps = await p.$$('[data-mpick]'); await ps[1].check(); await wait(300);
+    await p.click('[data-act=multi-go]'); await wait(900);
+    await p.fill('#ps', d1); await p.dispatchEvent('#ps', 'change');
+    await p.fill('#pe', d2); await p.dispatchEvent('#pe', 'change'); await wait(700);
+    await p.fill('[name=event]', name); await wait(300);
+    await p.click('#psubmit'); await wait(900); await p.click('.modal [data-act=close]'); await wait(400);
+  };
+  await p.click('#menu-btn'); await p.click('#m-out');
+  await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
+  await makeLoan('延期測試', d(10), d(12));
+  await makeLoan('轉借測試', d(20), d(22));
+  await p.click('#menu-btn'); await p.click('#m-out');
+  await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
+  await p.waitForSelector('#tabs .tab'); await p.click('[data-v=dash]'); await p.waitForSelector('.kpis'); await wait(800);
+  if (!await p.isVisible('.card.todo')) throw new Error('總覽沒有「今天要做的事」');
+  const todoTxt = await p.textContent('.card.todo');
+  if (!/待審核/.test(todoTxt)) throw new Error('待辦沒列出待審核:' + todoTxt.replace(/\n/g, ' '));
+  await shot('todo');
+  await p.click('.card.todo [data-act=go-loans][data-f=pending]'); await wait(1000);
+  if (!await p.isVisible('.bulkbar')) throw new Error('沒有出現批次核准列');
+  await p.click('#lall'); await wait(600);
+  await p.click('#lgo'); await p.waitForSelector('#bgo'); await p.click('#bgo'); await wait(1500);
+  const bulkTxt = await p.textContent('.modal');
+  if (!/成功 2 張/.test(bulkTxt)) throw new Error('批次核准結果不對:' + bulkTxt.replace(/\n/g, ' ').slice(0, 140));
+  await shot('bulk'); await p.click('.modal [data-act=close-render]'); await wait(800);
+  // 同仁:申請延期 + 轉借
+  await p.click('#menu-btn'); await p.click('#m-out');
+  await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
+  await p.click('[data-v=mine]'); await wait(1000);
+  await (await p.$$('[data-act=u-extend]'))[0].click(); await p.waitForSelector('#xgo');
+  await p.fill('#xd', d(30)); await p.click('#xgo'); await wait(1200);
+  await p.click('.modal [data-act=close-render]'); await wait(900);
+  await (await p.$$('[data-act=u-transfer]'))[0].click(); await p.waitForSelector('#tgo');
+  await p.fill('#td', '10477'); await p.click('#tgo'); await wait(1200);
+  await p.click('.modal [data-act=close-render]'); await wait(900);
+  const stages = await p.textContent('.loans');
+  if (!/待確認延期/.test(stages) || !/待確認轉借/.test(stages)) throw new Error('請求狀態沒顯示:' + stages.replace(/\n/g, ' ').slice(0, 160));
+  await shot('requests');
+  // 管理者:同意延期與轉借
+  await p.click('#menu-btn'); await p.click('#m-out');
+  await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
+  await p.waitForSelector('#tabs .tab'); await p.click('[data-v=loans]'); await wait(700);
+  await p.click('[data-f=request]'); await wait(1000);
+  const reqN = (await p.$$('[data-act=req-ok]')).length;
+  if (reqN !== 2) throw new Error('待確認應有 2 張,實際 ' + reqN);
+  for (let k = 0; k < 2; k++) {
+    await (await p.$$('[data-act=req-ok]'))[0].click(); await p.waitForSelector('#dgo');
+    await p.click('#dgo'); await wait(1400); await p.click('[data-f=request]'); await wait(900);
+  }
+  await p.click('[data-f=all]'); await wait(1000);
+  const allTxt = await p.textContent('#llist');
+  if (!/測試員工B/.test(allTxt)) throw new Error('轉借後借用人沒換人');
+  if (!new RegExp(d(30)).test(allTxt)) throw new Error('延期後歸還日沒改成 ' + d(30));
+  // 列印:攔下 window.open,檢查產出的單據內容
+  await p.evaluate(() => { window.__printed = ''; window.open = () => ({ document: { write: h => { window.__printed = h; }, close() { } }, print() { } }); });
+  await (await p.$('[data-act=print-loan]')).click(); await wait(700);
+  const printed = await p.evaluate(() => window.__printed || '');
+  if (!/展品借用單/.test(printed) || !/簽名/.test(printed)) throw new Error('列印單據內容不對');
   await p.setViewportSize({ width: 390, height: 844 }); await p.click('[data-v=catalog]'); await wait(300); await shot('mobile');
   const sw = await p.evaluate(() => document.documentElement.scrollWidth);
   console.log(errs.length ? 'ERR ' + errs.join('|') : '✔ UI 流程通過', 'scrollWidth=' + sw);

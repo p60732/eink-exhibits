@@ -63,7 +63,9 @@ function routes_() {
   add('user', false, U, { lookup: ['code'] }, A_ALL);
   add('user', true, U, {
     createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force'],
-    cancelLoan: ['id', 'reason'], requestPickup: ['id', 'units', 'note'], requestReturn: ['id', 'lines', 'note'], cancelRequest: ['id']
+    updateLoan: ['id', 'event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'force'],
+    cancelLoan: ['id', 'reason'], requestPickup: ['id', 'units', 'note'], requestReturn: ['id', 'lines', 'note'], cancelRequest: ['id'],
+    requestExtend: ['id', 'end', 'note'], requestTransfer: ['id', 'emp', 'note']
   });
   // 邏輯積木:管理者
   add('admin', false, A, { dashboard: [] },
@@ -80,7 +82,8 @@ function routes_() {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
     stocktake: ['qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
-    saveCat: ['cat'], moveCat: ['id', 'dir']
+    saveCat: ['cat'], moveCat: ['id', 'dir'],
+    approveMany: ['ids', 'note', 'force'], decideRequest: ['id', 'ok', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force']
   });
   // 當面確認:先由身份積木驗證在場管理者,再交邏輯積木
   R.confirmOnSite = { auth: 'user', write: true, fields: ['id', 'emp', 'pin'], fn: function (c) { return Logic.confirmOnSite(c, Identity.verifyAdmin(c.db, c.p.emp, c.p.pin)); } };

@@ -112,6 +112,87 @@ assert.throws(() => Gx.ctx.setupSheets(), /擁有者/);
 const logText = JSON.stringify(G.sheets['操作紀錄'].data);
 assert.ok(!/5678|8765|1234/.test(logText), '操作紀錄不得含 PIN');
 
+// ---- 借用單流程:改單 / 延期 / 轉借 / 批次核准 ----
+const UX = ok('login', { emp: '10477' }).token;   // 測試員工B(先前登出過,重新取得憑證)
+// 改單:待審核時可以自己改,不用取消重來
+const E1 = ok('createLoan', { event: '初稿', start: '2026-11-10', end: '2026-11-12', lines: [{ itemId: stand.id, qty: 1 }] }, U);
+const E1b = ok('updateLoan', { id: E1.id, event: '改過的展', venue: '南港', start: '2026-11-10', end: '2026-11-15', lines: [{ itemId: stand.id, qty: 2 }] }, U);
+assert.strictEqual(E1b.event, '改過的展');
+assert.strictEqual(E1b.end, '2026-11-15');
+assert.strictEqual(E1b.lines[0].qty, 2, '改單要換成新的品項數量');
+assert.strictEqual(E1b.status, 'pending', '改完仍是待審核');
+bad('updateLoan', { id: E1.id, event: 'x', start: '2026-11-10', end: '2026-11-15', lines: [{ itemId: stand.id, qty: 1 }] }, UX, /不是你的/);
+// 批次核准:一次核准多張,失敗的單獨回報
+const E2 = ok('createLoan', { event: '同時段A', start: '2026-11-20', end: '2026-11-22', lines: [{ itemId: stand.id, qty: 1 }] }, U);
+const E3 = ok('createLoan', { event: '同時段B', start: '2026-11-20', end: '2026-11-22', lines: [{ itemId: stand.id, qty: 1 }] }, UX);
+const many = ok('approveMany', { ids: [E1.id, E2.id, E3.id] }, A);
+assert.strictEqual(many.ok, 3, '三張都該核准');
+assert.strictEqual(many.fail.length, 0);
+// 兩張搶同一批:先核准的吃掉庫存,後面那張單獨失敗,不影響前面
+const av = ok('check', { start: '2026-11-20', end: '2026-11-22', lines: [{ itemId: stand.id, qty: 1 }] }, U)[0].available;
+assert.ok(av >= 1, '測試前提:這段期間還借得到');
+const E5 = ok('createLoan', { event: '搶同一批A', start: '2026-11-20', end: '2026-11-22', lines: [{ itemId: stand.id, qty: av }] }, U);
+const E6 = ok('createLoan', { event: '搶同一批B', start: '2026-11-20', end: '2026-11-22', lines: [{ itemId: stand.id, qty: av }] }, U);
+const mix = ok('approveMany', { ids: [E5.id, E6.id] }, A);
+assert.strictEqual(mix.ok, 1, '先到的那張要過');
+assert.strictEqual(mix.fail.length, 1, '後到的那張因為量被吃掉要失敗');
+assert.strictEqual(mix.fail[0].id, E6.id);
+assert.match(mix.fail[0].error, /數量不足/);
+ok('cancelLoan', { id: E5.id }, U); ok('cancelLoan', { id: E6.id }, U);
+bad('approveMany', { ids: [] }, A, /請先勾選/);
+bad('approveMany', { ids: [E1.id] }, U, /管理者權限/);
+// 核准後就不能再自己改單了
+bad('updateLoan', { id: E1.id, event: '不該改得動', start: '2026-11-10', end: '2026-11-15', lines: [{ itemId: stand.id, qty: 1 }] }, U, /待審核/);
+// 已核准的不能再用批次核准,會被單獨列為失敗
+const again = ok('approveMany', { ids: [E1.id] }, A);
+assert.strictEqual(again.ok, 0);
+assert.match(again.fail[0].error, /不是待審核/);
+// 延期:同仁申請 → 管理者同意
+bad('requestExtend', { id: E1.id, end: '2026-11-14' }, U, /要比原本的 2026-11-15 晚/);
+bad('requestExtend', { id: E1.id, end: '2026-13-01' }, U, /請填寫新的歸還日/);
+ok('requestExtend', { id: E1.id, end: '2026-11-25', note: '展期延後' }, U);
+assert.strictEqual(ok('myLoans', {}, U).find(l => l.id === E1.id).stage, '待確認延期');
+bad('requestTransfer', { id: E1.id, emp: '10477' }, U, /還有待確認的請求/);
+const ext = ok('decideRequest', { id: E1.id, ok: true }, A);
+assert.strictEqual(ext.end, '2026-11-25', '同意後歸還日要換掉');
+assert.strictEqual(ext.request, null);
+// 不同意延期:日期不變、請求清掉
+ok('requestExtend', { id: E1.id, end: '2026-12-31' }, U);
+const no = ok('decideRequest', { id: E1.id, ok: false, note: '那段要給別的展' }, A);
+assert.strictEqual(no.end, '2026-11-25', '不同意就不該改日期');
+assert.strictEqual(no.request, null);
+// 管理者也可以直接延期
+assert.strictEqual(ok('extendLoan', { id: E1.id, end: '2026-11-28' }, A).end, '2026-11-28');
+bad('extendLoan', { id: E1.id, end: '2026-11-01' }, A, /要比原本的/);
+// 轉借:同仁申請 → 管理者同意 → 借用人換人
+bad('requestTransfer', { id: E1.id, emp: '99999' }, U, /查無此工號/);
+bad('requestTransfer', { id: E1.id, emp: '10231' }, U, /本來就是這個人/);
+ok('requestTransfer', { id: E1.id, emp: '10477', note: '我出差' }, U);
+bad('requestExtend', { id: E1.id, end: '2026-12-31' }, U, /還有待確認的請求/);
+assert.strictEqual(ok('myLoans', {}, U).find(l => l.id === E1.id).stage, '待確認轉借');
+const tr = ok('decideRequest', { id: E1.id, ok: true }, A);
+assert.strictEqual(tr.applicant, '測試員工B', '轉借後借用人要換人');
+assert.ok(!ok('myLoans', {}, U).some(l => l.id === E1.id), '轉走後就不在原借用人的清單裡');
+assert.ok(ok('myLoans', {}, UX).some(l => l.id === E1.id), '要出現在新借用人的清單裡');
+// 當面確認也走同一條路:延期請求可以請管理者當場確認(用副管理者,主管理者前面被鎖測試鎖住了)
+ok('requestExtend', { id: E1.id, end: '2026-12-05' }, UX);
+assert.strictEqual(ok('confirmOnSite', { id: E1.id, emp: '90002', pin: '8765' }, UX).end, '2026-12-05');
+// 延期要檢查「延長出來的那一段」有沒有庫存
+const avD = ok('check', { start: '2026-12-01', end: '2026-12-31', lines: [{ itemId: stand.id, qty: 1 }] }, U)[0].available;
+assert.ok(avD >= 1, '測試前提:12 月還借得到');
+const H1 = ok('createLoan', { onBehalf: true, applicant: '10231', event: '把12月吃滿', start: '2026-12-01', end: '2026-12-31', lines: [{ itemId: stand.id, qty: avD }] }, A);
+const H2 = ok('createLoan', { onBehalf: true, applicant: '10231', event: '想延到12月', start: '2026-11-05', end: '2026-11-06', lines: [{ itemId: stand.id, qty: 1 }] }, A);
+bad('extendLoan', { id: H2.id, end: '2026-12-20' }, A, /延長期間數量不足/);
+assert.strictEqual(ok('loans', { filter: 'all' }, A).find(l => l.id === H2.id).end, '2026-11-06', '擋下來之後日期不能被改到');
+ok('cancelLoan', { id: H1.id }, A);
+assert.strictEqual(ok('extendLoan', { id: H2.id, end: '2026-12-20' }, A).end, '2026-12-20', '騰出空間後就延得動');
+ok('cancelLoan', { id: H2.id }, A);
+
+// 待審核的不能延期
+const E4 = ok('createLoan', { event: '還沒審', start: '2026-12-10', end: '2026-12-12', lines: [{ itemId: stand.id, qty: 1 }] }, U);
+bad('requestExtend', { id: E4.id, end: '2026-12-20' }, U, /已核准或出借中/);
+ok('cancelLoan', { id: E4.id }, U);
+
 // ---- 分類 ----
 const cats0 = ok('cats', {}, U);
 assert.strictEqual(cats0.slice(0, 7).map(x => x.name).join(), 'eReader,eNote,Logistics & Factory,Prism,Signage,Lifestyle,Mobile & Wearables', '預設七個分類要照順序在最前面');

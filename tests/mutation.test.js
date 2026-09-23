@@ -22,7 +22,13 @@ const M = [
   ['30_memory.gs', "if (only.values.indexOf(String(vals[i][0]).trim()) >= 0) return i;", "if (only.values.indexOf(String(vals[i][0]).trim()) >= 0) return i + 1;", '尾段讀取少讀最舊的一筆'],
   ['20_logic.gs', "c.db.Items.forEach(function (it) { if (it.category === old) { it.category = name; dirty(c.db, 'Items'); } });", '', '分類改名後展品沒跟著換'],
   ['20_logic.gs', "if (used) throw E('還有 ' + used + ' 項展品屬於「' + cat.name + '」,請先改到其他分類');", '', '停用分類時沒檢查底下還有展品'],
-  ['20_logic.gs', "if (same && !bool(same.archived)) throw E('分類「' + same.name + '」已存在');", '', '允許建立重複的分類']
+  ['20_logic.gs', "if (same && !bool(same.archived)) throw E('分類「' + same.name + '」已存在');", '', '允許建立重複的分類'],
+  // 借用單流程的守門
+  ['20_logic.gs', "if (L.status !== 'pending') throw E('只有「待審核」的申請可以修改');", '', '已核准的單也能被改掉'],
+  ['20_logic.gs', "if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');", '', '延期可以往前縮'],
+  ['20_logic.gs', "if (short.length && !force) throw E('延長期間數量不足:'", "if (false) throw E('延長期間數量不足:'", '延期不檢查延長期間的庫存'],
+  ['20_logic.gs', "if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');", '', '同一張單可以同時掛兩個請求'],
+  ['20_logic.gs', "catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }", 'catch (e) { ok++; }', '批次核准把失敗的也算成功']
 ];
 let pass = 0; const fail = [];
 M.forEach(([file, find, repl, desc]) => {
