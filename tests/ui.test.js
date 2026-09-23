@@ -42,6 +42,17 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('#menu-btn'); await p.click('#m-out');
   await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
   await p.waitForSelector('#tabs .tab'); await p.click('[data-v=dash]'); await p.waitForSelector('.kpis'); await shot('dash_req');
+  // 管理者切換到同仁視角預覽,再切回來
+  await p.click('#menu-btn'); await p.click('#m-view'); await wait(600);
+  const asTabs = await p.$$eval('#tabs .tab', els => els.map(e => e.dataset.v));
+  if (asTabs.join() !== 'catalog,plan,mine') throw new Error('同仁視角分頁不正確:' + asTabs.join());
+  if (!await p.isVisible('#viewas-btn')) throw new Error('同仁視角提示鍵沒出現');
+  if (await p.isVisible('[data-v=dash]')) throw new Error('同仁視角不該看到總覽');
+  await shot('as_user');
+  await p.click('#viewas-btn'); await wait(600);
+  if (!await p.isVisible('[data-v=dash]')) throw new Error('未回到管理者視角');
+  if (await p.isVisible('#viewas-btn')) throw new Error('提示鍵沒收起來');
+  await p.click('[data-v=dash]'); await p.waitForSelector('.kpis');
   await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2'); await p.click('#rgo2'); await wait(600);
   await p.click('[data-f=returned]'); await wait(300); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
   await p.setViewportSize({ width: 390, height: 844 }); await p.click('[data-v=catalog]'); await wait(300); await shot('mobile');

@@ -7,7 +7,7 @@
  */
 /* ===================== 狀態與工具 ===================== */
 const S = {
-  token: null, user: null, view: 'catalog', items: [], cats: [],
+  token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [],
   cart: [], plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
   loanFilter: 'pending', itemQ: '', showArchived: false, logQ: ''
@@ -15,7 +15,9 @@ const S = {
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const isAdmin = () => S.user && S.user.role === 'admin';
+const isRealAdmin = () => !!(S.user && S.user.role === 'admin');
+// 管理者可切到「同仁視角」預覽:畫面一律以 isAdmin() 為準,實際權限仍在後端
+const isAdmin = () => isRealAdmin() && !S.asUser;
 const store = {
   get(k, d) { try { const v = localStorage.getItem('exh_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('exh_' + k, JSON.stringify(v)); } catch (e) { } },
@@ -180,18 +182,37 @@ function showLogin(mode) {
 }
 function logout(expired) {
   if (!expired && S.token) Api.call('logout', {}, S.token).catch(() => { });   // 後端作廢 token
-  S.token = null; S.user = null; RCACHE.clear(); store.del('token'); store.del('user');
+  S.token = null; S.user = null; S.asUser = false; RCACHE.clear(); store.del('token'); store.del('user');
   if (expired) toast('登入已過期,請重新登入', true);
   showLogin('login');
 }
 function enterApp() {
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); $('#top').classList.remove('hidden');
-  $('#who').textContent = S.user.name + (S.user.empNo ? ' ' + S.user.empNo : '') + (isAdmin() ? '(管理者)' : '');
-  $('#m-pin').classList.toggle('hidden', !isAdmin());
+  S.asUser = isRealAdmin() && !!store.get('asUser_' + S.user.id, false);
+  syncRole();
   $('#lookup-btn').classList.remove('hidden');
   const saved = store.get('view_' + S.user.id, null);
   S.view = saved && tabsFor().some(t => t[0] === saved) ? saved : (isAdmin() ? 'dash' : 'catalog');
   if (S.user.mustChangePin) { $('#main').innerHTML = ''; renderTabs(); return pinModal(true); }
+  render();
+}
+
+/** 依目前視角同步頁首與選單 */
+function syncRole() {
+  $('#who').textContent = S.user.name + (S.user.empNo ? ' ' + S.user.empNo : '') + (isAdmin() ? '(管理者)' : '');
+  $('#m-pin').classList.toggle('hidden', !isAdmin());
+  $('#m-view').classList.toggle('hidden', !isRealAdmin());
+  $('#m-view').textContent = S.asUser ? '回到管理者視角' : '切換到同仁視角';
+  $('#viewas-btn').classList.toggle('hidden', !S.asUser);
+}
+/** 切換管理者 / 同仁視角(只是預覽,不影響後端權限) */
+function setAsUser(on) {
+  if (!isRealAdmin()) return;
+  S.asUser = !!on;
+  store.set('asUser_' + S.user.id, S.asUser);
+  syncRole();
+  if (!tabsFor().some(t => t[0] === S.view)) S.view = S.asUser ? 'catalog' : 'dash';
+  toast(S.asUser ? '已切換到同仁視角,看到的和一般同仁一樣' : '已回到管理者視角');
   render();
 }
 
@@ -903,5 +924,7 @@ applyTheme(store.get('theme', 'light'));
 $('#m-theme').onclick = () => { $('#menu-pop').classList.add('hidden'); applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); };
 $('#lookup-btn').onclick = () => lookupModal();
 $('#menu-btn').onclick = () => $('#menu-pop').classList.toggle('hidden');
+$('#m-view').onclick = () => { $('#menu-pop').classList.add('hidden'); setAsUser(!S.asUser); };
+$('#viewas-btn').onclick = () => setAsUser(false);
 $('#m-pin').onclick = () => { $('#menu-pop').classList.add('hidden'); pinModal(); };
 $('#m-out').onclick = () => { $('#menu-pop').classList.add('hidden'); logout(); };

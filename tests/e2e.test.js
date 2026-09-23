@@ -113,17 +113,58 @@ const logText = JSON.stringify(G.sheets['操作紀錄'].data);
 assert.ok(!/5678|8765|1234/.test(logText), '操作紀錄不得含 PIN');
 
 // ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
-const full = makeEnv(); full.ctx.Memory.setup();
-// 用同一份資料重建環境:把試算表內容複製過去
-Object.keys(G.sheets).forEach(n => { full.sheets[n] = full.sheets[n] || G.ctx.SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n); });
+// 多做一筆封存展品與一筆待審單,讓限縮欄位(archived / status / request)都被走到
+const U2b = ok('login', { emp: '10477' }).token;   // 先前登出過,重新取得憑證
+const gone = ok('saveItem', { item: { name: '已封存燈箱', mode: 'qty', qty: 4 } }, A);
+ok('archiveItem', { id: gone.id, archived: true }, A);
+const L3 = ok('createLoan', { event: '待審中', start: '2026-12-01', end: '2026-12-03', lines: [{ itemId: stand.id, qty: 1 }] }, U2b);
+ok('approve', { id: L3.id }, A);
+ok('requestPickup', { id: L3.id, units: {} }, U2b);
+// 再留一筆「出借中」且指定到單台的借用單,讓「這台在誰手上」也被比對到
+const L4 = ok('createLoan', { event: '出借中的展', start: '2026-11-01', end: '2026-11-05', lines: [{ itemId: panel.id, qty: 1 }] }, U);
+ok('approve', { id: L4.id }, A);
+ok('checkout', { id: L4.id, units: { [panel.id]: ['E0002'] } }, A);
+assert.strictEqual(ok('units', { itemId: panel.id }, A).find(u => u.id === 'E0002').holder.applicant, '測試員工A');
+
 const origLoad = G.ctx.Memory.load;
-const readActions = [['catalog', {}, U], ['items', {}, A], ['dashboard', {}, A], ['loans', { filter: 'all' }, A], ['myLoans', {}, U], ['units', {}, A]];
+const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
+const readActions = [
+  ['status', {}, null], ['me', {}, U], ['users', {}, A], ['logs', { limit: 50 }, A],
+  ['catalog', {}, U], ['catalog', { start: '2026-10-01', end: '2026-10-05' }, U],
+  ['check', { start: '2026-10-01', end: '2026-10-05', lines: [{ itemId: stand.id, qty: 3 }] }, U],
+  ['myLoans', {}, U], ['myLoans', {}, U2b],
+  ['pickupOptions', { id: L3.id }, U2b], ['pickupOptions', { id: L.id }, U],
+  ['lookup', { code: 'E0001' }, U2b], ['lookup', { code: 'E0001' }, A], ['lookup', { code: '沒這個' }, U],
+  ['dashboard', {}, A], ['items', {}, A], ['units', {}, A], ['units', { itemId: panel.id }, A]
+];
+['all', 'active', 'overdue', 'request', 'pending', 'returned'].forEach(f => readActions.push(['loans', { filter: f }, A]));
 readActions.forEach(([act, p2, tok]) => {
-  const restricted = JSON.stringify(ok(act, p2, tok));
-  G.ctx.Memory.load = function () { return origLoad(); };          // 忽略限縮,載入全部
-  const complete = JSON.stringify(ok(act, p2, tok));
+  const restricted = run(act, p2, tok);
+  G.ctx.Memory.load = function () { return origLoad(); };          // 忽略限縮,整張整欄載入
+  const complete = run(act, p2, tok);
   G.ctx.Memory.load = origLoad;
-  assert.strictEqual(restricted, complete, act + ' 限縮載入的結果不一致');
+  assert.strictEqual(restricted, complete, act + '(' + JSON.stringify(p2) + ')限縮載入的結果不一致');
 });
 assert.ok(ok('units', {}, A).length >= 3, 'units 省略 itemId 應回傳全部單台');
+
+// 記憶積木本身:指定欄位讀到的值必須與整張讀一致(含跨段、亂序、不存在的欄位)
+const M = G.ctx.Memory;
+const fullDb = M.load();
+[['Items', ['id', 'name', 'archived']], ['Items', ['archived', 'id', 'qty', 'mode', '不存在的欄位']],
+ ['Units', ['status', 'itemId']], ['Loans', ['lines', 'id', 'status', 'start', 'end']],
+ ['Loans', ['applicant', 'id']], ['Users', ['id', 'role', 'sessionVer']]].forEach(([t, cols]) => {
+  const part = M.load({ [t]: cols })[t];
+  assert.strictEqual(part.length, fullDb[t].length, t + ' 指定欄位後筆數不同');
+  part.forEach((row, i) => cols.filter(c => c in fullDb[t][i]).forEach(c => {
+    assert.strictEqual(JSON.stringify(row[c]), JSON.stringify(fullDb[t][i][c]), t + '.' + c + ' 第 ' + i + ' 列值不同');
+  }));
+  assert.strictEqual(part.map(r => r.id).join(), fullDb[t].map(r => r.id).join(), t + ' 指定欄位後 id 順序不同');
+});
+// 沒指定的欄位補空值,不會殘留上一次的內容
+const lite = M.load({ Loans: ['id', 'status'] }).Loans[0];
+assert.strictEqual(lite.event, '', '未讀取的欄位應為空值');
+assert.strictEqual(JSON.stringify(lite.lines), '[]', '未讀取的 JSON 欄位應為空陣列');
+// 未列在 spec 的工作表不讀取
+assert.strictEqual(M.load({ Users: ['id'] }).Items.length, 0, '未指定的工作表不應載入');
+
 console.log('✔ e2e 全部通過');

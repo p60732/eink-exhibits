@@ -11,7 +11,15 @@ const M = [
   ['10_identity.gs', 'function guardOk_(k) { return', 'function guardOk_(k) { return true || ', '拿掉 PIN 錯誤次數限制'],
   ['20_logic.gs', 'if (short.length && !(isAdmin && c.p.force)) {', 'if (false) {', '拿掉庫存不足檢查'],
   ['20_logic.gs', "if (L.applicantId !== c.user.id && c.user.role !== 'admin') throw E('這不是你的借用單');", '', '可操作別人的借用單'],
-  ['20_logic.gs', "if (!isDate(p.start) || !isDate(p.end)) throw E('請填寫借用起訖日期');", '', '拿掉日期格式驗證']
+  ['20_logic.gs', "if (!isDate(p.start) || !isDate(p.end)) throw E('請填寫借用起訖日期');", '', '拿掉日期格式驗證'],
+  // 效能重構的守門:欄位少讀 / 表少讀 / 快取沒失效,都必須被 e2e 抓到
+  ['00_gateway.gs', "LOAN_CALC: ['id', 'status', 'start', 'end', 'lines']", "LOAN_CALC: ['id', 'status', 'start', 'end']", '可借量計算少讀 lines 欄'],
+  ['00_gateway.gs', "ITEM_CALC: ['id', 'name', 'mode', 'qty', 'archived']", "ITEM_CALC: ['id', 'name', 'mode', 'archived']", '展品少讀 qty 欄'],
+  ['00_gateway.gs', "LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines', 'applicant', 'dept', 'event']", "LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines']", '單台持有人少讀 applicant 欄'],
+  ['30_memory.gs', "if (cols.indexOf('id') < 0) cols.push('id');", '', '指定欄位時漏讀 id'],
+  ['30_memory.gs', "if (Object.keys(db._dirty || {}).length) bumpVersion_();", '', '寫入後快取沒有失效'],
+  ['00_gateway.gs', "values: ['pending', 'approved', 'out']", "values: ['pending']", '庫存計算漏掉出借中的單'],
+  ['30_memory.gs', "if (only.values.indexOf(String(vals[i][0]).trim()) >= 0) return i;", "if (only.values.indexOf(String(vals[i][0]).trim()) >= 0) return i + 1;", '尾段讀取少讀最舊的一筆']
 ];
 let pass = 0; const fail = [];
 M.forEach(([file, find, repl, desc]) => {

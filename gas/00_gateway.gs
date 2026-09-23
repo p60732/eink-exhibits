@@ -22,34 +22,57 @@ var ROUTES_ = null;
 function routes_() {
   if (ROUTES_) return ROUTES_;
   var R = {};
-  // add(權限, 是否寫入, 積木動作表, { 動作: [允許的參數欄位] }, 需要的資料表)
-  // 讀取類動作只載入需要的工作表(寫入類一律全載,確保計算正確)
-  function add(auth, write, table, spec, tables) {
+  // add(權限, 是否寫入, 積木動作表, { 動作: [允許的參數欄位] }, 需要的資料)
+  // 讀取類動作只載入需要的工作表與欄位;寫入類一律全載,確保計算正確
+  function add(auth, write, table, spec, need) {
     Object.keys(spec).forEach(function (k) {
-      R[k] = { auth: auth, write: write, fields: spec[k], fn: table[k], tables: write ? null : (tables || null) };
+      R[k] = { auth: auth, write: write, fields: spec[k], fn: table[k], tables: write ? null : (need || null) };
     });
   }
-  var T_ALL = ['Items', 'Units', 'Loans', 'Users'];
+  // 欄位組合:讀取類動作只讀真正用到的欄位(Sheets 讀取成本與儲存格數量成正比)
+  var C = {
+    LOAN_CALC: ['id', 'status', 'start', 'end', 'lines'],                                  // 只做可借量 / 在庫計算
+    LOAN_MINE: ['id', 'status', 'start', 'end', 'lines', 'applicantId'],                   // 加上「是不是我的單」
+    LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines', 'applicant', 'dept', 'event'],    // 加上「這台在誰手上」
+    UNIT_CALC: ['id', 'itemId', 'status'],
+    UNIT_PICK: ['id', 'itemId', 'status', 'serial'],
+    ITEM_CALC: ['id', 'name', 'mode', 'qty', 'archived'],
+    USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange']   // 不讀 pinHash / email
+  };
+  var A_ALL = { Items: '*', Units: '*', Loans: '*', Users: C.USER_AUTH };
+  // 只做庫存 / 可借量計算時,已歸還與已取消的舊單完全用不到:
+  // 記憶積木會先只讀 status 欄找出第一筆未結案的位置,再從那裡讀到最後
+  var LIVE = { field: 'status', values: ['pending', 'approved', 'out'] };
   var I = Identity.actions, U = Logic.USER, A = Logic.ADMIN;
   // 身份積木
-  add('public', false, I, { status: [], login: ['emp', 'pin'] }, ['Users']);
+  add('public', false, I, { status: [], login: ['emp', 'pin'] }, { Users: '*' });
   add('public', true, I, { setup: ['name', 'empNo', 'dept', 'email', 'pin'] });
-  add('user', false, I, { me: [] }, ['Users']);
+  add('user', false, I, { me: [] }, { Users: '*' });
   add('user', true, I, { logout: [], changePin: ['oldPin', 'newPin'] });
-  add('admin', false, I, { users: [] }, ['Users']);
+  add('admin', false, I, { users: [] }, { Users: '*' });
   add('admin', true, I, { saveUser: ['user'], importUsers: ['rows'] });
   // 邏輯積木:同仁
-  add('user', false, U, {
-    catalog: ['start', 'end'], check: ['start', 'end', 'lines', 'excludeId'], myLoans: [],
-    pickupOptions: ['id'], lookup: ['code']
-  }, T_ALL);
+  add('user', false, U, { catalog: ['start', 'end'], check: ['start', 'end', 'lines', 'excludeId'] },
+    { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC, only: LIVE }, Users: C.USER_AUTH });
+  add('user', false, U, { myLoans: [] },
+    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Users: C.USER_AUTH });
+  add('user', false, U, { pickupOptions: ['id'] },
+    { Items: C.ITEM_CALC, Units: C.UNIT_PICK, Loans: C.LOAN_MINE, Users: C.USER_AUTH });
+  add('user', false, U, { lookup: ['code'] }, A_ALL);
   add('user', true, U, {
     createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force'],
     cancelLoan: ['id', 'reason'], requestPickup: ['id', 'units', 'note'], requestReturn: ['id', 'lines', 'note'], cancelRequest: ['id']
   });
   // 邏輯積木:管理者
-  add('admin', false, A, { dashboard: [], loans: ['filter'], items: [], units: ['itemId'] }, T_ALL);
-  add('admin', false, A, { logs: ['limit'] }, ['Users']);
+  add('admin', false, A, { dashboard: [] },
+    { Items: '*', Units: '*', Loans: { cols: '*', only: LIVE }, Users: C.USER_AUTH });
+  add('admin', false, A, { loans: ['filter'] },
+    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Users: C.USER_AUTH });
+  add('admin', false, A, { items: [] },
+    { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC, only: LIVE }, Users: C.USER_AUTH });
+  add('admin', false, A, { units: ['itemId'] },
+    { Items: C.ITEM_CALC, Units: '*', Loans: C.LOAN_HOLD, Users: C.USER_AUTH });
+  add('admin', false, A, { logs: ['limit'] }, { Users: C.USER_AUTH });
   add('admin', true, A, {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
