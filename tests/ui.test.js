@@ -120,6 +120,23 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-v=catalog]'); await wait(700);
   const locSel = await p.$$eval('select[id^="loc-"]', els => els.filter(e => e.tagName === 'SELECT').map(e => [...e.options].map(o => o.textContent.trim())));
   if (!locSel.some(opts => opts.some(t => /新竹/.test(t)) && opts.some(t => /林口/.test(t)))) throw new Error('目錄沒有讓人選地點:' + JSON.stringify(locSel));
+  // 回歸:後端換版時 POST 會被當成 GET,回來的是健康檢查頁 —— 不可以被當成展品清單
+  let healthOnce = false;
+  await p.route('**/api', async route => {
+    const body = route.request().postData() || '';
+    if (healthOnce || !/"action":"catalog"/.test(body)) return route.continue();
+    healthOnce = true;                       // 只騙第一次,重試那次讓它拿到真資料
+    return route.fulfill({ status: 200, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ success: true, data: '展品管理 API 運作中 2026-09-23T00:00:00.000Z', error: null }) });
+  });
+  await p.evaluate(() => { RCACHE.clear(); });
+  await p.click('[data-v=items]'); await wait(300); await p.click('[data-v=catalog]'); await wait(3000);
+  if (!healthOnce) throw new Error('健康檢查回歸測試沒攔到 catalog,測試本身失效了');
+  const afterHealth = await p.evaluate(() => Array.isArray(S.items) ? 'array:' + S.items.length : typeof S.items);
+  if (!/^array:[1-9]/.test(afterHealth)) throw new Error('健康檢查頁被當成展品清單了:' + afterHealth);
+  if (!await p.$('.item-card')) throw new Error('重試後目錄應該要畫得出來');
+  await p.unroute('**/api');
+
   // 盤點:可以只盤一個廠區
   await p.click('[data-v=count]'); await p.waitForSelector('#ksite .catchip');
   const chips2 = await p.$$eval('#ksite .catchip', els => els.map(e => e.textContent.trim()));

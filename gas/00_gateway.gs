@@ -119,8 +119,14 @@ function checkPayload_(payload, fields, maxStr) {
 }
 function userError_(msg) { var e = new Error(msg); e.userFacing = true; return e; }
 
+/**
+ * 健康檢查頁。**一定要帶 health: true**:
+ * Apps Script 的 /exec 會先回 302 再轉址,偶爾(特別是剛換版本那幾秒)POST 會被當成 GET 重送,
+ * 於是前端拿到的是這一頁而不是它要的資料。沒有這個記號的話,前端會把這串字當成正常答案存進快取,
+ * 畫面就會變成「資料全都不見了」。前端看到 health 就當成連線失敗處理(讀取類會自動重試)。
+ */
 function doGet() {
-  return json_({ success: true, data: '展品管理 API 運作中 ' + new Date().toISOString(), error: null });
+  return json_({ success: false, health: true, data: null, error: '這是後端的健康檢查頁,前端請用 POST 呼叫。' + new Date().toISOString() });
 }
 
 function doPost(e) {

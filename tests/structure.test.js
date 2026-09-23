@@ -47,6 +47,13 @@ t('連線積木:統一回應格式 success/data/error', () => {
   assert.ok(/j\.success !== true/.test(read('js/connect.js')));
   assert.ok(/success: true, data: data, error: null/.test(read('gas/00_gateway.gs')));
 });
+t('連線積木:健康檢查頁不可以被當成資料(GAS 換版時 POST 會被當成 GET)', () => {
+  const c = read('js/connect.js');
+  assert.ok(/health === true/.test(c), 'connect.js 要認得 health 記號');
+  assert.ok(/API 運作中|健康檢查/.test(c), 'connect.js 也要擋掉舊版沒有記號的健康檢查頁');
+  assert.ok(/check_\(await once\(/.test(c), '兩次嘗試都要經過檢查');
+  assert.ok(/health: true/.test(read('gas/00_gateway.gs')), 'doGet 要帶 health 記號');
+});
 t('路由:每個動作都有欄位白名單', () => {
   const s = read('gas/00_gateway.gs');
   assert.ok(/checkPayload_\(req\.payload, route\.fields, route\.big\)/.test(s));

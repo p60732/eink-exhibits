@@ -43,7 +43,8 @@ const M = [
   ['20_logic.gs', "if (sites.length > 1) throw E('「' + it.name + '」放在 '", "if (false) throw E('「' + it.name + '」放在 '", '多地點時沒要求指定要借哪一點'],
   ['20_logic.gs', "} else if (sites.length && sites.indexOf(where) < 0) {", '} else if (false) {', '可以借一個根本沒庫存的地點'],
   ['20_logic.gs', "if (onlyHere && at !== where) return;", '', '只盤一個廠區時卻把別廠的也算進差異'],
-  ['20_logic.gs', "if (onlyHere && loc(u.location) !== where) return;", '', '只盤一個廠區時別廠的單台被當成沒點到']
+  ['20_logic.gs', "if (onlyHere && loc(u.location) !== where) return;", '', '只盤一個廠區時別廠的單台被當成沒點到'],
+  ['00_gateway.gs', "success: false, health: true", "success: true, health: false", '健康檢查頁偽裝成正常回應(換版時會被當成資料)']
   // 註:單獨拿掉 ITEM_CALC 的 qty 欄是等價突變 —— 讀取會把相鄰欄位合併成連續段(spans_ 的 gap=3),
   //     qty 夾在 mode 與 location 中間,不在清單上也會被順便讀到。真正有效的守門是上面的 stock 欄。
   // 註:`m.cap` 的失效目前沒有路徑會在同一次請求裡「先算總數 → 改 Items/Units → 再算總數」,

@@ -319,6 +319,11 @@ ok('saveUnit', { unit: { id: u2[1], location: '林口' } }, A);
 const repU = ok('stocktake', { location: '林口', unitItems: [dualU2.id], seenUnits: [], qty: [], apply: false }, A);
 assert.deepStrictEqual(repU.missingUnits.map(u => u.id), [u2[1]], '只盤林口時,新竹的單台不該被當成沒點到');
 
+/* 健康檢查頁必須認得出來:GAS 換版時 POST 會被當成 GET 重送,前端要能分辨 */
+const health = JSON.parse(G.ctx.doGet().t);
+assert.strictEqual(health.health, true, 'doGet 必須帶 health 記號');
+assert.notStrictEqual(health.success, true, 'doGet 不可以長得像一個成功的回應');
+
 const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [
