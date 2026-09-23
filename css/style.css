@@ -201,6 +201,11 @@ tr.dim td{opacity:.5}
 .chipk.on{background:var(--gray);border-color:var(--gray);color:#fff}
 :root[data-theme="dark"] .chipk.on{color:var(--bg)}
 .chipk small{opacity:.7;font-family:inherit}
+/* 盤點頁:借出中的單台(不列入盤點) */
+.outbox{margin-top:10px;padding-top:9px;border-top:1px dashed var(--line)}
+.outbox .lines{margin-top:5px}
+.outbox .line{gap:8px;padding:4px 0;font-size:13px}
+.num.short,.num.okt{font-weight:700}
 /* ---------- modal ---------- */
 .modal-bg{position:fixed;inset:0;background:rgba(27,36,43,.45);z-index:50;display:flex;align-items:flex-start;justify-content:center;
   padding:44px 16px;overflow-y:auto;backdrop-filter:blur(2px)}

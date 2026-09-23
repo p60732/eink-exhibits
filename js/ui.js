@@ -304,6 +304,12 @@ function addToCart(itemId, qty) {
 /* ===================== 各頁面 ===================== */
 const VIEWS = {};
 
+/** KPI 磚:圖示 + 標題 + 數字,可選擇點擊跳頁 */
+function kpi(icon, label, value, cls, act, f) {
+  return `<div class="card kpi ${cls || ''}" ${act ? `data-act="${act}" data-f="${f}" style="cursor:pointer"` : ''}>
+    <div class="box">${icon}</div><div><div class="l">${label}</div><div class="v">${value}</div></div></div>`;
+}
+
 /** 分類籤條:全部 + 每個分類各自帶數量 */
 function catBar(cats, active, counts) {
   const all = Object.values(counts).reduce((x, y) => x + y, 0);
@@ -465,9 +471,6 @@ VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
 
 VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
   const s = d.sum;
-  const kpi = (icon, label, value, cls, act, f) =>
-    `<div class="card kpi ${cls || ''}" ${act ? `data-act="${act}" data-f="${f}" style="cursor:pointer"` : ''}>
-      <div class="box">${icon}</div><div><div class="l">${label}</div><div class="v">${value}</div></div></div>`;
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Inventory &amp; Loans</div><h1>展品借用與庫存追蹤</h1><p class="sub">${esc(d.today)}・主管問「還有幾個」,看這裡或匯出庫存表。</p></div><span class="spacer"></span><button class="btn" data-act="export">${ICON.dl}匯出庫存表</button></div>
     <div class="kpis">
       ${kpi(ICON.layers, '展品品項', s.items)}
@@ -567,45 +570,181 @@ async function catsModal() {
   draw();
 }
 
+/** 一列「在誰手上・什麼活動・什麼時候還」 */
+function holderLine(code, h, qty) {
+  const who = esc(h.applicant) + (h.dept ? '・' + esc(h.dept) : '');
+  const late = h.overdue ? '<span class="pill bad">逾期</span>' : '';
+  return '<div class="line"><span class="nm mono">' + esc(code) + '</span><span>' + who + '</span>'
+    + '<span class="meta">' + esc(h.event) + '・還 ' + esc(h.end) + '</span>'
+    + (qty ? '<span class="q">× ' + qty + '</span>' : '') + late + '</div>';
+}
+
+/** 借出中的單台:列出在誰手上、什麼活動、什麼時候還 */
+function outUnitLines(us) {
+  if (!us.length) return '';
+  const rows = us.map(u => u.holder ? holderLine(u.id, u.holder, 0)
+    : '<div class="line"><span class="nm mono">' + esc(u.id) + '</span><span class="meta">借出中(查無借用單)</span></div>');
+  return '<div class="outbox"><div class="meta">借出中 ' + us.length + ' 台(不列入本次盤點)</div><div class="lines">' + rows.join('') + '</div></div>';
+}
+
+/** 數量品項:點「借出中」的數字看是誰借走的 */
+function outWhoModal(itemId) {
+  const it = (S.items || []).find(x => x.id === itemId) || {};
+  const hs = (S._holders || {})[itemId] || [];
+  const rows = hs.map(h => holderLine(h.loanId, h, h.qty)).join('');
+  openModal('<h2>' + esc(it.name || itemId) + '・借出中</h2>'
+    + '<p class="sub">這些不列入盤點,實點時不用把它們算進去。</p>'
+    + (rows ? '<div class="lines">' + rows + '</div>' : '<div class="card empty">查無借用中的紀錄</div>')
+    + '<div class="modal-f"><button class="btn pri" data-act="close">關閉</button></div>');
+}
+
 VIEWS.count = async main => {
-  const [items, allUnits] = await Promise.all([cachedGet('items', 'items'), cachedGet('units|all', 'units')]);
+  const [cats, items, allUnits, outLoans] = await Promise.all([
+    cachedGet('cats', 'cats'), cachedGet('items', 'items'), cachedGet('units|all', 'units'),
+    cachedGet('loans|out', 'loans', { filter: 'out' })
+  ]);
+  S.cats = cats;
+  // 誰把東西借走了:數量品項沒有單台編號,只能從出借中的借用單推回來
+  const holders = {};
+  outLoans.forEach(L => (L.lines || []).forEach(ln => {
+    const left = ln.outstanding == null ? ln.qty : ln.outstanding;
+    if (!left) return;
+    (holders[ln.itemId] = holders[ln.itemId] || []).push({
+      loanId: L.id, applicant: L.applicant, dept: L.dept, event: L.event, end: L.end, overdue: L.overdue, qty: left
+    });
+  }));
+  S._holders = holders;
   const list = items.filter(i => !i.archived);
-  const unitItems = list.filter(i => i.mode === 'unit'), qtyItems = list.filter(i => i.mode === 'qty');
   const unitsBy = {};
-  unitItems.forEach(i => unitsBy[i.id] = []);
+  list.forEach(i => unitsBy[i.id] = []);
   allUnits.forEach(u => { if (unitsBy[u.itemId]) unitsBy[u.itemId].push(u); });
-  const seen = new Set(), scope = new Set();
-  main.innerHTML = `<div class="eyebrow">Stocktake</div><h1>盤點</h1><p class="sub">「應在庫」已扣除借出中的數量。數量品項填實點數;逐台品項勾選或掃描點到的編號。未填 / 未勾選的品項不列入本次盤點。</p>
-    <div class="card" style="margin-bottom:14px"><div class="row"><input class="grow" type="text" id="kscan" placeholder="輸入或用掃描槍刷編號後按 Enter(例:E0001)" style="flex:1 1 240px"><button class="btn" data-act="count-cam">${ICON.scan}相機掃描</button></div><div class="meta" id="klast" style="margin-top:6px"></div></div>
-    <h2>逐台編號品項</h2><div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${unitItems.map(i => {
-      const us = unitsBy[i.id].filter(u => u.status === 'in' || u.status === 'lost');
-      return `<div class="card"><div class="row"><b style="flex:1">${esc(i.name)}</b><label class="chk"><input type="checkbox" data-scope="${i.id}">納入盤點</label></div>
-        <div class="meta">應在庫 ${unitsBy[i.id].filter(u => u.status === 'in').length} 台・借出 ${i.out}・<span data-cnt="${i.id}">點到 0</span></div>
-        <div class="chips">${us.map(u => `<span class="chipk" data-unit="${u.id}" data-item="${i.id}">${esc(u.id)}${u.status === 'lost' ? ' <small>遺失</small>' : ''}</span>`).join('') || '<span class="meta">無應在庫的單台</span>'}</div></div>`;
-    }).join('') || '<div class="empty">無</div>'}</div>
-    <h2>數量品項</h2><div class="tbl-wrap"><table><thead><tr><th>品名</th><th>存放位置</th><th class="num">應在庫</th><th class="num" style="width:120px">實點</th><th class="num">差異</th></tr></thead><tbody>
-    ${qtyItems.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.location)}</td><td class="num">${i.inStock}</td><td><input type="number" min="0" data-cnt-qty="${i.id}" data-exp="${i.inStock}" style="text-align:right"></td><td class="num" data-diff="${i.id}">—</td></tr>`).join('')}</tbody></table></div>
+  const inUnits = i => unitsBy[i.id].filter(u => u.status === 'in');
+  const outUnits = i => unitsBy[i.id].filter(u => u.status === 'out');
+  const expect = i => i.mode === 'unit' ? inUnits(i).length : i.inStock;   // 應在庫
+  const seen = new Set(), scope = new Set(), counted = {};                 // 切分類重畫時要保留
+  if (S.cat && !cats.some(c => c.name === S.cat)) S.cat = '';
+
+  main.innerHTML = `<div class="eyebrow">Stocktake</div><h1>盤點</h1>
+    <p class="sub">「應在庫」已扣除借出中的數量。數量品項填實點數;逐台品項勾選或掃描點到的編號。未填 / 未勾選的品項不列入本次盤點。</p>
+    <div class="kpis" id="ksum"></div>
+    <div class="card" style="margin:14px 0"><div class="row"><input class="grow" type="text" id="kscan" placeholder="輸入或用掃描槍刷編號後按 Enter(例:E0001)" style="flex:1 1 240px"><button class="btn" data-act="count-cam">${ICON.scan}相機掃描</button></div><div class="meta" id="klast" style="margin-top:6px"></div></div>
+    <div id="kbar"></div>
+    <div id="kbody"></div>
     <div class="card" style="margin-top:14px"><div class="row"><label class="chk"><input type="checkbox" id="kapply" checked>把差異套用到系統數量</label><label class="chk"><input type="checkbox" id="klost">未點到的單台標記為「遺失」</label><span class="spacer"></span><button class="btn pri" data-act="count-submit">完成盤點</button></div></div>`;
+
+  /* ---- 總計對照:只算「已納入本次盤點」的品項 ---- */
+  const drawSum = () => {
+    let exp = 0, got = 0, done = 0, todo = 0, out = 0;
+    list.forEach(i => {
+      out += i.out;
+      const inScope = i.mode === 'unit' ? scope.has(i.id) : counted[i.id] != null;
+      if (!inScope) { todo++; return; }
+      done++;
+      exp += expect(i);
+      got += i.mode === 'unit' ? unitsBy[i.id].filter(u => seen.has(u.id)).length : counted[i.id];
+    });
+    const diff = got - exp;
+    $('#ksum').innerHTML = [
+      kpi(ICON.layers, '已盤 / 全部品項', done + ' / ' + list.length),
+      kpi(ICON.home, '應在庫(已盤部分)', exp),
+      kpi(ICON.check, '實際點到', got),
+      kpi(ICON.alert, '差異', (diff > 0 ? '+' : '') + diff, diff ? 'bad' : ''),
+      kpi(ICON.out, '借出中(不用盤)', out)
+    ].join('');
+    $('#ksub') && ($('#ksub').textContent = todo ? '還有 ' + todo + ' 項沒盤' : '全部盤完了');
+  };
+
+  /* ---- 依分類分段 ---- */
+  const unitCard = i => {
+    const ins = inUnits(i), lost = unitsBy[i.id].filter(u => u.status === 'lost');
+    const pick = ins.concat(lost);
+    const chips = pick.map(u => `<span class="chipk ${seen.has(u.id) ? 'on' : ''}" data-unit="${esc(u.id)}" data-item="${esc(i.id)}">${esc(u.id)}${u.status === 'lost' ? ' <small>遺失</small>' : ''}</span>`);
+    return `<div class="card"><div class="row"><b style="flex:1">${esc(i.name)}</b><label class="chk"><input type="checkbox" data-scope="${esc(i.id)}" ${scope.has(i.id) ? 'checked' : ''}>納入盤點</label></div>
+      <div class="meta">應在庫 <b>${ins.length}</b> 台・<span data-cnt="${esc(i.id)}"></span>・<span data-udiff="${esc(i.id)}"></span></div>
+      <div class="chips">${chips.join('') || '<span class="meta">無應在庫的單台</span>'}</div>
+      ${outUnitLines(outUnits(i))}</div>`;
+  };
+  const qtyTable = qs => qs.length ? `<div class="tbl-wrap"><table><thead><tr><th>品名</th><th>存放位置</th><th class="num">應在庫</th><th class="num">借出中</th><th class="num" style="width:120px">實點</th><th class="num">差異</th></tr></thead><tbody>
+    ${qs.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.location)}</td><td class="num">${i.inStock}</td><td class="num">${i.out ? '<button class="btn sm ghost" data-act="out-who" data-id="' + esc(i.id) + '">' + i.out + ' 台</button>' : '—'}</td>
+      <td><input type="number" min="0" data-cnt-qty="${esc(i.id)}" data-exp="${i.inStock}" value="${counted[i.id] == null ? '' : counted[i.id]}" style="text-align:right"></td>
+      <td class="num" data-diff="${esc(i.id)}">—</td></tr>`).join('')}</tbody></table></div>` : '';
+
+  const draw = () => {
+    const counts = {};
+    list.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
+    $('#kbar').innerHTML = catBar(cats, S.cat, counts);
+    const groups = S.cat ? [[S.cat, list.filter(i => i.category === S.cat)]] : groupByCat(cats, list);
+    $('#kbody').innerHTML = groups.map(([name, arr]) => {
+      const us = arr.filter(i => i.mode === 'unit'), qs = arr.filter(i => i.mode === 'qty');
+      const body = arr.length
+        ? (us.length ? `<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${us.map(unitCard).join('')}</div>` : '') + qtyTable(qs)
+        : '<div class="catempty">這個分類還沒有展品</div>';
+      return `<h2 class="cath">${esc(name)}<span class="chipnum">${arr.length}</span></h2>` + body;
+    }).join('');
+    wire();
+    list.forEach(i => { if (i.mode === 'unit') syncUnit(i.id); else syncQty(i.id); });
+    drawSum();
+  };
+  S._countDraw = draw;
+
+  /* ---- 即時同步單一品項的數字 ---- */
+  const syncUnit = id => {
+    const c = $(`[data-cnt="${id}"]`), d = $(`[data-udiff="${id}"]`);
+    if (!c) return;
+    const i = list.find(x => x.id === id);
+    const got = unitsBy[id].filter(u => seen.has(u.id)).length, exp = inUnits(i).length;
+    c.textContent = '點到 ' + got;
+    if (!scope.has(id)) { d.textContent = '尚未納入盤點'; d.className = 'meta'; return; }
+    const v = got - exp;
+    d.textContent = v ? '差異 ' + (v > 0 ? '+' : '') + v : '相符';
+    d.className = v ? 'short' : 'okt';
+  };
+  const syncQty = id => {
+    const d = $(`[data-diff="${id}"]`);
+    if (!d) return;
+    if (counted[id] == null) { d.textContent = '—'; d.className = 'num'; return; }
+    const v = counted[id] - list.find(x => x.id === id).inStock;
+    d.textContent = v ? (v > 0 ? '+' : '') + v : '0';
+    d.className = 'num ' + (v ? 'short' : 'okt');
+  };
+
   const markUnit = (id, on) => {
     const el = $(`[data-unit="${id}"]`);
     if (!el) return false;
     on = on == null ? !seen.has(id) : on;
-    on ? seen.add(id) : seen.delete(id); el.classList.toggle('on', on);
-    const it = el.dataset.item; scope.add(it); $(`[data-scope="${it}"]`).checked = true;
-    $(`[data-cnt="${it}"]`).textContent = '點到 ' + $$(`[data-item="${it}"].on`).length;
+    on ? seen.add(id) : seen.delete(id);
+    el.classList.toggle('on', on);
+    const it = el.dataset.item;
+    scope.add(it);
+    const box = $(`[data-scope="${it}"]`); if (box) box.checked = true;
+    syncUnit(it); drawSum();
     return true;
   };
-  S._countMark = code => { const ok = markUnit(code, true); $('#klast').textContent = ok ? '✓ ' + code : '✕ 找不到或不在應在庫清單:' + code; return ok; };
-  $$('[data-unit]').forEach(el => el.onclick = () => markUnit(el.dataset.unit));
-  $$('[data-scope]').forEach(el => el.onchange = () => el.checked ? scope.add(el.dataset.scope) : scope.delete(el.dataset.scope));
+  S._countMark = code => {
+    const el = $(`[data-unit="${code}"]`);
+    if (!el && S.cat) { $('#klast').textContent = '✕ ' + code + ' 不在目前的分類「' + S.cat + '」裡,請先切到「全部」'; return false; }
+    const ok = markUnit(code, true);
+    $('#klast').textContent = ok ? '✓ ' + code : '✕ 找不到或不在應在庫清單:' + code;
+    return ok;
+  };
+
+  function wire() {
+    $$('[data-unit]').forEach(el => el.onclick = () => markUnit(el.dataset.unit));
+    $$('[data-scope]').forEach(el => el.onchange = () => {
+      el.checked ? scope.add(el.dataset.scope) : scope.delete(el.dataset.scope);
+      syncUnit(el.dataset.scope); drawSum();
+    });
+    $$('[data-cnt-qty]').forEach(inp => inp.oninput = () => {
+      const id = inp.dataset.cntQty;
+      counted[id] = inp.value === '' ? null : +inp.value;
+      if (counted[id] == null) delete counted[id];
+      syncQty(id); drawSum();
+    });
+  }
   $('#kscan').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); S._countMark(e.target.value.trim().toUpperCase()); e.target.value = ''; } };
-  $$('[data-cnt-qty]').forEach(inp => inp.oninput = () => {
-    const d = $(`[data-diff="${inp.dataset.cntQty}"]`);
-    if (inp.value === '') { d.textContent = '—'; d.style.color = ''; return; }
-    const v = +inp.value - +inp.dataset.exp; d.textContent = (v > 0 ? '+' : '') + v; d.style.color = v ? 'var(--bad)' : 'var(--ok)';
-  });
+
   S._countSubmit = async () => {
-    const qty = $$('[data-cnt-qty]').filter(i => i.value !== '').map(i => ({ itemId: i.dataset.cntQty, counted: +i.value }));
+    const qty = Object.keys(counted).map(id => ({ itemId: id, counted: counted[id] }));
     if (!qty.length && !scope.size) return toast('請至少填寫或勾選一項', true);
     const rep = await run(() => api('stocktake', { qty, unitItems: [...scope], seenUnits: [...seen], apply: $('#kapply').checked, markMissingLost: $('#klost').checked })).catch(() => null);
     if (!rep) return;
@@ -616,6 +755,8 @@ VIEWS.count = async main => {
       ${rep.missingUnits.length ? `<h2>未點到的單台</h2><div class="lines">${rep.missingUnits.map(u => `<div class="line"><span class="nm mono">${esc(u.id)}</span><span>${esc(u.name)}</span><span class="u">${u.history[0] ? '最後借用:' + esc(u.history[0].applicant) + '・' + esc(u.history[0].event) + '(' + esc(u.history[0].end) + ')' : '無借用紀錄'}</span></div>`).join('')}</div>` : ''}
       <div class="modal-f"><button class="btn pri" data-act="close-render">完成</button></div>`, { noFocus: true });
   };
+
+  draw();
 };
 
 VIEWS.users = main => withData(main, 'users', 'users', {}, list => {
@@ -982,8 +1123,13 @@ const ACT = {
   'u-onsite': el => { const L = el.closest('.card'); onsiteModal(el.dataset.id, /簽收/.test(L.textContent.match(/撤回(簽收|歸還)/)[0]) ? 'pickup' : 'return'); },
   'u-cancel-req': el => run(() => api('cancelRequest', { id: el.dataset.id }), '已撤回').then(render).catch(() => { }),
   'lookup-code': el => lookupModal(el.dataset.code),
-  'pick-cat': el => { (S.view === 'items' ? S : S.filters).cat = el.dataset.cat; (S.view === 'items' ? S._itemDraw : S._catDraw)(); },
+  'pick-cat': el => {
+    const v = el.dataset.cat;
+    if (S.view === 'catalog') { S.filters.cat = v; S._catDraw(); }
+    else { S.cat = v; (S.view === 'items' ? S._itemDraw : S._countDraw)(); }
+  },
   'cats': () => catsModal(),
+  'out-who': el => outWhoModal(el.dataset.id),
   'count-cam': () => openScanner(c => { S._countMark(c); }),
   'count-submit': () => S._countSubmit(),
 };

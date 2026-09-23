@@ -83,6 +83,27 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('#viewas-btn'); await wait(600);
   if (!await p.isVisible('[data-v=dash]')) throw new Error('未回到管理者視角');
   if (await p.isVisible('#viewas-btn')) throw new Error('提示鍵沒收起來');
+  // 盤點頁:總計對照、分類分段、逐台差異、借出中的也要列出來
+  await p.click('[data-v=count]'); await wait(1500);
+  if ((await p.$$('#ksum .kpi')).length < 5) throw new Error('盤點少了總計對照磚');
+  const kchips = await p.$$eval('#kbar .catchip', els => els.map(e => e.dataset.cat));
+  if (!kchips.includes('Signage')) throw new Error('盤點沒有分類籤條:' + kchips.join('|'));
+  if (!(await p.$('.outbox'))) throw new Error('盤點沒有列出借出中的單台');
+  const outTxt = await p.textContent('.outbox');
+  if (!/測試員工A/.test(outTxt)) throw new Error('借出中沒顯示持有人:' + outTxt.replace(/\n/g, ' '));
+  await (await p.$('#kbody .chipk')).click(); await wait(500);
+  const udiff = (await p.$$eval('[data-udiff]', els => els.map(e => e.textContent.trim()))).filter(Boolean);
+  if (!udiff.some(t => /差異|相符/.test(t))) throw new Error('逐台差異沒顯示:' + udiff.join('|'));
+  const sumTxt = await p.textContent('#ksum');
+  if (!/實際點到/.test(sumTxt)) throw new Error('總計對照內容不對:' + sumTxt.replace(/\n/g, ' '));
+  // 數量品項:點「借出中」要看得到是誰借走的
+  const owBtn = await p.$('[data-act=out-who]');
+  if (!owBtn) throw new Error('數量品項沒有可點的借出中');
+  await owBtn.click(); await p.waitForSelector('.modal .lines');
+  const owTxt = await p.textContent('.modal');
+  if (!/測試員工A/.test(owTxt)) throw new Error('借出中沒顯示持有人:' + owTxt.replace(/\n/g, ' ').slice(0, 120));
+  await shot('count_who'); await p.click('.modal [data-act=close]'); await wait(400);
+  await shot('count');
   await p.click('[data-v=dash]'); await p.waitForSelector('.kpis');
   await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2'); await p.click('#rgo2'); await wait(600);
   await p.click('[data-f=returned]'); await wait(300); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
