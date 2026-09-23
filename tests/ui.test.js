@@ -123,7 +123,15 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await shot('count');
   await p.click('[data-v=dash]'); await p.waitForSelector('.kpis');
   await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2'); await p.click('#rgo2'); await wait(600);
-  await p.click('[data-f=returned]'); await wait(300); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
+  await p.click('[data-f=returned]'); await wait(500); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
+  // 進行中的五個分頁共用同一次請求:切分頁不應該再打後端
+  await p.click('[data-f=pending]'); await wait(900);
+  await p.evaluate(() => { window.__n = 0; const f = window.fetch; window.fetch = (...a) => { window.__n++; return f(...a); }; });
+  for (const t of ['approved', 'out', 'overdue', 'request', 'pending']) { await p.click(`[data-f=${t}]`); await wait(450); }
+  const nReq = await p.evaluate(() => window.__n);
+  if (nReq > 0) throw new Error('切進行中的分頁不該再打後端,實際打了 ' + nReq + ' 次');
+  await p.click('[data-f=all]'); await wait(700);
+  if (await p.evaluate(() => window.__n) === 0) throw new Error('「全部」應該要向後端要資料');
   // ---- 待辦 / 批次核准 / 延期 / 轉借 / 列印 ----
   const makeLoan = async (name, d1, d2) => {
     await p.click('[data-v=catalog]'); await wait(900);

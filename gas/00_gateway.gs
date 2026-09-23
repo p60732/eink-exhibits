@@ -70,8 +70,13 @@ function routes_() {
   // 邏輯積木:管理者
   add('admin', false, A, { dashboard: [] },
     { Items: '*', Units: '*', Loans: { cols: '*', only: LIVE }, Users: C.USER_AUTH });
-  add('admin', false, A, { loans: ['filter'] },
-    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Users: C.USER_AUTH });
+  // 借用單:只看進行中的那幾個分頁不必翻出歷史單,只有「已歸還 / 全部 / 已駁回 / 已取消」才整張讀
+  var HISTORY_ = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
+  add('admin', false, A, { loans: ['filter'] }, function (p) {
+    var live = !HISTORY_[String((p && p.filter) || 'active')];
+    return { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Users: C.USER_AUTH,
+      Loans: live ? { cols: '*', only: LIVE } : '*' };
+  });
   add('admin', false, A, { items: [] },
     { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC, only: LIVE }, Users: C.USER_AUTH });
   add('admin', false, A, { units: ['itemId'] },
@@ -127,7 +132,8 @@ function dispatch_(req) {
   var lock = LockService.getScriptLock();
   if (route.write && !lock.tryLock(20000)) return { success: false, data: null, error: '系統忙碌中,請稍後再試' };
   try {
-    var db = Memory.load(route.tables), events = [];
+    var need = typeof route.tables === 'function' ? route.tables(req.payload || {}) : route.tables;
+    var db = Memory.load(need), events = [];
     var c = { db: db, p: checkPayload_(req.payload, route.fields), user: null, today: Clock.today(), now: Clock.now() };
     if (route.auth !== 'public') c.user = Identity.authenticate(db, req.token, req.action);
     if (route.auth === 'admin') Identity.requireAdmin(c.user);

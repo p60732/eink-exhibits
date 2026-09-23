@@ -29,7 +29,22 @@ var Logic = (function () {
     var p = d.split('-'), dt = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + k));
     return dt.toISOString().slice(0, 10);
   }
-  function dirty(db, t) { db._dirty[t] = true; }
+  /**
+   * 本次請求的暫存索引。放在 WeakMap 而不是 db 上,規則層依然沒有碰到資料本身。
+   * 資料一變就清掉,不會拿到過期的數字。
+   */
+  var MEMO = new WeakMap();
+  function memo(db) {
+    var m = MEMO.get(db);
+    if (!m) { m = { cap: {}, li: null }; MEMO.set(db, m); }
+    return m;
+  }
+  function dirty(db, t) {
+    db._dirty[t] = true;
+    var m = memo(db);
+    if (t === 'Units' || t === 'Items') m.cap = {};
+    if (t === 'Loans') m.li = null;
+  }
   function byId(list, id) { for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]; return null; }
   function nextId(list, prefix, width) {
     var max = 0;
@@ -50,13 +65,16 @@ var Logic = (function () {
 
   /* ---------- 庫存計算 ---------- */
   function outstanding(line) { return Math.max(0, int(line.qty) - int(line.returned) - int(line.lost)); }
+  /** 總數(unit 模式數在庫+借出的台數);同一次請求內每個品項只算一次 */
   function capacity(db, item) {
+    var cache = memo(db).cap;
+    if (item.id in cache) return cache[item.id];
+    var c;
     if (item.mode === 'unit') {
-      var c = 0;
+      c = 0;
       db.Units.forEach(function (u) { if (u.itemId === item.id && (u.status === 'in' || u.status === 'out')) c++; });
-      return c;
-    }
-    return int(item.qty);
+    } else c = int(item.qty);
+    return (cache[item.id] = c);
   }
   function stats(db, today) {
     var m = {};
@@ -82,13 +100,24 @@ var Logic = (function () {
     if (L.status === 'out') return [L.start < today ? L.start : today, L.end < today ? FOREVER : L.end];
     return [L.start, L.end];
   }
+  /** 品項 → 還佔著它的借用明細;審核一整批時不用每張單都重掃整表 */
+  function loanIndex(db) {
+    var m = memo(db);
+    if (m.li) return m.li;
+    var idx = {};
+    db.Loans.forEach(function (L) {
+      if (L.status !== 'approved' && L.status !== 'out') return;
+      (L.lines || []).forEach(function (ln) { (idx[ln.itemId] = idx[ln.itemId] || []).push({ L: L, ln: ln }); });
+    });
+    return (m.li = idx);
+  }
   function reservedInRange(db, itemId, from, to, excludeId, today) {
     var sum = 0;
-    db.Loans.forEach(function (L) {
-      if (L.id === excludeId || (L.status !== 'approved' && L.status !== 'out')) return;
-      var w = loanWindow(L, today);
+    (loanIndex(db)[itemId] || []).forEach(function (e) {
+      if (e.L.id === excludeId) return;
+      var w = loanWindow(e.L, today);
       if (w[0] > to || w[1] < from) return;
-      (L.lines || []).forEach(function (ln) { if (ln.itemId === itemId) sum += outstanding(ln); });
+      sum += outstanding(e.ln);
     });
     return sum;
   }

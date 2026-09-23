@@ -28,7 +28,11 @@ const M = [
   ['20_logic.gs', "if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');", '', '延期可以往前縮'],
   ['20_logic.gs', "if (short.length && !force) throw E('延長期間數量不足:'", "if (false) throw E('延長期間數量不足:'", '延期不檢查延長期間的庫存'],
   ['20_logic.gs', "if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');", '', '同一張單可以同時掛兩個請求'],
-  ['20_logic.gs', "catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }", 'catch (e) { ok++; }', '批次核准把失敗的也算成功']
+  ['20_logic.gs', "catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }", 'catch (e) { ok++; }', '批次核准把失敗的也算成功'],
+  // 效能索引:資料變了卻沒清掉快取,會算出過期的可借量
+  ['20_logic.gs', "if (t === 'Loans') m.li = null;", '', '借用單索引沒隨資料更新']
+  // 註:`m.cap` 的失效目前沒有路徑會在同一次請求裡「先算總數 → 改 Items/Units → 再算總數」,
+  //     所以拿掉它測試也不會失敗(等價突變)。程式碼保留,是為了將來真的出現這種呼叫順序時不會算錯。
 ];
 let pass = 0; const fail = [];
 M.forEach(([file, find, repl, desc]) => {

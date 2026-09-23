@@ -61,22 +61,28 @@ async function api(action, payload = {}) {
 
 /* 讀取快取:切頁時先用上次的資料立刻畫出畫面,背景再向後端確認,有變動才重畫 */
 const RCACHE = new Map();
+const FRESH_MS = 15000;                 // 剛抓過的資料就直接用,不再回頭問後端
 const copy = v => JSON.parse(JSON.stringify(v));
+const fresh = hit => hit && Date.now() - hit.at < FRESH_MS;
 async function cachedGet(key, action, payload = {}) {
   const hit = RCACHE.get(key);
-  if (hit) { api(action, payload).then(d => RCACHE.set(key, { data: d })).catch(() => { }); return copy(hit.data); }
+  if (hit) {
+    if (!fresh(hit)) api(action, payload).then(d => RCACHE.set(key, { data: d, at: Date.now() })).catch(() => { });
+    return copy(hit.data);
+  }
   const data = await api(action, payload);
-  RCACHE.set(key, { data });
+  RCACHE.set(key, { data, at: Date.now() });
   return copy(data);
 }
 async function withData(main, key, action, payload, draw) {
   const hit = RCACHE.get(key), view = S.view;
   if (hit) draw(copy(hit.data));
+  if (fresh(hit)) return;               // 同一批資料的不同分頁互相切換時,不用重打
   let data;
   try { data = await api(action, payload); }
   catch (e) { if (!hit) throw e; if (!e.silent) toast(e.message, true); return; }
   const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(data);
-  RCACHE.set(key, { data });
+  RCACHE.set(key, { data, at: Date.now() });
   if (changed && S.view === view) draw(copy(data));
 }
 function toast(msg, err) {
@@ -558,11 +564,29 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
   $('#todo').innerHTML = todoList(d);
 });
 
-VIEWS.loans = main => withData(main, 'loans|' + S.loanFilter, 'loans', { filter: S.loanFilter }, list => {
-  S._loans = list;
+/* 進行中的五個分頁都是同一批資料的子集合:向後端要一次「active」,分頁在前端切,點分頁不再等後端 */
+const LOAN_HIST = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
+const loanSrv = f => LOAN_HIST[f] ? f : 'active';
+const loanTabOf = {
+  request: l => !!(l.request && l.request.type),
+  pending: l => l.status === 'pending',
+  approved: l => l.status === 'approved',
+  out: l => l.status === 'out',
+  overdue: l => !!l.overdue
+};
+VIEWS.loans = main => {
+  const srv = loanSrv(S.loanFilter);
+  return withData(main, 'loans|' + srv, 'loans', { filter: srv }, all => {
+  if (loanSrv(S.loanFilter) !== srv) return;        // 使用者已經切到別的分頁了
+  const pick = loanTabOf[S.loanFilter];
+  const list = pick ? all.filter(pick) : all;
+  S._loans = all;
   const F = [['request', '待確認'], ['pending', '待審核'], ['approved', '待點交'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「展覽規劃」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
-    <div class="toolbar"><div class="seg">${F.map(([k, l]) => `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="toolbar"><div class="seg">${F.map(([k, l]) => {
+      const n = loanTabOf[k] ? all.filter(loanTabOf[k]).length : (k === 'all' || k === 'returned' ? null : all.length);
+      return `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}${n ? ` <span class="n">${n}</span>` : ''}</button>`;
+    }).join('')}</div>
     <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…"></div>
     <div id="lbulk"></div>
     <div class="loans" id="llist"></div>`;
@@ -588,7 +612,8 @@ VIEWS.loans = main => withData(main, 'loans|' + S.loanFilter, 'loans', { filter:
   };
   draw(); $('#lq').oninput = e => draw(e.target.value);
   if (S._focusLoan) { const el = $('#loan-' + S._focusLoan); if (el) { el.scrollIntoView({ block: 'center' }); el.style.outline = '2px solid var(--red)'; } S._focusLoan = null; }
-});
+  });
+};
 VIEWS.items = async main => {
   S.cats = await cachedGet('cats', 'cats');
   return withData(main, 'items', 'items', {}, list => {
