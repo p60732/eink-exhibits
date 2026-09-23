@@ -111,4 +111,19 @@ assert.throws(() => Gx.ctx.setupSheets(), /擁有者/);
 // 紀錄不含 PIN
 const logText = JSON.stringify(G.sheets['操作紀錄'].data);
 assert.ok(!/5678|8765|1234/.test(logText), '操作紀錄不得含 PIN');
+
+// ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
+const full = makeEnv(); full.ctx.Memory.setup();
+// 用同一份資料重建環境:把試算表內容複製過去
+Object.keys(G.sheets).forEach(n => { full.sheets[n] = full.sheets[n] || G.ctx.SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n); });
+const origLoad = G.ctx.Memory.load;
+const readActions = [['catalog', {}, U], ['items', {}, A], ['dashboard', {}, A], ['loans', { filter: 'all' }, A], ['myLoans', {}, U], ['units', {}, A]];
+readActions.forEach(([act, p2, tok]) => {
+  const restricted = JSON.stringify(ok(act, p2, tok));
+  G.ctx.Memory.load = function () { return origLoad(); };          // 忽略限縮,載入全部
+  const complete = JSON.stringify(ok(act, p2, tok));
+  G.ctx.Memory.load = origLoad;
+  assert.strictEqual(restricted, complete, act + ' 限縮載入的結果不一致');
+});
+assert.ok(ok('units', {}, A).length >= 3, 'units 省略 itemId 應回傳全部單台');
 console.log('✔ e2e 全部通過');

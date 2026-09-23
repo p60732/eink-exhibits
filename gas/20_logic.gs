@@ -478,10 +478,10 @@ var Logic = (function () {
       return true;
     },
     units: function (c) {
-      var it = byId(c.db.Items, s(c.p.itemId));
-      if (!it) throw E('找不到展品');
-      var today = c.today;
-      return c.db.Units.filter(function (u) { return u.itemId === it.id; }).map(function (u) {
+      var want = s(c.p.itemId), today = c.today;
+      if (want && !byId(c.db.Items, want)) throw E('找不到展品');
+      // 省略 itemId 時回傳全部單台(盤點頁一次取得,避免逐項請求)
+      return c.db.Units.filter(function (u) { return !want || u.itemId === want; }).map(function (u) {
         var L = currentLoanOfUnit(c.db, u.id);
         return { id: u.id, itemId: u.itemId, serial: u.serial, status: u.status, statusLabel: UNIT_ST[u.status], location: u.location, note: u.note, countedAt: u.countedAt,
           holder: L ? { loanId: L.id, applicant: L.applicant, dept: L.dept, event: L.event, end: L.end, overdue: isOverdue(L, today) } : null };

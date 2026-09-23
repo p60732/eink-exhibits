@@ -22,29 +22,34 @@ var ROUTES_ = null;
 function routes_() {
   if (ROUTES_) return ROUTES_;
   var R = {};
-  // add(權限, 是否寫入, 積木動作表, { 動作: [允許的參數欄位] })
-  function add(auth, write, table, spec) {
-    Object.keys(spec).forEach(function (k) { R[k] = { auth: auth, write: write, fields: spec[k], fn: table[k] }; });
+  // add(權限, 是否寫入, 積木動作表, { 動作: [允許的參數欄位] }, 需要的資料表)
+  // 讀取類動作只載入需要的工作表(寫入類一律全載,確保計算正確)
+  function add(auth, write, table, spec, tables) {
+    Object.keys(spec).forEach(function (k) {
+      R[k] = { auth: auth, write: write, fields: spec[k], fn: table[k], tables: write ? null : (tables || null) };
+    });
   }
+  var T_ALL = ['Items', 'Units', 'Loans', 'Users'];
   var I = Identity.actions, U = Logic.USER, A = Logic.ADMIN;
   // 身份積木
-  add('public', false, I, { status: [], login: ['emp', 'pin'] });
+  add('public', false, I, { status: [], login: ['emp', 'pin'] }, ['Users']);
   add('public', true, I, { setup: ['name', 'empNo', 'dept', 'email', 'pin'] });
-  add('user', false, I, { me: [] });
+  add('user', false, I, { me: [] }, ['Users']);
   add('user', true, I, { logout: [], changePin: ['oldPin', 'newPin'] });
-  add('admin', false, I, { users: [] });
+  add('admin', false, I, { users: [] }, ['Users']);
   add('admin', true, I, { saveUser: ['user'], importUsers: ['rows'] });
   // 邏輯積木:同仁
   add('user', false, U, {
     catalog: ['start', 'end'], check: ['start', 'end', 'lines', 'excludeId'], myLoans: [],
     pickupOptions: ['id'], lookup: ['code']
-  });
+  }, T_ALL);
   add('user', true, U, {
     createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force'],
     cancelLoan: ['id', 'reason'], requestPickup: ['id', 'units', 'note'], requestReturn: ['id', 'lines', 'note'], cancelRequest: ['id']
   });
   // 邏輯積木:管理者
-  add('admin', false, A, { dashboard: [], loans: ['filter'], items: [], units: ['itemId'], logs: ['limit'] });
+  add('admin', false, A, { dashboard: [], loans: ['filter'], items: [], units: ['itemId'] }, T_ALL);
+  add('admin', false, A, { logs: ['limit'] }, ['Users']);
   add('admin', true, A, {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
@@ -92,7 +97,7 @@ function dispatch_(req) {
   var lock = LockService.getScriptLock();
   if (route.write && !lock.tryLock(20000)) return { success: false, data: null, error: '系統忙碌中,請稍後再試' };
   try {
-    var db = Memory.load(), events = [];
+    var db = Memory.load(route.tables), events = [];
     var c = { db: db, p: checkPayload_(req.payload, route.fields), user: null, today: Clock.today(), now: Clock.now() };
     if (route.auth !== 'public') c.user = Identity.authenticate(db, req.token, req.action);
     if (route.auth === 'admin') Identity.requireAdmin(c.user);

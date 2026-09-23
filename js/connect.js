@@ -44,5 +44,5 @@ const Api = (() => {
     if (!j || j.success !== true) throw new Error((j && j.error) || '發生錯誤');
     return j.data;
   }
-  return { call };
+  return { call, READ };
 })();

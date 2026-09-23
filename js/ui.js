@@ -31,7 +31,15 @@ const ICON = {
   dl: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>',
   user: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
   box: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 8l8-4 8 4-8 4-8-4zM4 8v8l8 4 8-4V8M12 12v8"/></svg>',
-  qr: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/></svg>'
+  qr: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/></svg>',
+  layers: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5"/></svg>',
+  cube: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8 12 3 3 8v8l9 5 9-5V8zM3 8l9 5 9-5M12 13v8"/></svg>',
+  home: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10 12 4l8 6v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1v-9z"/></svg>',
+  out: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6 4 12l5 6M4 12h11M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/></svg>',
+  clock: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+  alert: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4.5 21 19H3l9-14.5zM12 10v4M12 16.5h.01"/></svg>',
+  check: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
+  wrench: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.5 4.5a5 5 0 0 0-6.2 6.2L4 16l4 4 5.3-5.3a5 5 0 0 0 6.2-6.2L16.5 12 12 7.5l3.5-3z"/></svg>'
 };
 
 let busyN = 0;
@@ -39,11 +47,35 @@ function busy(on) { busyN += on ? 1 : -1; $('#busy').classList.toggle('hidden', 
 async function api(action, payload = {}) {
   busy(true);
   const tok = S.token;
-  try { return await Api.call(action, payload, tok); }
-  catch (e) {
+  try {
+    const data = await Api.call(action, payload, tok);
+    if (!Api.READ.has(action)) RCACHE.clear();        // 任何寫入 → 快取全部失效
+    return data;
+  } catch (e) {
     if (/登入已過期/.test(e.message)) { if (tok && tok === S.token) logout(true); e.silent = true; }
     throw e;
   } finally { busy(false); }
+}
+
+/* 讀取快取:切頁時先用上次的資料立刻畫出畫面,背景再向後端確認,有變動才重畫 */
+const RCACHE = new Map();
+const copy = v => JSON.parse(JSON.stringify(v));
+async function cachedGet(key, action, payload = {}) {
+  const hit = RCACHE.get(key);
+  if (hit) { api(action, payload).then(d => RCACHE.set(key, { data: d })).catch(() => { }); return copy(hit.data); }
+  const data = await api(action, payload);
+  RCACHE.set(key, { data });
+  return copy(data);
+}
+async function withData(main, key, action, payload, draw) {
+  const hit = RCACHE.get(key), view = S.view;
+  if (hit) draw(copy(hit.data));
+  let data;
+  try { data = await api(action, payload); }
+  catch (e) { if (!hit) throw e; if (!e.silent) toast(e.message, true); return; }
+  const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(data);
+  RCACHE.set(key, { data });
+  if (changed && S.view === view) draw(copy(data));
 }
 function toast(msg, err) {
   const t = document.createElement('div');
@@ -148,7 +180,7 @@ function showLogin(mode) {
 }
 function logout(expired) {
   if (!expired && S.token) Api.call('logout', {}, S.token).catch(() => { });   // 後端作廢 token
-  S.token = null; S.user = null; store.del('token'); store.del('user');
+  S.token = null; S.user = null; RCACHE.clear(); store.del('token'); store.del('user');
   if (expired) toast('登入已過期,請重新登入', true);
   showLogin('login');
 }
@@ -251,11 +283,12 @@ function addToCart(itemId, qty) {
 /* ===================== 各頁面 ===================== */
 const VIEWS = {};
 
-VIEWS.catalog = async main => {
+VIEWS.catalog = main => {
   const f = S.filters, range = f.start && f.end && f.start <= f.end;
-  S.items = await api('catalog', range ? { start: f.start, end: f.end } : {});
+  return withData(main, 'catalog|' + (range ? f.start + '~' + f.end : ''), 'catalog', range ? { start: f.start, end: f.end } : {}, items => {
+  S.items = items;
   S.cats = [...new Set(S.items.map(i => i.category))].sort();
-  main.innerHTML = `<h1>展品目錄</h1><p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「展覽規劃」。</p>
+  main.innerHTML = `<div class="eyebrow">Catalog</div><h1>展品目錄</h1><p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「展覽規劃」。</p>
     <div class="toolbar">
       <input class="grow" type="search" id="cq" placeholder="搜尋品名、規格、位置…" value="${esc(f.q)}">
       <select id="ccat" style="width:auto"><option value="">全部類別</option>${S.cats.map(c => `<option ${c === f.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
@@ -289,16 +322,17 @@ VIEWS.catalog = async main => {
   $('#cav').onchange = e => { f.onlyAvail = e.target.checked; draw(); };
   const dch = () => { f.start = $('#cs').value; f.end = $('#ce').value; if ((f.start && f.end) || (!f.start && !f.end)) render(); };
   $('#cs').onchange = dch; $('#ce').onchange = dch;
+  });
 };
 
 VIEWS.plan = async main => {
-  const all = await api('catalog');
+  const all = await cachedGet('catalog|', 'catalog');
   const byId = Object.fromEntries(all.map(i => [i.id, i]));
   S.cart = S.cart.filter(c => byId[c.itemId]); saveCart();
   const P = S.plan, admin = isAdmin();
   const draft = store.get('draft', {});
   if (!S.cart.length) {
-    main.innerHTML = `<h1>展覽規劃</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出借用申請。</p>
+    main.innerHTML = `<div class="eyebrow">Planning</div><h1>展覽規劃</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出借用申請。</p>
       <div class="card empty">還沒有選任何展品。<br><br><button class="btn pri" data-act="go" data-v="catalog">前往展品目錄挑選</button></div>`;
     return;
   }
@@ -373,29 +407,31 @@ VIEWS.plan = async main => {
   recheck();
 };
 
-VIEWS.mine = async main => {
-  const list = await api('myLoans');
+VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
   const act = list.filter(l => ['pending', 'approved', 'out'].includes(l.status)), past = list.filter(l => !act.includes(l));
-  main.innerHTML = `<h1>我的借用</h1><p class="sub">申請進度、借用中的展品與歸還日。</p>
+  main.innerHTML = `<div class="eyebrow">My Loans</div><h1>我的借用</h1><p class="sub">申請進度、借用中的展品與歸還日。</p>
     ${act.some(l => l.overdue) ? '<div class="banner bad">你有逾期未歸還的展品,請儘速歸還。</div>' : ''}
     <h2>進行中(${act.length})</h2><div class="loans">${act.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">目前沒有進行中的借用</div>'}</div>
     <h2>歷史紀錄</h2><div class="loans">${past.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">尚無紀錄</div>'}</div>`;
-};
+});
 
-VIEWS.dash = async main => {
-  const d = await api('dashboard'), s = d.sum;
-  main.innerHTML = `<div class="row"><div><h1>總覽</h1><p class="sub">${esc(d.today)}・主管問「還有幾個」,看這裡或匯出庫存表。</p></div><span class="spacer"></span><button class="btn" data-act="export">${ICON.dl}匯出庫存表</button></div>
+VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
+  const s = d.sum;
+  const kpi = (icon, label, value, cls, act, f) =>
+    `<div class="card kpi ${cls || ''}" ${act ? `data-act="${act}" data-f="${f}" style="cursor:pointer"` : ''}>
+      <div class="box">${icon}</div><div><div class="l">${label}</div><div class="v">${value}</div></div></div>`;
+  main.innerHTML = `<div class="row"><div><div class="eyebrow">Inventory &amp; Loans</div><h1>展品借用與庫存追蹤</h1><p class="sub">${esc(d.today)}・主管問「還有幾個」,看這裡或匯出庫存表。</p></div><span class="spacer"></span><button class="btn" data-act="export">${ICON.dl}匯出庫存表</button></div>
     <div class="kpis">
-      <div class="card kpi"><div class="l">展品品項</div><div class="v">${s.items}</div></div>
-      <div class="card kpi"><div class="l">總件數</div><div class="v">${s.total}</div></div>
-      <div class="card kpi"><div class="l">倉庫在庫</div><div class="v">${s.inStock}</div></div>
-      <div class="card kpi"><div class="l">出借中</div><div class="v">${s.out}</div></div>
-      <div class="card kpi ${d.pending.length ? 'warn' : ''}" data-act="go-loans" data-f="pending" style="cursor:pointer"><div class="l">待審核</div><div class="v">${d.pending.length}</div></div>
-      <div class="card kpi ${d.overdue.length ? 'bad' : ''}" data-act="go-loans" data-f="overdue" style="cursor:pointer"><div class="l">逾期未還</div><div class="v">${d.overdue.length}</div></div>
-      <div class="card kpi ${d.requests.length ? 'warn' : ''}" data-act="go-loans" data-f="request" style="cursor:pointer"><div class="l">待確認簽收/歸還</div><div class="v">${d.requests.length}</div></div>
-      <div class="card kpi"><div class="l">維修 / 遺失</div><div class="v">${s.repair} / ${s.lost}</div></div>
+      ${kpi(ICON.layers, '展品品項', s.items)}
+      ${kpi(ICON.cube, '總件數', s.total)}
+      ${kpi(ICON.home, '倉庫在庫', s.inStock)}
+      ${kpi(ICON.out, '出借中', s.out)}
+      ${kpi(ICON.clock, '待審核', d.pending.length, d.pending.length ? 'warn' : '', 'go-loans', 'pending')}
+      ${kpi(ICON.alert, '逾期未還', d.overdue.length, d.overdue.length ? 'bad' : '', 'go-loans', 'overdue')}
+      ${kpi(ICON.check, '待確認簽收/歸還', d.requests.length, d.requests.length ? 'warn' : '', 'go-loans', 'request')}
+      ${kpi(ICON.wrench, '維修 / 遺失', s.repair + ' / ' + s.lost)}
     </div>
-    ${d.requests.length ? `<div class="card" style="margin-top:14px;border-color:var(--warn)"><h2 style="margin-top:0">等待確認的簽收 / 歸還</h2>${d.requests.map(l => miniRow(l, `<span class="pill pending">${esc(l.stage)}</span>`)).join('')}</div>` : ''}
+    ${d.requests.length ? `<div class="card" style="margin-top:14px;border-color:var(--warn-soft)"><h2 style="margin-top:0">等待確認的簽收 / 歸還</h2>${d.requests.map(l => miniRow(l, `<span class="pill pending">${esc(l.stage)}</span>`)).join('')}</div>` : ''}
     <div class="cols" style="margin-top:14px">
       <div class="card"><h2 style="margin-top:0">逾期未還</h2>${d.overdue.map(l => miniRow(l, `<span class="pill bad">逾期 ${l.overdueDays} 天</span>`)).join('') || '<div class="empty">沒有逾期,很好</div>'}</div>
       <div class="card"><h2 style="margin-top:0">待審核</h2>${d.pending.map(l => miniRow(l)).join('') || '<div class="empty">沒有待審核的申請</div>'}</div>
@@ -403,12 +439,11 @@ VIEWS.dash = async main => {
       <div class="card"><h2 style="margin-top:0">3 天內到期</h2>${d.dueSoon.map(l => miniRow(l, `<span class="pill out">${fmtD(l.end)} 還</span>`)).join('') || '<div class="empty">無</div>'}</div>
     </div>
     ${d.lowStock.length ? `<div class="card" style="margin-top:14px"><h2 style="margin-top:0">倉庫已無在庫</h2><div class="chips">${d.lowStock.map(i => `<span class="pill bad">${esc(i.name)}(${i.out}/${i.total} 借出)</span>`).join('')}</div></div>` : ''}`;
-};
+});
 
-VIEWS.loans = async main => {
+VIEWS.loans = main => withData(main, 'loans|' + S.loanFilter, 'loans', { filter: S.loanFilter }, list => {
   const F = [['request', '待確認'], ['pending', '待審核'], ['approved', '待點交'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
-  const list = await api('loans', { filter: S.loanFilter });
-  main.innerHTML = `<div class="row"><div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「展覽規劃」代為登記。</p></div><span class="spacer"></span><button class="btn pri" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
+  main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「展覽規劃」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
     <div class="toolbar"><div class="seg">${F.map(([k, l]) => `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}</button>`).join('')}</div>
     <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…"></div>
     <div class="loans" id="llist"></div>`;
@@ -418,35 +453,36 @@ VIEWS.loans = async main => {
     $('#llist').innerHTML = f.map(l => loanCard(l)).join('') || '<div class="card empty">沒有符合的借用單</div>';
   };
   draw(); $('#lq').oninput = e => draw(e.target.value);
-  if (S._focusLoan) { const el = $('#loan-' + S._focusLoan); if (el) { el.scrollIntoView({ block: 'center' }); el.style.outline = '2px solid var(--accent)'; } S._focusLoan = null; }
-};
-VIEWS.items = async main => {
-  const list = await api('items');
+  if (S._focusLoan) { const el = $('#loan-' + S._focusLoan); if (el) { el.scrollIntoView({ block: 'center' }); el.style.outline = '2px solid var(--red)'; } S._focusLoan = null; }
+});
+VIEWS.items = main => withData(main, 'items', 'items', {}, list => {
   S.items = list; S.cats = [...new Set(list.map(i => i.category))].sort();
-  main.innerHTML = `<div class="row"><div><h1>展品管理</h1><p class="sub">貴重品用「逐台編號」(每台一張 QR 標籤);道具、線材用「數量」。</p></div><span class="spacer"></span>
-    <button class="btn" data-act="import">批次匯入</button><button class="btn" data-act="export">${ICON.dl}匯出</button><button class="btn pri" data-act="edit-item">${ICON.plus}新增展品</button></div>
+  main.innerHTML = `<div class="row"><div><div class="eyebrow">Items</div><h1>展品管理</h1><p class="sub">貴重品用「逐台編號」(每台一張 QR 標籤);道具、線材用「數量」。</p></div><span class="spacer"></span>
+    <button class="btn" data-act="import">批次匯入</button><button class="btn" data-act="export">${ICON.dl}匯出</button><button class="btn brand" data-act="edit-item">${ICON.plus}新增展品</button></div>
     <div class="toolbar"><input class="grow" type="search" id="iq" placeholder="搜尋…" value="${esc(S.itemQ)}"><label class="chk"><input type="checkbox" id="iarc" ${S.showArchived ? 'checked' : ''}>顯示已下架</label></div>
     <div class="tbl-wrap"><table><thead><tr><th>編號</th><th>品名</th><th>類別</th><th>方式</th><th class="num">總數</th><th class="num">在庫</th><th class="num">借出</th><th class="num">預約</th><th>存放位置</th><th>最後盤點</th><th></th></tr></thead><tbody id="ibody"></tbody></table></div>`;
   const draw = () => {
     const q = S.itemQ.toLowerCase();
     $('#ibody').innerHTML = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec].join(' ').toLowerCase().includes(q))).map(i => `
       <tr class="${i.archived ? 'dim' : ''}"><td class="mono">${esc(i.id)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.mode === 'unit' ? '<span class="pill unit">逐台</span>' : '<span class="pill">數量</span>'}</td>
-      <td class="num">${i.total}</td><td class="num">${i.inStock}</td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${esc(i.location)}</td><td>${esc(i.countedAt || '—')}</td>
+      <td class="num">${i.total}</td><td class="num"><span class="chipnum ${i.inStock ? '' : 'zero'}">${i.inStock}</span></td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${esc(i.location)}</td><td>${esc(i.countedAt || '—')}</td>
       <td><div class="row" style="gap:4px;flex-wrap:nowrap">${i.mode === 'unit' ? `<button class="btn sm" data-act="units" data-id="${i.id}">單台 / QR</button>` : ''}<button class="btn sm" data-act="edit-item" data-id="${i.id}">編輯</button>
       <button class="btn sm ghost" data-act="archive" data-id="${i.id}" data-on="${i.archived ? '0' : '1'}">${i.archived ? '上架' : '下架'}</button></div></td></tr>`).join('') || '<tr><td colspan="11" class="empty">尚無展品</td></tr>';
   };
   draw();
   $('#iq').oninput = e => { S.itemQ = e.target.value; draw(); };
   $('#iarc').onchange = e => { S.showArchived = e.target.checked; draw(); };
-};
+});
 
 VIEWS.count = async main => {
-  const list = (await api('items')).filter(i => !i.archived);
+  const [items, allUnits] = await Promise.all([cachedGet('items', 'items'), cachedGet('units|all', 'units')]);
+  const list = items.filter(i => !i.archived);
   const unitItems = list.filter(i => i.mode === 'unit'), qtyItems = list.filter(i => i.mode === 'qty');
   const unitsBy = {};
-  await Promise.all(unitItems.map(async i => { unitsBy[i.id] = await api('units', { itemId: i.id }); }));
+  unitItems.forEach(i => unitsBy[i.id] = []);
+  allUnits.forEach(u => { if (unitsBy[u.itemId]) unitsBy[u.itemId].push(u); });
   const seen = new Set(), scope = new Set();
-  main.innerHTML = `<h1>盤點</h1><p class="sub">「應在庫」已扣除借出中的數量。數量品項填實點數;逐台品項勾選或掃描點到的編號。未填 / 未勾選的品項不列入本次盤點。</p>
+  main.innerHTML = `<div class="eyebrow">Stocktake</div><h1>盤點</h1><p class="sub">「應在庫」已扣除借出中的數量。數量品項填實點數;逐台品項勾選或掃描點到的編號。未填 / 未勾選的品項不列入本次盤點。</p>
     <div class="card" style="margin-bottom:14px"><div class="row"><input class="grow" type="text" id="kscan" placeholder="輸入或用掃描槍刷編號後按 Enter(例:E0001)" style="flex:1 1 240px"><button class="btn" data-act="count-cam">${ICON.scan}相機掃描</button></div><div class="meta" id="klast" style="margin-top:6px"></div></div>
     <h2>逐台編號品項</h2><div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${unitItems.map(i => {
       const us = unitsBy[i.id].filter(u => u.status === 'in' || u.status === 'lost');
@@ -489,9 +525,8 @@ VIEWS.count = async main => {
   };
 };
 
-VIEWS.users = async main => {
-  const list = await api('users');
-  main.innerHTML = `<div class="row"><div><h1>使用者</h1><p class="sub">同仁以工號登入(不需密碼);管理者需另設 PIN。人員異動時重新匯入即可更新。</p></div><span class="spacer"></span><button class="btn" data-act="import-users">匯入人員清單</button><button class="btn pri" data-act="edit-user">${ICON.plus}新增</button></div>
+VIEWS.users = main => withData(main, 'users', 'users', {}, list => {
+  main.innerHTML = `<div class="row"><div><div class="eyebrow">People</div><h1>使用者</h1><p class="sub">同仁以工號登入(不需密碼);管理者需另設 PIN。人員異動時重新匯入即可更新。</p></div><span class="spacer"></span><button class="btn" data-act="import-users">匯入人員清單</button><button class="btn brand" data-act="edit-user">${ICON.plus}新增</button></div>
     <div class="toolbar"><input class="grow" type="search" id="uq" placeholder="搜尋工號、姓名、部門…"></div>
     <div class="tbl-wrap"><table><thead><tr><th>工號</th><th>姓名</th><th>部門</th><th>Email</th><th>角色</th><th>狀態</th><th></th></tr></thead><tbody id="ubody"></tbody></table></div>`;
   S._users = list;
@@ -501,11 +536,10 @@ VIEWS.users = async main => {
     <td><button class="btn sm" data-act="edit-user" data-id="${u.id}">編輯</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">無資料</td></tr>';
   };
   draw(); $('#uq').oninput = e => draw(e.target.value);
-};
+});
 
-VIEWS.logs = async main => {
-  const list = await api('logs', { limit: 500 });
-  main.innerHTML = `<h1>操作紀錄</h1><p class="sub">誰在什麼時候做了什麼。最近 500 筆,完整紀錄在試算表「操作紀錄」工作表。</p>
+VIEWS.logs = main => withData(main, 'logs', 'logs', { limit: 500 }, list => {
+  main.innerHTML = `<div class="eyebrow">Audit log</div><h1>操作紀錄</h1><p class="sub">誰在什麼時候做了什麼。最近 500 筆,完整紀錄在試算表「操作紀錄」工作表。</p>
     <div class="toolbar"><input class="grow" type="search" id="gq" placeholder="搜尋人名、單號、動作…"></div>
     <div class="tbl-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>動作</th><th>對象</th><th>內容</th></tr></thead><tbody id="gbody"></tbody></table></div>`;
   const draw = q => {
@@ -514,7 +548,7 @@ VIEWS.logs = async main => {
       `<tr><td class="mono">${esc(l.ts)}</td><td>${esc(l.user)}</td><td>${esc(l.action)}</td><td class="mono">${esc(l.ref)}</td><td class="wrap">${esc(l.detail)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">無紀錄</td></tr>';
   };
   draw(); $('#gq').oninput = e => draw(e.target.value);
-};
+});
 
 /* ===================== 借用單動作 ===================== */
 async function getLoan(id) { const all = await api('loans', { filter: 'all' }); return all.find(l => l.id === id); }
@@ -859,6 +893,14 @@ document.addEventListener('click', e => {
   const f = ACT[el.dataset.act]; if (f) f(el);
 });
 document.addEventListener('keydown', e => { const m = $('#modal-bg'); if (e.key === 'Escape' && !$('#scanner-bg') && !(m && m.dataset.locked)) closeModal(); });
+/* 主題(淺色 / 深色),記在這台裝置 */
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  $('#m-theme').textContent = t === 'dark' ? '淺色模式' : '深色模式';
+  store.set('theme', t);
+}
+applyTheme(store.get('theme', 'light'));
+$('#m-theme').onclick = () => { $('#menu-pop').classList.add('hidden'); applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); };
 $('#lookup-btn').onclick = () => lookupModal();
 $('#menu-btn').onclick = () => $('#menu-pop').classList.toggle('hidden');
 $('#m-pin').onclick = () => { $('#menu-pop').classList.add('hidden'); pinModal(); };

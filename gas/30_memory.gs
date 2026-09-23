@@ -1,7 +1,8 @@
 /**
  * 【記憶積木】30_memory.gs
  * 輸入:邏輯積木(經守門調度交付)的讀寫指令
- * 責任:Google Sheets 的結構定義(工作表、欄位)與存取
+ * 責任:Google Sheets 的結構定義(工作表、欄位)與存取;只讀取這次請求需要的工作表,
+ *       並用 CacheService 快取(寫入時以版本號失效)以加快讀取
  * 輸出:原始資料列(物件陣列)
  * 禁止:不做業務判斷;試算表內不寫公式當邏輯
  */
@@ -43,33 +44,61 @@ var Memory = (function () {
   }
   function empty_(key, h) { var jf = JSON_FIELDS[key] || {}; return h in jf ? JSON.parse(JSON.stringify(jf[h])) : ''; }
 
-  /** 讀取所有資料表(依表頭名稱對應,欄位順序可調整) */
-  function load() {
-    var db = {};
-    TABLES.forEach(function (key) {
-      var sh = sheet_(key), jf = JSON_FIELDS[key] || {}, rows = [];
-      var last = sh.getLastRow(), lastCol = Math.max(1, sh.getLastColumn());
-      if (last > 1) {
-        var vals = sh.getRange(1, 1, last, lastCol).getValues();
-        var head = vals[0].map(function (h) { return String(h).trim(); });
-        vals.slice(1).forEach(function (r) {
-          if (r.join('') === '') return;
-          var o = {};
-          head.forEach(function (h, i) {
-            if (!h) return;
-            var v = cellOut_(r[i]);
-            if (h in jf) { try { v = v ? JSON.parse(v) : empty_(key, h); } catch (e) { v = empty_(key, h); } }
-            o[h] = v;
-          });
-          SCHEMA[key].forEach(function (h) { if (!(h in o)) o[h] = empty_(key, h); });
-          o.id = String(o.id || '');
-          if (key === 'Users') o.empNo = String(o.empNo || '').trim();
-          rows.push(o);
+  /* ---- 快取:每張表一份,版本號變更即失效(上限 100KB 的表才快取) ---- */
+  var CACHE_SEC = 300;
+  function version_() {
+    var p = PropertiesService.getScriptProperties(), v = p.getProperty('DBVER');
+    if (!v) { v = '1'; p.setProperty('DBVER', v); }
+    return v;
+  }
+  function bumpVersion_() {
+    var p = PropertiesService.getScriptProperties();
+    p.setProperty('DBVER', String((+p.getProperty('DBVER') || 1) + 1));
+  }
+  function cacheGet_(key) {
+    try { var raw = CacheService.getScriptCache().get(key + ':' + version_()); return raw ? JSON.parse(raw) : null; }
+    catch (e) { return null; }
+  }
+  function cachePut_(key, rows) {
+    try {
+      var raw = JSON.stringify(rows);
+      if (raw.length < 95000) CacheService.getScriptCache().put(key + ':' + version_(), raw, CACHE_SEC);
+    } catch (e) { /* 快取失敗不影響正確性 */ }
+  }
+
+  function readTable_(key) {
+    var cached = cacheGet_(key);
+    if (cached) return cached;
+    var sh = sheet_(key), jf = JSON_FIELDS[key] || {}, rows = [];
+    var last = sh.getLastRow(), lastCol = Math.max(1, sh.getLastColumn());
+    if (last > 1) {
+      var vals = sh.getRange(1, 1, last, lastCol).getValues();
+      var head = vals[0].map(function (h) { return String(h).trim(); });
+      vals.slice(1).forEach(function (r) {
+        if (r.join('') === '') return;
+        var o = {};
+        head.forEach(function (h, i) {
+          if (!h) return;
+          var v = cellOut_(r[i]);
+          if (h in jf) { try { v = v ? JSON.parse(v) : empty_(key, h); } catch (e) { v = empty_(key, h); } }
+          o[h] = v;
         });
-      }
-      db[key] = rows;
-    });
-    db._dirty = {}; db._newLogs = [];
+        SCHEMA[key].forEach(function (h) { if (!(h in o)) o[h] = empty_(key, h); });
+        o.id = String(o.id || '');
+        if (key === 'Users') o.empNo = String(o.empNo || '').trim();
+        rows.push(o);
+      });
+    }
+    cachePut_(key, rows);
+    return rows;
+  }
+
+  /** 讀取資料表(依表頭名稱對應,欄位順序可調整)。tables 省略時讀全部 */
+  function load(tables) {
+    var want = tables && tables.length ? tables : TABLES;
+    var db = {};
+    TABLES.forEach(function (key) { db[key] = want.indexOf(key) >= 0 ? readTable_(key) : []; });
+    db._dirty = {}; db._newLogs = []; db._loaded = want.slice();
     return db;
   }
 
@@ -93,6 +122,7 @@ var Memory = (function () {
       rg.setValues(all);
       sh.getRange(1, 1, 1, head.length).setFontWeight('bold');
     });
+    if (Object.keys(db._dirty || {}).length) bumpVersion_();
     var logs = db._newLogs || [];
     if (logs.length) {
       var sh = sheet_('Logs'), head = SCHEMA.Logs;
