@@ -329,6 +329,20 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   const lineN = await p.evaluate(() => JSON.stringify(S.showLines));
   if (!/加入展覽.已選 2/.test(btnTxt)) throw new Error('卡片沒顯示已選數量,按鈕是「' + btnTxt + '」,S.showLines=' + lineN);
   await shot('show-pick');
+  // ★ 挑到一半重新整理:要回到原地繼續,而且已選的東西不能不見
+  await p.reload(); await wait(2500);
+  const afterReload = await p.textContent('#pickbar');
+  if (!/已選 1 項/.test(afterReload)) throw new Error('重整之後挑選中的清單不見了:' + afterReload);
+  // ★ 挑選中途跑回展覽頁按「儲存」,挑選狀態要一起收掉 ——
+  //   只清一半的話,重整之後會帶著空清單回到挑選模式,按「完成」就把後端的清單洗光
+  await p.click('[data-v=shows]'); await wait(1500);
+  await p.click('#shform button'); await wait(1500);
+  await p.reload(); await wait(2500);
+  if (await p.$('#pickbar')) throw new Error('★ 存檔之後不該還停在挑選模式');
+  await p.click('[data-v=shows]'); await wait(1500);
+  await p.click('[data-act=show-open]'); await wait(1500);       // 修好之後重整會落在清單,要再點進那一場
+  if (!/林口/.test(await p.textContent('#shlines'))) throw new Error('★ 存檔後重整,需求清單被清掉了');
+  await p.click('[data-act=show-pick]'); await wait(1800);
   await p.click('[data-act=show-pick-done]'); await wait(1800);
   if (!/林口/.test(await p.textContent('#shlines'))) throw new Error('挑完沒有帶回需求清單');
   // 場地與承辦人不可以被挑選流程洗掉
@@ -369,12 +383,31 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await shot('show-detail');
   await p.click('[data-act=show-back]'); await wait(900);
   if (!/春季巡迴展/.test(await p.textContent('#main'))) throw new Error('展覽清單沒有這一場');
+  // ★ 點進某一場 → 切走 → 再回來,應該看到清單,不是停在上一場
+  await p.click('[data-act=show-open]'); await wait(1200);
+  if (!await p.$('#shform')) throw new Error('沒有進到展覽明細');
+  await p.click('[data-v=items]'); await wait(900);
+  await p.click('[data-v=shows]'); await wait(1200);
+  if (await p.$('#shform')) throw new Error('★ 切回展覽分頁應該回到清單,不該停在上一場');
   await p.click('[data-v=loans]'); await wait(700); await p.click('[data-f=all]'); await wait(1000);
   // 列印:攔下 window.open,檢查產出的單據內容
   await p.evaluate(() => { window.__printed = ''; window.open = () => ({ document: { write: h => { window.__printed = h; }, close() { } }, print() { } }); });
   await (await p.$('[data-act=print-loan]')).click(); await wait(700);
   const printed = await p.evaluate(() => window.__printed || '');
   if (!/展品借用單/.test(printed) || !/簽名/.test(printed)) throw new Error('列印單據內容不對');
+  // ★ 換人登入不可以看到前一個人的購物車(工作中的狀態要綁使用者,登出要清掉)
+  await p.click('[data-v=catalog]'); await wait(1200);
+  await (await p.$$('[data-act=add-cart]'))[0].click(); await wait(500);
+  if (!/借用申請/.test(await p.textContent('#tabs'))) throw new Error('分頁名稱應該是「借用申請」');
+  const badgeBefore = await p.textContent('#tabs [data-v=plan]');
+  if (!/\d/.test(badgeBefore)) throw new Error('加入之後分頁上應該有數量徽章:' + badgeBefore);
+  await p.click('#menu-btn'); await p.click('#m-out'); await p.waitForSelector('#login-f');
+  await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
+  const badgeAfter = await p.textContent('#tabs [data-v=plan]');
+  if (/\d/.test(badgeAfter)) throw new Error('★ 換人登入後還看得到前一個人的購物車:' + badgeAfter);
+  await p.click('[data-v=plan]'); await wait(800);
+  if (!/還沒有選任何展品/.test(await p.textContent('#main'))) throw new Error('★ 換人登入後購物車應該是空的');
+
   await p.setViewportSize({ width: 390, height: 844 }); await p.click('[data-v=catalog]'); await wait(300); await shot('mobile');
   const sw = await p.evaluate(() => document.documentElement.scrollWidth);
   console.log(errs.length ? 'ERR ' + errs.join('|') : '✔ UI 流程通過', 'scrollWidth=' + sw);

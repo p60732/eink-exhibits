@@ -238,16 +238,15 @@ var Memory = (function () {
 
   /** 讀取資料表(依表頭名稱對應,欄位順序可調整)。spec 省略時讀全部 */
   function load(spec) {
-    var want = want_(spec), db = {}, loaded = [], full = {};
+    var want = want_(spec), db = {}, full = {};
     TABLES.forEach(function (key) {
       // 沒被要求的表給空陣列;它「不是完整的」,所以之後不可能被寫回(見 save 的檢查)
       if (want && !(key in want)) { db[key] = []; full[key] = false; return; }
       var w = want ? want[key] : { cols: null, only: null };
       db[key] = readTable_(key, w.cols, w.only);
       full[key] = !w.cols && !w.only;          // 欄位與列都沒限縮,才算完整
-      loaded.push(key);
     });
-    db._dirty = {}; db._newLogs = []; db._loaded = loaded; db._full = full;
+    db._dirty = {}; db._newLogs = []; db._full = full;
     return db;
   }
 

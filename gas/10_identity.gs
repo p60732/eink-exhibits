@@ -171,5 +171,5 @@ var Identity = (function () {
     }
   };
 
-  return { actions: actions, authenticate: authenticate, requireAdmin: requireAdmin, verifyAdmin: verifyAdmin, findByEmp: findByEmp };
+  return { actions: actions, authenticate: authenticate, requireAdmin: requireAdmin, verifyAdmin: verifyAdmin };
 })();

@@ -336,6 +336,83 @@ assert.strictEqual(avail(), 10, '結案之後全部釋放');
 const pre = ok('showCheck', { from: '2027-03-01', to: '2027-03-10', lines: [{ itemId: expo.id, location: '新竹', qty: 12 }] }, A);
 assert.deepStrictEqual([pre[0].available, pre[0].short], [10, 2]);
 
+
+/* ===== 審查抓到的回歸案例(v2.2)=====
+ * 這一段每一條都先在未修正的版本上重現過,確認會給出錯的結果,才寫成測試。
+ */
+const RG = ok('saveItem', { item: { name: '回歸用單台機', mode: 'unit', unitCount: 2, category: '體驗區', location: '新竹' } }, A);
+const RQ = ok('saveItem', { item: { name: '回歸用雙廠機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 5 }, { location: '林口', qty: 5 }] } }, A);
+
+// 1. 同一台編號送兩次,只能算一次 —— 否則單子提早結案,另一台永遠卡在「借出中」
+const R1 = ok('createLoan', { event: '重複歸還', start: '2026-09-22', end: '2026-09-30',
+  lines: [{ itemId: RG.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A);
+const RU = ok('units', { itemId: RG.id }, A).map(u => u.id);
+ok('checkout', { id: R1.id, units: { [RG.id]: RU } }, A);
+let r1 = ok('receive', { id: R1.id, lines: [{ itemId: RG.id, location: '新竹',
+  unitResults: [{ id: RU[0], result: 'in' }, { id: RU[0], result: 'in' }] }] }, A);
+assert.strictEqual(r1.status, 'out', '★ 只還了一台,單子不可以變成已歸還');
+assert.strictEqual(r1.lines[0].returned, 1, '★ 同一台送兩次只能算一次');
+ok('receive', { id: R1.id, lines: [{ itemId: RG.id, location: '新竹', unitResults: [{ id: RU[1], result: 'in' }] }] }, A);
+assert.strictEqual(ok('units', { itemId: RG.id }, A).every(u => u.status === 'in'), true, '兩台都回到在庫');
+
+// 2. 歸還只送一個地點時,不可以套用到同品項的另一個地點
+const R2 = ok('createLoan', { event: '兩地借用', start: '2026-09-22', end: '2026-09-30',
+  lines: [{ itemId: RQ.id, location: '新竹', qty: 3 }, { itemId: RQ.id, location: '林口', qty: 2 }],
+  onBehalf: true, applicant: '10231' }, A);
+ok('checkout', { id: R2.id, units: {} }, A);
+const r2 = ok('receive', { id: R2.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 3 }] }, A);
+assert.strictEqual(r2.status, 'out', '★ 林口還沒還,整張單不可以結案');
+assert.strictEqual(r2.lines.find(l => l.location === '林口').returned, 0, '★ 林口那行不可以被新竹的數量帶著還掉');
+ok('receive', { id: R2.id, lines: [{ itemId: RQ.id, location: '林口', returned: 2 }] }, A);
+
+// 3. 駁回要清掉待確認請求,而且已駁回的單不能再被延期 / 轉借
+const R3 = ok('createLoan', { event: '駁回測試', start: '2026-09-25', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
+ok('approve', { id: R3.id }, A);
+ok('requestExtend', { id: R3.id, end: '2026-10-31' }, U);
+ok('reject', { id: R3.id, note: '不准' }, A);
+assert.strictEqual(ok('loans', { filter: 'all' }, A).find(L => L.id === R3.id).request, null, '★ 駁回要把待確認請求清掉');
+bad('decideRequest', { id: R3.id, ok: true }, A, /沒有待處理/);
+bad('extendLoan', { id: R3.id, end: '2026-11-30' }, A, /已核准或出借中/);
+
+// 4. 已經有待確認請求時,不可以被簽收 / 歸還申請無聲蓋掉
+const R4 = ok('createLoan', { event: '請求覆蓋測試', start: '2026-09-22', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
+ok('approve', { id: R4.id }, A);
+ok('checkout', { id: R4.id, units: {} }, A);
+ok('requestExtend', { id: R4.id, end: '2026-10-31' }, U);
+bad('requestReturn', { id: R4.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 1 }] }, U, /待確認的請求/);
+ok('cancelRequest', { id: R4.id }, U);
+ok('receive', { id: R4.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 1 }] }, A);
+
+// 5. 展覽卡位:部分歸還不可以把展期內的庫存放給別人
+const RS0 = ok('saveItem', { item: { name: '回歸用展覽機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 10 }] } }, A);
+let RS = ok('saveShow', { show: { name: '回歸展', from: '2027-06-01', to: '2027-06-30', owner: '10231',
+  lines: [{ itemId: RS0.id, location: '新竹', qty: 10 }] } }, A);
+RS = ok('setShowStatus', { id: RS.id, status: 'confirmed' }, A);
+const RSg = ok('createLoansFromShow', { id: RS.id }, A);
+ok('checkout', { id: RSg.ids[0], units: {} }, A);
+const rsAvail = () => ok('check', { start: '2027-06-10', end: '2027-06-11', lines: [{ itemId: RS0.id, location: '新竹', qty: 1 }] }, U)[0].available;
+assert.strictEqual(rsAvail(), 0, '全部借出時展期內可借 0');
+ok('receive', { id: RSg.ids[0], lines: [{ itemId: RS0.id, location: '新竹', returned: 4 }] }, A);
+assert.strictEqual(rsAvail(), 0, '★ 還回 4 台,展覽要把那份重新佔住,不可以放給別人');
+
+// 6. 已結案 / 已取消的展覽不能再掛新單
+ok('receive', { id: RSg.ids[0], lines: [{ itemId: RS0.id, location: '新竹', returned: 6 }] }, A);
+RS = ok('setShowStatus', { id: RS.id, status: 'closed' }, A);
+bad('createLoan', { event: '結案後插隊', start: '2027-06-02', end: '2027-06-03',
+  lines: [{ itemId: RS0.id, location: '新竹', qty: 1 }], showId: RS.id, onBehalf: true, applicant: '10231' }, A, /不能再掛新的借用單/);
+
+// 7. 有待審核的申請時不可以下架
+const R7 = ok('createLoan', { event: '下架測試', start: '2026-12-20', end: '2026-12-22', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
+bad('archiveItem', { id: RQ.id, archived: true }, A, /待審核/);
+ok('cancelLoan', { id: R7.id, reason: '測試完畢' }, U);
+
+// 8. 某地點的單台全部點到 → 最後盤點日要算得出來(讀取規格少了 countedAt 就會永遠是空的)
+ok('stocktake', { location: '新竹', unitItems: [RG.id], seenUnits: RU, apply: true }, A);
+const rgView = ok('items', {}, A).find(x => x.id === RG.id);
+assert.strictEqual((rgView.sites.find(g => g.location === '新竹') || {}).countedAt, '2026-09-22', '★ 該地點全部點到,最後盤點日要填上');
+// 展覽清單的分類也要讀得到(ITEM_CALC 原本沒宣告 category,只是剛好被連續段順便讀到)
+assert.strictEqual(ok('show', { id: SH.id }, A).lines[0].category, 'Signage', '展覽需求清單要帶得出分類');
+
 // ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
 // 多做一筆封存展品與一筆待審單,讓限縮欄位(archived / status / request)都被走到
 const U2b = ok('login', { emp: '10477' }).token;   // 先前登出過,重新取得憑證

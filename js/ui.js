@@ -10,7 +10,7 @@ const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
   cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
-  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, logQ: '',
+  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false,
   showId: null, showFilter: 'open', showLines: null, showPick: null
 };
 const $ = (s, el = document) => el.querySelector(s);
@@ -19,6 +19,8 @@ const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&a
 const isRealAdmin = () => !!(S.user && S.user.role === 'admin');
 // 管理者可切到「同仁視角」預覽:畫面一律以 isAdmin() 為準,實際權限仍在後端
 const isAdmin = () => isRealAdmin() && !S.asUser;
+/** 工作中的狀態(購物車、草稿、挑選清單)要綁使用者,不然同一台電腦換人登入會接手前一個人的東西 */
+function uk(k) { return k + '_' + ((S.user && S.user.id) || '-'); }
 const store = {
   get(k, d) { try { const v = localStorage.getItem('exh_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('exh_' + k, JSON.stringify(v)); } catch (e) { } },
@@ -99,16 +101,21 @@ async function cachedGet(key, action, payload = {}) {
   cacheSet(key, r.data, r.gen);
   return copy(r.data);
 }
-async function withData(main, key, action, payload, draw) {
-  const hit = RCACHE.get(key), view = S.view;
-  if (hit) draw(copy(hit.data));
+/**
+ * gen:呼叫端在「開始畫這個分頁」時記下的 RGEN。
+ * 非同步的分頁(目錄、展品管理)在 await 之後才記的話,記到的已經是新分頁的名字,守衛形同虛設。
+ */
+async function withData(main, key, action, payload, draw, gen) {
+  const live = () => gen == null || gen === RGEN;
+  const hit = RCACHE.get(key);
+  if (hit && live()) draw(copy(hit.data));
   if (fresh(hit)) return;               // 同一批資料的不同分頁互相切換時,不用重打
   let r;
   try { r = await freshFetch(key, action, payload); }
-  catch (e) { if (!hit) throw e; if (!e.silent) toast(e.message, true); return; }
+  catch (e) { if (!hit) throw e; if (!e.silent && live()) toast(e.message, true); return; }
   const changed = !hit || JSON.stringify(hit.data) !== JSON.stringify(r.data);
   cacheSet(key, r.data, r.gen);
-  if (changed && S.view === view) draw(copy(r.data));
+  if (changed && live()) draw(copy(r.data));
 }
 function toast(msg, err) {
   const t = document.createElement('div');
@@ -170,9 +177,6 @@ async function openScanner(onCode, title = '掃描 QR Code') {
 /* ===================== 登入 ===================== */
 async function boot() {
   S.token = store.get('token', null); S.user = store.get('user', null);
-  S.cart = store.get('cart', []); S.plan = store.get('plan', { start: '', end: '' });
-  S.showPick = store.get('showpick', null);
-  if (S.showPick) { S.showId = S.showPick.id; S.showLines = store.get('showlines', []); S.view = 'catalog'; }
   if (S.token && S.user) {
     try { S.user = await api('me'); store.set('user', S.user); return enterApp(); } catch (e) { }
   }
@@ -216,16 +220,35 @@ function showLogin(mode) {
 function logout(expired) {
   if (!expired && S.token) Api.call('logout', {}, S.token).catch(() => { });   // 後端作廢 token
   S.token = null; S.user = null; S.asUser = false; bumpCache(); store.del('token'); store.del('user');
+  clearWork();                                            // 不清的話下一個人會看到上一個人的購物車
   if (expired) toast('登入已過期,請重新登入', true);
   showLogin('login');
 }
+/** 載入這個使用者自己的工作狀態(登入之後才做,因為 key 綁 user id) */
+function loadWork() {
+  S.cart = store.get(uk('cart'), []);
+  S.plan = store.get(uk('plan'), { start: '', end: '' });
+  S.editing = store.get(uk('editing'), null);
+  S.showPick = store.get(uk('showpick'), null);
+  S.showLines = null; S.showId = null;
+  if (S.showPick) { S.showId = S.showPick.id; S.showLines = store.get(uk('showlines'), []); }
+}
+/** 登出 / 換人時把記憶體裡的工作狀態歸零(localStorage 留著,是那個人自己的) */
+function clearWork() {
+  S.cart = []; S.plan = { start: '', end: '' }; S.editing = null;
+  S.showPick = null; S.showLines = null; S.showId = null;
+  S.multi = new Set(); S.loanFilter = 'pending'; S.itemQ = ''; S.cat = ''; S.site = '';
+  S.filters = { q: '', cat: '', start: '', end: '', onlyAvail: false };
+}
 function enterApp() {
+  loadWork();
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); $('#top').classList.remove('hidden');
   S.asUser = isRealAdmin() && !!store.get('asUser_' + S.user.id, false);
   syncRole();
   $('#lookup-btn').classList.remove('hidden');
   const saved = store.get('view_' + S.user.id, null);
   S.view = saved && tabsFor().some(t => t[0] === saved) ? saved : (isAdmin() ? 'dash' : 'catalog');
+  if (S.showPick) S.view = 'catalog';                    // 挑選到一半重新整理,回到原地繼續
   if (S.user.mustChangePin) { $('#main').innerHTML = ''; renderTabs(); return pinModal(true); }
   render();
 }
@@ -261,14 +284,20 @@ function tabsFor() {
 function renderTabs() {
   $('#tabs').innerHTML = tabsFor().map(([k, l]) => `<button class="tab ${S.view === k ? 'on' : ''}" data-act="go" data-v="${k}">${l}</button>`).join('');
 }
+let RGEN = 0;                    // 畫面世代:每次切換分頁 +1,用來丟掉「上一個分頁晚回來的資料」
 async function render() {
+  RGEN++;
   renderTabs();
   if (S.user) store.set('view_' + S.user.id, S.view);
   const main = $('#main');
   const V = VIEWS[S.view];
   try { await V(main); } catch (e) { main.innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
 }
-function go(v) { S.view = v; window.scrollTo(0, 0); render(); }
+function go(v) {
+  // 離開展覽分頁(而且不是去挑展品)就把開著的那一場收掉,下次點分頁是看清單不是上一場
+  if (S.view === 'shows' && v !== 'shows' && !S.showPick) { S.showId = null; S.showLines = null; }
+  S.view = v; window.scrollTo(0, 0); render();
+}
 /* ===================== 共用元件 ===================== */
 function statusPill(L) {
   return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.stage ? ` <span class="pill pending">${esc(L.stage)}</span>` : '') + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
@@ -350,7 +379,7 @@ async function exportStock() {
     .concat(list.map(i => [i.id, i.name, i.category, i.mode === 'unit' ? '逐台編號' : '數量', i.total, i.inStock, i.out, i.reserved, i.repair || 0,
       (i.sites || []).map(g => g.location + ' ' + g.total).join('、') || i.location, i.countedAt, i.spec, i.archived ? '已下架' : '使用中'])));
 }
-function saveCart() { store.set('cart', S.cart); store.set('plan', S.plan); renderTabs(); }
+function saveCart() { store.set(uk('cart'), S.cart); store.set(uk('plan'), S.plan); store.set(uk('editing'), S.editing); renderTabs(); }
 /** 同一個展品放在不同廠區要分開算,所以清單的 key 是「展品 + 地點」 */
 const ckey = c => c.itemId + '@' + (c.location || '');
 function addToCart(itemId, qty, where) {
@@ -395,6 +424,7 @@ function groupByCat(cats, list) {
 }
 
 VIEWS.catalog = async main => {
+  const gen = RGEN;
   const f = S.filters;
   // 為展覽挑選時,日期一律用展覽的檔期(不讓人在這裡改),可借量也要排除這場自己的卡位
   const pick = S.showPick;
@@ -481,7 +511,7 @@ VIEWS.catalog = async main => {
     const dch = () => { f.start = $('#cs').value; f.end = $('#ce').value; if ((f.start && f.end) || (!f.start && !f.end)) render(); };
     $('#cs').onchange = dch; $('#ce').onchange = dch;
   }
-  });
+  }, gen);
 };
 
 VIEWS.plan = async main => {
@@ -489,7 +519,7 @@ VIEWS.plan = async main => {
   const byId = Object.fromEntries(all.map(i => [i.id, i]));
   S.cart = S.cart.filter(c => byId[c.itemId]); saveCart();
   const P = S.plan, admin = isAdmin();
-  const draft = store.get('draft', {});
+  const draft = store.get(uk('draft'), {});
   if (!S.cart.length) {
     main.innerHTML = `${S.editing ? `<div class="banner info">正在修改申請 <b class="mono">${esc(S.editing.no)}</b>。 <a href="#" data-act="cancel-edit">放棄修改</a></div>` : ''}<div class="eyebrow">Planning</div><h1>${S.editing ? '修改借用申請' : '借用申請'}</h1><p class="sub">把需要的展品加進來,系統會依日期檢查夠不夠、缺什麼,確認後直接送出。</p>
       <div class="card empty">還沒有選任何展品。<br><br><button class="btn pri" data-act="go" data-v="catalog">前往展品目錄挑選</button></div>`;
@@ -546,10 +576,10 @@ VIEWS.plan = async main => {
     } else lastCheck = [];
     drawLines();
   };
-  S._recheck = recheck; S._planDraw = drawLines;
+  S._recheck = recheck;
   const dch = () => { P.start = $('#ps').value; P.end = $('#pe').value; if (P.start && !P.end) { P.end = P.start; $('#pe').value = P.start; } saveCart(); recheck(); };
   $('#ps').onchange = dch; $('#pe').onchange = dch;
-  $('#pform').oninput = () => { const fd = Object.fromEntries(new FormData($('#pform'))); store.set('draft', { event: fd.event, venue: fd.venue, contact: fd.contact, purpose: fd.purpose, note: fd.note }); drawLines(); };
+  $('#pform').oninput = () => { const fd = Object.fromEntries(new FormData($('#pform'))); store.set(uk('draft'), { event: fd.event, venue: fd.venue, contact: fd.contact, purpose: fd.purpose, note: fd.note }); drawLines(); };
   if (admin && !ed) {
     $('#ob').onchange = e => $('#obf').classList.toggle('hidden', !e.target.checked);
     api('users').then(us => { $('#ulist').innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
@@ -565,12 +595,12 @@ VIEWS.plan = async main => {
         { id: ed.id, event, venue, purpose, contact, note, start: P.start, end: P.end, lines: S.cart, force: !!fd.force }),
         '已儲存修改').catch(() => null);
       if (!upd) return;
-      S.editing = null; S.cart = []; store.del('draft'); saveCart();
+      S.editing = null; S.cart = []; store.del(uk('draft')); saveCart();
       return go('mine');
     }
     const L = await run(() => api('createLoan', payload)).catch(() => null);
     if (!L) return;
-    S.cart = []; store.del('draft'); saveCart();
+    S.cart = []; store.del(uk('draft')); saveCart();
     openModal(`<h2>${L.status === 'approved' ? '已建立借用單' : '申請已送出'}</h2>
       <p>單號 <b class="mono">${esc(L.id)}</b>。${L.status === 'approved' ? '已直接核准,可前往借用單進行點交。' : '管理者核准後會通知你(有填 Email 的話),可在「我的借用」查看進度。'}</p>
       <div class="modal-f"><button class="btn" data-act="close">留在此頁</button><button class="btn pri" data-act="go" data-v="${L.status === 'approved' ? 'loans' : 'mine'}" data-f="${L.status}">查看借用單</button></div>`);
@@ -681,6 +711,7 @@ VIEWS.loans = main => {
   });
 };
 VIEWS.items = async main => {
+  const gen = RGEN;
   S.cats = await cachedGet('cats', 'cats');
   return withData(main, 'items', 'items', {}, list => {
   S.items = list;
@@ -711,7 +742,7 @@ VIEWS.items = async main => {
   S._itemDraw = draw;
   $('#iq').oninput = e => { S.itemQ = e.target.value; draw(); };
   $('#iarc').onchange = e => { S.showArchived = e.target.checked; draw(); };
-  });
+  }, gen);
 };
 
 /** 分類管理:新增、改名、調順序、停用 */
@@ -808,6 +839,7 @@ VIEWS.count = async main => {
   main.innerHTML = `<div class="eyebrow">Stocktake</div><h1>盤點</h1>
     <p class="sub" id="ksub2">先選你要盤的廠區,畫面只會列出那一區該有的東西,差異也只算那一區。「應在庫」已扣除借出中的數量;未填 / 未勾選的不列入本次盤點。</p>
     <div class="kpis" id="ksum"></div>
+    <div class="meta" id="ksub" style="margin:-4px 0 10px"></div>
     <div class="card" style="margin:14px 0"><div class="row"><input class="grow" type="text" id="kscan" placeholder="輸入或用掃描槍刷編號後按 Enter(例:E0001)" style="flex:1 1 240px"><button class="btn" data-act="count-cam">${ICON.scan}相機掃描</button></div><div class="meta" id="klast" style="margin-top:6px"></div></div>
     <div class="catbar" id="ksite"></div>
     <div id="kbar"></div>
@@ -991,13 +1023,26 @@ VIEWS.shows = async main => {
 
 /** 編輯中的清單放在 S.showLines,存檔前都只是草稿 */
 function showDraftLines() { return (S.showLines || []).map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty, note: l.note || '' })); }
+/** 退出挑選模式(展覽被刪、結案、取消,或挑完存檔之後都要收乾淨) */
+function exitPick() { S.showPick = null; store.del(uk('showpick')); store.del(uk('showlines')); }
 /** 挑選期間把清單也寫進 localStorage,重新整理不會白挑 */
-function saveShowLines() { S.showLines = S.showLines || []; if (S.showPick) store.set('showlines', showDraftLines()); }
+function saveShowLines() { S.showLines = S.showLines || []; if (S.showPick) store.set(uk('showlines'), showDraftLines()); }
 
 async function drawShow(main) {
   const isNew = S.showId === 'new';
-  const v = isNew ? { id: '', name: '', from: '', to: '', venue: '', owner: '', note: '', status: 'draft', statusLabel: '規劃中', lines: [], loans: [], mismatch: [], loanCount: 0 }
-    : await cachedGet('show|' + S.showId, 'show', { id: S.showId });
+  let v;
+  if (isNew) v = { id: '', name: '', from: '', to: '', venue: '', owner: '', note: '', status: 'draft', statusLabel: '規劃中', lines: [], loans: [], mismatch: [], loanCount: 0 };
+  else {
+    try { v = await cachedGet('show|' + S.showId, 'show', { id: S.showId }); }
+    catch (e) {
+      // 這一場可能已經被刪掉。沒有出口的錯誤畫面等於卡死,所以自己退回清單。
+      exitPick();
+      S.showId = null; S.showLines = null;
+      main.innerHTML = `<div class="banner bad">${esc(e.message)}</div>
+        <div class="card empty">這場展覽可能已經被刪除。<br><br><button class="btn pri" data-act="show-back">回展覽清單</button></div>`;
+      return;
+    }
+  }
   if (S.showLines === null) S.showLines = v.lines.map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty, note: l.note || '' }));
   S.items = await cachedGet('catalog|', 'catalog');
   const locked = v.status === 'closed' || v.status === 'cancelled';
@@ -1089,7 +1134,6 @@ async function drawShow(main) {
   };
   S._showRecheck = recheck;
   S._showItems = S.items;
-  S._showView = { id: isNew ? '' : v.id, name: v.name, from: v.from, to: v.to, venue: v.venue, owner: v.owner, note: v.note };
   $('#shform').querySelectorAll('input[type=date]').forEach(el => el.onchange = recheck);
   api('users').then(us => { const d = $('#ulist'); if (d) d.innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
   $('#shform').onsubmit = async e => {
@@ -1098,27 +1142,11 @@ async function drawShow(main) {
     const saved = await run(() => api('saveShow', { show: { ...fd, id: isNew ? '' : v.id, lines: showDraftLines() } }),
       isNew ? '展覽已建立,接下來去挑展品' : '已儲存').catch(() => null);
     if (!saved) return;
-    S.showId = saved.id; S.showLines = null;
-    store.del('showlines');
+    S.showId = saved.id; S.showLines = null; S.showPick = null;
+    store.del(uk('showlines')); store.del(uk('showpick'));   // 只清一半的話,重整之後會拿空清單覆蓋掉後端
     render();
   };
   recheck();
-}
-
-/** 加一項:選展品 → 選地點 → 數量 */
-function showAddDialog() {
-  const items = (S._showItems || S.items || []).filter(i => !i.archived);
-  const opts = items.map(i => `<option value="${esc(i.id)}">${esc(i.name)}</option>`).join('');
-  openModal(`<h2>加入展品</h2>
-    <label class="f"><span>展品</span><select id="sa-item">${opts}</select></label>
-    <label class="f"><span>地點</span><select id="sa-loc"></select></label>
-    <label class="f"><span>數量</span><input type="number" id="sa-qty" min="1" value="1"></label>
-    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-add-ok">加入</button></div>`);
-  const fill = () => {
-    const i = items.find(x => x.id === $('#sa-item').value);
-    $('#sa-loc').innerHTML = ((i && i.sites) || []).map(g => `<option value="${esc(g.location)}">${esc(g.location)}(在庫 ${g.inStock}/${g.total})</option>`).join('') || `<option value="">未指定</option>`;
-  };
-  $('#sa-item').onchange = fill; fill();
 }
 
 /**
@@ -1222,14 +1250,15 @@ function bulkApprove(ids) {
 function editLoan(id) {
   const L = findLoan(id);
   if (!L) return toast('請重新整理這一頁', true);
+  if (S.showPick) return toast('你正在為「' + S.showPick.name + '」挑展品,請先按「完成,回到展覽」', true);
   S.editing = { id: L.id, no: L.id };
   S.cart = L.lines.map(ln => ({ itemId: ln.itemId, location: ln.location || '', qty: ln.qty }));
   S.plan = { start: L.start, end: L.end };
   saveCart();
-  store.set('draft', { event: L.event, venue: L.venue, contact: L.contact, purpose: L.purpose, note: L.note });
+  store.set(uk('draft'), { event: L.event, venue: L.venue, contact: L.contact, purpose: L.purpose, note: L.note });
   go('plan');
 }
-function cancelEdit() { S.editing = null; S.cart = []; store.del('draft'); saveCart(); go('mine'); }
+function cancelEdit() { S.editing = null; S.cart = []; store.del(uk('draft')); saveCart(); go('mine'); }
 
 /** 同仁申請延期 / 管理者直接延期 */
 function extendModal(id, asAdmin) {
@@ -1666,7 +1695,7 @@ function userModal(id) {
     <div class="grid2"><label class="f"><span>角色</span><select name="role" id="ur"><option value="user">使用者(只輸工號)</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者(工號+PIN)</option></select></label>
     <label class="f" id="upf"><span>${u.hasPin ? '重設 PIN(留空不變)' : '管理者 PIN <b>*</b>'}</span><input type="text" name="pin" placeholder="4–12 碼"></label></div>
     ${id ? `<label class="chk"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}>啟用(離職可取消勾選)</label>` : ''}
-    <div class="modal-f">${id ? '<button type="button" class="btn danger" id="fdrop">刪除展品</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
+    <div class="modal-f"><span class="spacer"></span><button type="button" class="btn" data-act="close">取消</button><button class="btn pri">儲存</button></div></form>`);
   const sync = () => $('#upf', m).classList.toggle('hidden', $('#ur', m).value !== 'admin');
   $('#ur', m).onchange = sync; sync();
   $('#uf', m).onsubmit = e => {
@@ -1804,8 +1833,6 @@ const ACT = {
   'lf': el => { S.loanFilter = el.dataset.f; render(); },
   'close': () => closeModal(),
   'close-render': () => { closeModal(); render(); },
-  'to-register': () => showLogin('register'),
-  'to-login': () => showLogin('login'),
   'export': () => run(exportStock),
   'add-cart': el => {
     const id = el.dataset.id, q = $('#q-' + id).value, where = ($('#loc-' + id) || {}).value || '';
@@ -1819,15 +1846,25 @@ const ACT = {
   /* ---- 展覽檔期 ---- */
   'show-new': () => { S.showId = 'new'; S.showLines = []; go('shows'); },
   'show-open': el => { S.showId = el.dataset.id; S.showLines = null; go('shows'); },
-  'show-back': () => { S.showId = null; S.showLines = null; S.showPick = null; store.del('showpick'); store.del('showlines'); render(); },
+  'show-back': () => { S.showId = null; S.showLines = null; S.showPick = null; store.del(uk('showpick')); store.del(uk('showlines')); render(); },
   'show-filter': el => { S.showFilter = el.dataset.f; render(); },
   /** 去目錄挑選:檔期已經定好,目錄會直接用那個區間算可借量 */
-  'show-pick': () => {
-    const v = S._showView;
-    if (!v || !v.id) return toast('請先建立展覽', true);
-    if (!v.from || !v.to) return toast('請先填好檔期起訖再挑展品', true);
-    S.showPick = { id: v.id, name: v.name, from: v.from, to: v.to };
-    store.set('showpick', S.showPick);
+  /**
+   * 去目錄挑選。先把表單存起來再走 ——
+   * 不存的話目錄會用「後端那一版」的舊檔期算可借量,而且使用者剛改的場地/日期會在回來時被蓋掉。
+   */
+  'show-pick': async () => {
+    if (S.editing) return toast('你正在修改申請 ' + S.editing.no + ',請先儲存或放棄再來挑展品', true);
+    const f = $('#shform');
+    if (!f) return;
+    const fd = Object.fromEntries(new FormData(f));
+    if (!fd.name || !fd.from || !fd.to) return toast('請先填好名稱與檔期起訖', true);
+    const saved = await run(() => api('saveShow', { show: { ...fd, id: S.showId === 'new' ? '' : S.showId, lines: showDraftLines() } })).catch(() => null);
+    if (!saved) return;
+    S.showId = saved.id;
+    S.showLines = saved.lines.map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty, note: l.note || '' }));
+    S.showPick = { id: saved.id, name: saved.name, from: saved.from, to: saved.to };
+    store.set(uk('showpick'), S.showPick);
     saveShowLines();
     go('catalog');
   },
@@ -1847,21 +1884,18 @@ const ACT = {
   'show-pick-done': async () => {
     const p2 = S.showPick;
     const cur = await run(() => api('show', { id: p2.id })).catch(() => null);
-    if (!cur) return;                                   // 讀不到就原地不動,清單還留著
+    if (!cur) {                                         // 這一場已經不存在了,留在挑選模式只會卡住
+      exitPick(); S.showId = null; S.showLines = null;
+      return go('shows');
+    }
     const ok = await run(() => api('saveShow', { show: {
       id: cur.id, name: cur.name, from: cur.from, to: cur.to,
       venue: cur.venue, owner: cur.owner, note: cur.note, lines: showDraftLines()
     } }), '已加入需求清單').catch(() => null);
     if (!ok) return;                                    // 存不進去就別把挑好的東西丟掉
-    S.showPick = null; store.del('showpick'); store.del('showlines');
+    S.showPick = null; store.del(uk('showpick')); store.del(uk('showlines'));
     S.showId = p2.id; S.showLines = null;
     go('shows');
-  },
-  'show-add-ok': () => {
-    const add = [{ itemId: $('#sa-item').value, location: $('#sa-loc').value || '未指定', qty: Math.max(1, parseInt($('#sa-qty').value, 10) || 1), note: '' }];
-    S.showLines = mergeShowLines(S.showLines || [], add);
-    saveShowLines();
-    closeModal(); S._showRecheck();
   },
   'show-rm': el => { S.showLines.splice(+el.dataset.i, 1); saveShowLines(); S._showRecheck(); },
   'show-paste': () => showPasteDialog(),
@@ -1885,7 +1919,9 @@ const ACT = {
     if (!confirmInline(ask)) return;
     try {
       await api('setShowStatus', { id: S.showId, status: st });
-      toast('已更新'); S.showLines = null; render();
+      toast('已更新');
+      if (st === 'closed' || st === 'cancelled') exitPick();   // 結案 / 取消之後清單不能再改,挑選模式要收掉
+      S.showLines = null; render();
     } catch (e) {
       // 有缺口不直接擋,但要管理者明確認帳(後端會把缺口寫進異動紀錄)
       if (st === 'confirmed' && /缺/.test(e.message)) {
@@ -1915,7 +1951,7 @@ const ACT = {
   'show-del': () => {
     if (!confirmInline('刪除這場展覽?此動作無法復原。')) return;
     run(() => api('deleteShow', { id: S.showId }), '已刪除')
-      .then(() => { S.showId = null; S.showLines = null; render(); }).catch(() => { });
+      .then(() => { exitPick(); S.showId = null; S.showLines = null; render(); }).catch(() => { });
   },
   'show-extend': async () => {
     const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });

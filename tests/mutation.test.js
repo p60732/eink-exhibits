@@ -14,8 +14,8 @@ const M = [
   ['20_logic.gs', "if (!isDate(p.start) || !isDate(p.end)) throw E('請填寫借用起訖日期');", '', '拿掉日期格式驗證'],
   // 效能重構的守門:欄位少讀 / 表少讀 / 快取沒失效,都必須被 e2e 抓到
   ['00_gateway.gs', "LOAN_CALC: ['id', 'status', 'start', 'end', 'lines']", "LOAN_CALC: ['id', 'status', 'start', 'end']", '可借量計算少讀 lines 欄'],
-  ['00_gateway.gs', "ITEM_CALC: ['id', 'name', 'mode', 'qty', 'location', 'stock', 'archived']", "ITEM_CALC: ['id', 'name', 'mode', 'qty', 'archived']", '展品少讀各地點庫存(stock)欄'],
-  ['00_gateway.gs', "UNIT_CALC: ['id', 'itemId', 'status', 'location']", "UNIT_CALC: ['id', 'itemId', 'status']", '單台少讀地點欄'],
+  ['00_gateway.gs', "ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'archived']", "ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'archived']", '展品少讀各地點庫存(stock)欄'],
+  ['00_gateway.gs', "UNIT_CALC: ['id', 'itemId', 'status', 'location', 'countedAt']", "UNIT_CALC: ['id', 'itemId', 'status']", '單台少讀地點與盤點日欄'],
   ['00_gateway.gs', "LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines', 'applicant', 'dept', 'event']", "LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines']", '單台持有人少讀 applicant 欄'],
   ['30_memory.gs', "if (cols.indexOf('id') < 0) cols.push('id');", '', '指定欄位時漏讀 id'],
   ['30_memory.gs', "if (Object.keys(db._dirty || {}).length) bumpVersion_();", '', '寫入後快取沒有失效'],
@@ -57,7 +57,23 @@ const M = [
   ['00_gateway.gs', "SHOW_CALC: ['id', 'name', 'from', 'to', 'status', 'lines'],", "SHOW_CALC: ['id', 'name', 'from', 'to', 'status'],", '算卡位時少讀展覽的規劃清單'],
   ['20_logic.gs', "if (live.length) throw E('底下還有 ' + live.length + ' 張沒結束的借用單('", "if (false) throw E('底下還有 ' + live.length + ' 張沒結束的借用單('", '底下還有沒結束的單也能結案'],
   ['20_logic.gs', "if (mine.length) throw E('這場展覽底下已經有 ' + mine.length + ' 張借用單,不能刪除。請改成「取消」以保留紀錄');", '', '有借用單的展覽也能刪掉'],
-  ['20_logic.gs', "        if (!isAdmin) throw E('只有管理者可以把借用單掛到展覽底下');", '', '同仁也能把單掛到展覽底下(可以解掉別人的卡位)']
+  ['20_logic.gs', "        if (!isAdmin) throw E('只有管理者可以把借用單掛到展覽底下');", '', '同仁也能把單掛到展覽底下(可以解掉別人的卡位)'],
+  // v2.2 審查抓到的八條:每一條都先在未修正版重現過,這裡證明測試真的擋得住
+  ['20_logic.gs', "          pending.splice(at, 1);", '', '同一台編號送兩次被算兩次(單子提早結案,另一台卡死)'],
+  ['20_logic.gs', "    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; });",
+   "    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; if (!(s(x.itemId) in input)) input[s(x.itemId)] = x; });\n    L.lines.forEach(function (ln) { if (!input[lineKey(ln)] && input[ln.itemId]) input[lineKey(ln)] = input[ln.itemId]; });",
+   '歸還只送一個地點時套用到同品項的另一個地點'],
+  ['20_logic.gs', "      L.status = 'rejected'; L.request = null;", "      L.status = 'rejected';", '駁回沒清掉待確認請求(已駁回的單還能被延期)'],
+  ['20_logic.gs', "      if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');\n      var lines = (c.p.lines || []).map", '      var lines = (c.p.lines || []).map', '歸還申請無聲蓋掉待確認的延期 / 轉借'],
+  ['20_logic.gs', "        idx[k] = (idx[k] || 0) + outstanding(ln);", '        idx[k] = (idx[k] || 0) + int(ln.qty);', '展覽已開單量與可借量基準不一致(部分歸還會放掉庫存)'],
+  ['20_logic.gs', "        if (sw.status === 'closed' || sw.status === 'cancelled') throw E(", "        if (false) throw E(", '已結案 / 已取消的展覽還能掛新借用單'],
+  ['20_logic.gs', "        if (wait) throw E('此展品還有 ' + wait + ' 張待審核的申請,請先處理完再下架');", '', '有待審核申請的展品也能下架'],
+  ['00_gateway.gs', "    UNIT_CALC: ['id', 'itemId', 'status', 'location', 'countedAt'],", "    UNIT_CALC: ['id', 'itemId', 'status', 'location'],", '算「該地點最後盤點日」少讀 countedAt']
+  // 註:`doExtend` / `doTransfer` 開頭的狀態檢查是第二層防護。駁回與取消都會把 `L.request` 清掉之後,
+  //     已經沒有路徑能帶著待確認的延期請求走到這裡,所以拿掉它測試不會紅(等價突變)。
+  //     保留的理由:它擋的是「請求殘留」這一類 bug,而那正是 v2.2 真的發生過的事。
+  // 註:拿掉 ITEM_CALC 的 category 也是等價突變 —— 展品表現在的欄序讓它夾在連續段裡會被順便讀到。
+  //     但「欄序可以調整」是記憶積木明講的前提,所以宣告還是要寫上去(有人把分類欄搬到最後就會變空白)。
   // 註:單獨拿掉 ITEM_CALC 的 qty 欄是等價突變 —— 讀取會把相鄰欄位合併成連續段(spans_ 的 gap=3),
   //     qty 夾在 mode 與 location 中間,不在清單上也會被順便讀到。真正有效的守門是上面的 stock 欄。
   // 註:`m.cap` 的失效目前沒有路徑會在同一次請求裡「先算總數 → 改 Items/Units → 再算總數」,

@@ -25,7 +25,7 @@ const db = () => ({
 });
 const TODAY = '2026-09-22';
 t('庫存統計:在庫 = 總數 − 出借中未還;維修/遺失不算總數', () => {
-  const st = R.stats(db(), TODAY);
+  const st = R.stats(db());
   assert.deepStrictEqual([st.P1.total, st.P1.out, st.P1.reserved, st.P1.inStock], [10, 2, 4, 8]);
   assert.deepStrictEqual([st.P2.total, st.P2.repair, st.P2.lost, st.P2.inStock], [2, 1, 1, 1]);
 });
@@ -51,7 +51,7 @@ t('分地點庫存:各地各算各的,借出只扣借出的那一點', () => {
     Units: [{ id: 'E1', itemId: 'P2', status: 'in', location: '新竹' }, { id: 'E2', itemId: 'P2', status: 'in', location: '林口' }],
     Loans: [{ id: 'L1', status: 'out', start: '2026-09-01', end: '2026-12-31', lines: [{ itemId: 'P1', location: '新竹', qty: 3, returned: 0, lost: 0 }] }]
   };
-  const st = R.stats(d, TODAY), P1 = d.Items[0];
+  const st = R.stats(d), P1 = d.Items[0];
   assert.strictEqual(st.P1.total, 5);                       // 總數 = 各地相加
   assert.strictEqual(st['P1@新竹'].inStock, 0);              // 新竹 3 台全借走了
   assert.strictEqual(st['P1@林口'].inStock, 2);              // 林口沒被動到
@@ -73,7 +73,7 @@ t('缺料計算', () => {
 });
 t('純函式:同樣輸入同樣輸出、不改輸入', () => {
   const d = db(), snap = JSON.stringify(d);
-  const a = JSON.stringify(R.stats(d, TODAY)), b = JSON.stringify(R.stats(d, TODAY));
+  const a = JSON.stringify(R.stats(d)), b = JSON.stringify(R.stats(d));
   assert.strictEqual(a, b); assert.strictEqual(JSON.stringify(d), snap);
 });
 
@@ -140,4 +140,42 @@ t('展覽卡位:兩場展覽各自卡位,會疊加', () => {
   assert.strictEqual(hold(d), 5);                                                   // 12-03~04 只跟 S1 重疊
   assert.strictEqual(R.showHold(d, 'P1', '新竹', '2026-12-06', '2026-12-07', null), 7);
 });
+/* cleanLines / cleanShowLines:「同品項+同地點合併」「地點只有一個就自動補、兩個以上要指定」
+ * 這兩條規則同時被借用單與展覽需求清單用到,之前只有間接覆蓋。 */
+const cdb = () => ({
+  Items: [
+    { id: 'P1', name: '單一地點機', mode: 'qty', qty: 5, location: '新竹', stock: { 新竹: { 數量: 5, 盤點: '' } } },
+    { id: 'P2', name: '雙廠機', mode: 'qty', qty: 5, location: '', stock: { 新竹: { 數量: 3, 盤點: '' }, 林口: { 數量: 2, 盤點: '' } } }
+  ],
+  Units: [], Loans: [], Shows: []
+});
+t('清單合併:同品項同地點的兩行要併成一行', () => {
+  const out = R.cleanLines(cdb(), [{ itemId: 'P1', qty: 2 }, { itemId: 'P1', location: '新竹', qty: 3 }]);
+  assert.strictEqual(out.length, 1);
+  assert.deepStrictEqual([out[0].location, out[0].qty], ['新竹', 5]);
+});
+t('清單合併:只有一個地點就自動補上', () => {
+  assert.strictEqual(R.cleanLines(cdb(), [{ itemId: 'P1', qty: 1 }])[0].location, '新竹');
+});
+t('清單合併:兩個以上地點沒指定就要擋下來', () => {
+  assert.throws(() => R.cleanLines(cdb(), [{ itemId: 'P2', qty: 1 }]), /請指定/);
+  assert.throws(() => R.cleanLines(cdb(), [{ itemId: 'P2', location: '湖口', qty: 1 }]), /沒有庫存/);
+});
+t('清單合併:數量 0 或負數直接略過;全部略過就報錯', () => {
+  assert.strictEqual(R.cleanLines(cdb(), [{ itemId: 'P1', qty: 2 }, { itemId: 'P1', qty: 0 }])[0].qty, 2);
+  assert.throws(() => R.cleanLines(cdb(), [{ itemId: 'P1', qty: 0 }]), /至少選擇一項/);
+});
+t('展覽需求清單:同一套合併規則,但允許空清單(規劃中可以慢慢加)', () => {
+  const out = R.cleanShowLines(cdb(), [{ itemId: 'P2', location: '新竹', qty: 1 }, { itemId: 'P2', location: '新竹', qty: 4 }]);
+  assert.deepStrictEqual([out.length, out[0].qty], [1, 5]);
+  assert.deepStrictEqual(R.cleanShowLines(cdb(), []), []);
+});
+t('規則層不可以改到傳入的資料', () => {
+  const d = cdb(), before = JSON.stringify(d);
+  R.cleanLines(d, [{ itemId: 'P1', qty: 2 }]);
+  R.cleanShowLines(d, [{ itemId: 'P2', location: '林口', qty: 1 }]);
+  R.showHold(d, 'P1', '新竹', '2026-10-01', '2026-10-02', null);
+  assert.strictEqual(JSON.stringify(d), before);
+});
+
 console.log('✔ 規則層 ' + n + ' 項通過');

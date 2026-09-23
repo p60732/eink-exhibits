@@ -34,9 +34,9 @@ function routes_() {
     LOAN_CALC: ['id', 'status', 'start', 'end', 'lines'],                                  // 只做可借量 / 在庫計算
     LOAN_MINE: ['id', 'status', 'start', 'end', 'lines', 'applicantId'],                   // 加上「是不是我的單」
     LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines', 'applicant', 'dept', 'event'],    // 加上「這台在誰手上」
-    UNIT_CALC: ['id', 'itemId', 'status', 'location'],                                     // 地點要算各廠區的庫存
-    UNIT_PICK: ['id', 'itemId', 'status', 'serial', 'location'],
-    ITEM_CALC: ['id', 'name', 'mode', 'qty', 'location', 'stock', 'archived'],
+    UNIT_CALC: ['id', 'itemId', 'status', 'location', 'countedAt'],                        // 地點要算各廠區的庫存;countedAt 供「該地點最後盤點日」
+    UNIT_PICK: ['id', 'itemId', 'status', 'serial', 'location', 'countedAt'],
+    ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'archived'],
     ITEM_CAT: ['id', 'name', 'category', 'archived'],
     USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange'],  // 不讀 pinHash / email
     SHOW_CALC: ['id', 'name', 'from', 'to', 'status', 'lines'],                            // 算展覽卡位 + 借用單上顯示場次名稱
@@ -47,6 +47,7 @@ function routes_() {
   var SHOWS_ = C.SHOW_CALC;
   // 只做庫存 / 可借量計算時,已歸還與已取消的舊單完全用不到:
   // 記憶積木會先只讀 status 欄找出第一筆未結案的位置,再從那裡讀到最後
+  // 與 20_logic.gs 的 `LIVE_ST` 是同一組狀態,改一邊要改兩邊(GAS 與前端跨不了執行環境,只能靠註解對齊)
   var LIVE = { field: 'status', values: ['pending', 'approved', 'out'] };
   var I = Identity.actions, U = Logic.USER, A = Logic.ADMIN;
   // 身份積木
