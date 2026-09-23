@@ -10,7 +10,8 @@ const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
   cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
-  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, logQ: ''
+  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, logQ: '',
+  showId: null, showFilter: 'open', showLines: null
 };
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -252,7 +253,7 @@ function tabsFor() {
   const t = [];
   if (isAdmin()) t.push(['dash', '總覽'], ['loans', '借用單']);
   t.push(['catalog', '展品目錄'], ['plan', '展覽規劃' + (n ? ` <span class="n">${n}</span>` : '')], ['mine', '我的借用']);
-  if (isAdmin()) t.push(['items', '展品管理'], ['count', '盤點'], ['users', '使用者'], ['logs', '紀錄']);
+  if (isAdmin()) t.push(['shows', '展覽檔期'], ['items', '展品管理'], ['count', '盤點'], ['users', '使用者'], ['logs', '紀錄']);
   return t;
 }
 function renderTabs() {
@@ -929,6 +930,215 @@ VIEWS.count = async main => {
   draw();
 };
 
+/* ===================== 展覽檔期(管理者) =====================
+ * 一場展覽 = 一個專案,底下掛多張借用單。
+ * 「已確認」的展覽會先把還沒開單的部分卡住,避免同期的另一場把同一批東西借走。
+ * 缺口、可借量一律以後端回傳為準,這裡只負責顯示與收集輸入。
+ */
+const SHOW_FILTERS = [['open', '進行中'], ['closed', '已結案'], ['cancelled', '已取消'], ['all', '全部']];
+
+function showPill(v) {
+  const cls = { draft: 'pending', confirmed: 'approved', closed: 'returned', cancelled: 'cancelled' }[v.status] || 'pending';
+  return `<span class="pill ${cls}">${esc(v.statusLabel)}</span>`;
+}
+/** 一場展覽的摘要數字;缺口與檔期對不上都要一眼看得到 */
+function showMeta(v) {
+  const bits = [`${v.itemCount} 項 ${v.qtyTotal} 件`];
+  if (v.issuedTotal) bits.push(`已開單 ${v.issuedTotal} 件`);
+  const warn = [];
+  if (v.shortTotal) warn.push(`<span class="short">缺 ${v.shortTotal} 件</span>`);
+  if ((v.mismatch || []).length) warn.push(`<span class="short">${v.mismatch.length} 張單的日期與檔期不符</span>`);
+  return `<span class="meta">${bits.join(' · ')}</span>` + (warn.length ? ' ' + warn.join(' ') : '');
+}
+
+VIEWS.shows = async main => {
+  if (S.showId) return drawShow(main);
+  return withData(main, 'shows|' + S.showFilter, 'shows', { filter: S.showFilter }, list => {
+    main.innerHTML = `<div class="row"><div><div class="eyebrow">Shows</div><h1>展覽檔期</h1>
+      <p class="sub">一場展覽底下可以掛好幾張借用單(各廠區一張)。確認檔期之後,還沒開單的部分會先幫你卡住。</p></div>
+      <span class="spacer"></span><button class="btn brand" data-act="show-new">${ICON.plus}新增展覽</button></div>
+      <div class="catbar">${SHOW_FILTERS.map(([k, l]) => `<button class="catchip ${S.showFilter === k ? 'on' : ''}" data-act="show-filter" data-f="${k}">${l}</button>`).join('')}</div>
+      ${!list.length ? `<div class="card empty">這裡還沒有展覽。<br><br><button class="btn pri" data-act="show-new">新增第一場</button></div>`
+        : list.map(v => `<div class="card loan" data-act="show-open" data-id="${esc(v.id)}" style="cursor:pointer">
+        <div class="row"><b>${esc(v.name)}</b> ${showPill(v)}<span class="spacer"></span><span class="mono meta">${esc(v.id)}</span></div>
+        <div class="meta">${fmtD(v.from)} ~ ${fmtD(v.to)}${v.venue ? ' · ' + esc(v.venue) : ''}${v.loanCount ? ' · ' + v.loanCount + ' 張借用單' : ''}</div>
+        <div style="margin-top:6px">${showMeta(v)}</div></div>`).join('')}`;
+  });
+};
+
+/** 編輯中的清單放在 S.showLines,存檔前都只是草稿 */
+function showDraftLines() { return (S.showLines || []).map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty, note: l.note || '' })); }
+
+async function drawShow(main) {
+  const isNew = S.showId === 'new';
+  const v = isNew ? { id: '', name: '', from: '', to: '', venue: '', owner: '', note: '', status: 'draft', statusLabel: '規劃中', lines: [], loans: [], mismatch: [], loanCount: 0 }
+    : await cachedGet('show|' + S.showId, 'show', { id: S.showId });
+  if (S.showLines === null) S.showLines = v.lines.map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty, note: l.note || '' }));
+  S.items = await cachedGet('catalog|', 'catalog');
+  const locked = v.status === 'closed' || v.status === 'cancelled';
+  const live = (v.loans || []).filter(L => ['pending', 'approved', 'out'].includes(L.status));
+  main.innerHTML = `<div class="row"><button class="btn sm ghost" data-act="show-back">← 回展覽清單</button><span class="spacer"></span>
+      ${isNew ? '' : `<span class="mono meta">${esc(v.id)}</span> ${showPill(v)}`}</div>
+    <h1>${isNew ? '新增展覽' : esc(v.name)}</h1>
+    ${locked ? `<div class="banner info">${esc(v.statusLabel)}的展覽不能修改,也不再卡住庫存。要繼續編輯請先改回「${v.status === 'closed' ? '已確認' : '規劃中'}」。</div>` : ''}
+    ${(v.mismatch || []).length ? `<div class="banner warn">有 ${v.mismatch.length} 張借用單的日期跟檔期不一樣(${v.mismatch.map(x => esc(x)).join('、')})。
+      改檔期不會自動改單,確認要一起延的話請用下面的「批次延期」。</div>` : ''}
+    <form class="card" id="shform">
+      <label class="f"><span>展覽名稱 <b>*</b></span><input type="text" name="name" required maxlength="60" value="${esc(v.name)}"></label>
+      <div class="grid2">
+        <label class="f"><span>檔期開始 <b>*</b></span><input type="date" name="from" required value="${esc(v.from)}"></label>
+        <label class="f"><span>檔期結束 <b>*</b></span><input type="date" name="to" required value="${esc(v.to)}"></label>
+      </div>
+      <div class="meta" style="margin:-4px 0 12px">檔期要把佈展與撤展的日子算進去 —— 卡位是用這個區間算的。對外的展出日期可以寫在備註。</div>
+      <div class="grid2">
+        <label class="f"><span>場地</span><input type="text" name="venue" value="${esc(v.venue)}"></label>
+        <label class="f"><span>承辦人工號</span><input type="text" name="owner" list="ulist" value="${esc(v.owner)}"><datalist id="ulist"></datalist></label>
+      </div>
+      <label class="f"><span>備註</span><textarea name="note" rows="2">${esc(v.note)}</textarea></label>
+      <button class="btn pri" ${locked ? 'disabled' : ''} style="width:100%">${isNew ? '建立展覽' : '儲存'}</button>
+    </form>
+
+    <div class="card">
+      <div class="row"><b>需求清單</b><span class="spacer"></span>
+        <button class="btn sm" data-act="show-add" ${locked ? 'disabled' : ''}>${ICON.plus}加展品</button>
+        <button class="btn sm" data-act="show-paste" ${locked ? 'disabled' : ''}>整批貼上</button></div>
+      <div class="meta" style="margin:6px 0">一場 30～100 件用貼的最快:從 Excel 複製「展品名稱 / 地點 / 數量」三欄直接貼進來。</div>
+      <div class="lines" id="shlines"></div>
+      <div id="shsum"></div>
+    </div>
+
+    ${isNew ? '' : `<div class="card">
+      <div class="row"><b>狀態與借用單</b><span class="spacer"></span></div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+        ${v.status === 'draft' ? `<button class="btn pri sm" data-act="show-status" data-s="confirmed">確認檔期(開始卡位)</button>` : ''}
+        ${v.status === 'confirmed' ? `<button class="btn sm" data-act="show-status" data-s="draft">改回規劃中</button>
+          <button class="btn brand sm" data-act="show-gen">依地點產生借用單</button>
+          <button class="btn sm" data-act="show-status" data-s="closed">結案</button>` : ''}
+        ${v.status === 'closed' ? `<button class="btn sm" data-act="show-status" data-s="confirmed">重新開啟</button>` : ''}
+        ${v.status === 'cancelled' ? `<button class="btn sm" data-act="show-status" data-s="draft">改回規劃中</button>` : ''}
+        ${v.status === 'draft' || v.status === 'confirmed' ? `<button class="btn sm ghost" data-act="show-status" data-s="cancelled">取消展覽</button>` : ''}
+        ${live.length ? `<button class="btn sm" data-act="show-extend">批次延期(${live.length} 張)</button>` : ''}
+        <span class="spacer"></span>
+        ${v.loanCount ? '' : `<button class="btn sm ghost" data-act="show-del">刪除</button>`}
+      </div>
+      ${(v.loans || []).length ? `<div style="margin-top:12px">${v.loans.map(L => miniRow(L, `${fmtD(L.start)}~${fmtD(L.end)}`)).join('')}</div>`
+        : `<div class="meta" style="margin-top:12px">還沒有借用單。確認檔期之後按「依地點產生借用單」,系統會依各地點各開一張。</div>`}
+    </div>`}`;
+
+  const nameOf = Object.fromEntries(S.items.map(i => [i.id, i.name]));
+  let gaps = [];
+  const drawLines = () => {
+    const g = Object.fromEntries(gaps.map(x => [x.itemId + '@' + nloc(x.location), x]));
+    const L2 = S.showLines;
+    $('#shlines').innerHTML = !L2.length ? `<div class="meta">還沒有東西。</div>` : L2.map((l, idx) => {
+      const k = g[lkey(l)];
+      const st = !k ? '<span class="meta">填好檔期後會算可借量</span>'
+        : k.short ? `<span class="short">缺 ${k.short}(可借 ${k.available})</span>`
+          : k.issued ? `<span class="okt">已開單 ${k.issued}</span>`
+            : `<span class="okt">足夠(可借 ${k.available})</span>`;
+      return `<div class="line"><span class="nm">${esc(nameOf[l.itemId] || l.itemId)}<br><span class="meta">${esc(l.location)}</span></span>
+        <span class="qtybox"><input type="number" min="1" value="${l.qty}" data-shq="${idx}" ${locked ? 'disabled' : ''}></span>
+        <span style="min-width:150px;text-align:right">${st}</span>
+        <button class="btn sm ghost" data-act="show-rm" data-i="${idx}" ${locked ? 'disabled' : ''} aria-label="移除">✕</button></div>`;
+    }).join('');
+    $$('[data-shq]').forEach(inp => inp.onchange = () => {
+      S.showLines[+inp.dataset.shq].qty = Math.max(1, parseInt(inp.value, 10) || 1);
+      recheck();
+    });
+    const short = gaps.filter(x => x.short);
+    const total = L2.reduce((a, x) => a + x.qty, 0);
+    $('#shsum').innerHTML = !L2.length ? ''
+      : !gaps.length ? `<div class="sumbar banner info">填好檔期起訖之後,每一項都會即時比對可借量</div>`
+        : short.length ? `<div class="sumbar banner bad"><b>缺 ${short.length} 項</b>:${short.map(x => esc(x.name) + '(' + esc(x.location) + ')×' + x.short).join('、')}</div>`
+          : `<div class="sumbar banner ok"><b>全部足夠</b>,共 ${L2.length} 項 ${total} 件</div>`;
+  };
+  const recheck = async () => {
+    const f = new FormData($('#shform')), from = f.get('from'), to = f.get('to');
+    if (from && to && from <= to && S.showLines.length) {
+      try { gaps = await api('showCheck', { id: isNew ? '' : v.id, from, to, lines: showDraftLines() }); }
+      catch (e) { gaps = []; toast(e.message, true); }
+    } else gaps = [];
+    drawLines();
+  };
+  S._showRecheck = recheck;
+  S._showItems = S.items;
+  $('#shform').querySelectorAll('input[type=date]').forEach(el => el.onchange = recheck);
+  api('users').then(us => { const d = $('#ulist'); if (d) d.innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
+  $('#shform').onsubmit = async e => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    const saved = await run(() => api('saveShow', { show: { ...fd, id: isNew ? '' : v.id, lines: showDraftLines() } }), '已儲存').catch(() => null);
+    if (!saved) return;
+    S.showId = saved.id; S.showLines = null;
+    render();
+  };
+  recheck();
+}
+
+/** 加一項:選展品 → 選地點 → 數量 */
+function showAddDialog() {
+  const items = (S._showItems || S.items || []).filter(i => !i.archived);
+  const opts = items.map(i => `<option value="${esc(i.id)}">${esc(i.name)}</option>`).join('');
+  openModal(`<h2>加入展品</h2>
+    <label class="f"><span>展品</span><select id="sa-item">${opts}</select></label>
+    <label class="f"><span>地點</span><select id="sa-loc"></select></label>
+    <label class="f"><span>數量</span><input type="number" id="sa-qty" min="1" value="1"></label>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-add-ok">加入</button></div>`);
+  const fill = () => {
+    const i = items.find(x => x.id === $('#sa-item').value);
+    $('#sa-loc').innerHTML = ((i && i.sites) || []).map(g => `<option value="${esc(g.location)}">${esc(g.location)}(在庫 ${g.inStock}/${g.total})</option>`).join('') || `<option value="">未指定</option>`;
+  };
+  $('#sa-item').onchange = fill; fill();
+}
+
+/**
+ * 整批貼上:從 Excel 複製「名稱 / 地點 / 數量」三欄。
+ * 對不到的行不會中斷其他行 —— 100 行裡有 3 行打錯字,不該逼人整批重來。
+ */
+function showPasteDialog() {
+  openModal(`<h2>整批貼上</h2>
+    <p class="meta">每行一項,用 Tab 或逗號分隔:<b>展品名稱或編號 / 地點 / 數量</b>。地點與數量可以省略(數量預設 1)。</p>
+    <textarea id="sp-txt" rows="10" style="width:100%" placeholder="42吋看板&#9;新竹&#9;3&#10;展示架&#9;林口&#9;5"></textarea>
+    <div id="sp-out"></div>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-paste-ok">加入</button></div>`, { wide: true });
+}
+/** 把貼上的文字對回展品;回傳 { lines, bad } */
+function parsePaste(txt) {
+  const items = (S._showItems || S.items || []).filter(i => !i.archived);
+  const byName = {}, byId = {};
+  items.forEach(i => { byName[String(i.name).trim().toLowerCase()] = i; byId[String(i.id).toUpperCase()] = i; });
+  const lines = [], bad = [];
+  String(txt || '').split(/\r?\n/).forEach((raw, n2) => {
+    const row = raw.trim();
+    if (!row) return;
+    const cell = row.split(/\t|,|,/).map(x => x.trim());
+    const key = cell[0] || '';
+    const it = byId[key.toUpperCase()] || byName[key.toLowerCase()];
+    if (!it) { bad.push({ n: n2 + 1, text: row, why: '找不到這個展品' }); return; }
+    const sites = (it.sites || []).map(g => g.location);
+    let where = cell[1] || '';
+    const qty = Math.max(1, parseInt(cell[2] || cell[1], 10) || 1);
+    if (where && !isNaN(parseInt(where, 10)) && sites.indexOf(where) < 0) where = '';   // 第二欄其實是數量
+    if (!where) {
+      if (sites.length > 1) { bad.push({ n: n2 + 1, text: row, why: '放在 ' + sites.join('、') + ',要指定地點' }); return; }
+      where = sites[0] || '未指定';
+    } else if (sites.length && sites.indexOf(where) < 0) {
+      bad.push({ n: n2 + 1, text: row, why: '在「' + where + '」沒有庫存' }); return;
+    }
+    lines.push({ itemId: it.id, location: where, qty: qty, note: '' });
+  });
+  return { lines, bad };
+}
+/** 同一個品項 + 同一個地點合併成一行 */
+function mergeShowLines(base, add) {
+  const out = base.slice();
+  add.forEach(l => {
+    const hit = out.find(x => x.itemId === l.itemId && nloc(x.location) === nloc(l.location));
+    if (hit) hit.qty += l.qty; else out.push(l);
+  });
+  return out;
+}
+
 VIEWS.users = main => withData(main, 'users', 'users', {}, list => {
   main.innerHTML = `<div class="row"><div><div class="eyebrow">People</div><h1>使用者</h1><p class="sub">同仁以工號登入(不需密碼);管理者需另設 PIN。人員異動時重新匯入即可更新。</p></div><span class="spacer"></span><button class="btn" data-act="import-users">匯入人員清單</button><button class="btn brand" data-act="edit-user">${ICON.plus}新增</button></div>
     <div class="toolbar"><input class="grow" type="search" id="uq" placeholder="搜尋工號、姓名、部門…"></div>
@@ -1576,6 +1786,97 @@ const ACT = {
   'use-range': () => { S.plan.start = S.filters.start; S.plan.end = S.filters.end; saveCart(); go('plan'); },
   'rm-cart': el => { S.cart = S.cart.filter(c => ckey(c) !== el.dataset.id); saveCart(); S.cart.length ? S._recheck() : render(); },
   'cq': el => { const c = S.cart.find(x => ckey(x) === el.dataset.id); c.qty = Math.max(1, c.qty + +el.dataset.d); saveCart(); S._recheck(); },
+  /* ---- 展覽檔期 ---- */
+  'show-new': () => { S.showId = 'new'; S.showLines = []; go('shows'); },
+  'show-open': el => { S.showId = el.dataset.id; S.showLines = null; go('shows'); },
+  'show-back': () => { S.showId = null; S.showLines = null; render(); },
+  'show-filter': el => { S.showFilter = el.dataset.f; render(); },
+  'show-add': () => showAddDialog(),
+  'show-add-ok': () => {
+    const add = [{ itemId: $('#sa-item').value, location: $('#sa-loc').value || '未指定', qty: Math.max(1, parseInt($('#sa-qty').value, 10) || 1), note: '' }];
+    S.showLines = mergeShowLines(S.showLines || [], add);
+    closeModal(); S._showRecheck();
+  },
+  'show-rm': el => { S.showLines.splice(+el.dataset.i, 1); S._showRecheck(); },
+  'show-paste': () => showPasteDialog(),
+  'show-paste-ok': () => {
+    const r = parsePaste($('#sp-txt').value);
+    if (r.lines.length) S.showLines = mergeShowLines(S.showLines || [], r.lines);
+    if (r.bad.length) {
+      // 對不到的行留在畫面上讓人修,不要整批退回
+      $('#sp-out').innerHTML = `<div class="banner bad" style="margin-top:10px"><b>有 ${r.bad.length} 行對不到</b>(其餘 ${r.lines.length} 行已加入):<br>`
+        + r.bad.map(b => `第 ${b.n} 行「${esc(b.text)}」— ${esc(b.why)}`).join('<br>') + `</div>`;
+      $('#sp-txt').value = r.bad.map(b => b.text).join('\n');
+    } else closeModal();
+    if (r.lines.length) toast('已加入 ' + r.lines.length + ' 項');
+    S._showRecheck();
+  },
+  'show-status': async el => {
+    const st = el.dataset.s;
+    const ask = { confirmed: '確認檔期?確認之後,還沒開單的部分會先幫你卡住,別場借不走。',
+      draft: '改回規劃中?卡住的部分會全部釋放。', closed: '結案?底下的借用單必須都已經結束。',
+      cancelled: '取消這場展覽?卡住的部分會全部釋放。' }[st];
+    if (!confirmInline(ask)) return;
+    try {
+      await api('setShowStatus', { id: S.showId, status: st });
+      toast('已更新'); S.showLines = null; render();
+    } catch (e) {
+      // 有缺口不直接擋,但要管理者明確認帳(後端會把缺口寫進異動紀錄)
+      if (st === 'confirmed' && /缺/.test(e.message)) {
+        return openModal(`<h2>這個檔期有缺口</h2><p>${esc(e.message)}</p>
+          <div class="modal-f"><button class="btn" data-act="close">回去調整</button>
+          <button class="btn pri" data-act="show-force">知道有缺口,仍要確認</button></div>`);
+      }
+      if (!e.silent) toast(e.message, true);
+    }
+  },
+  'show-force': async () => {
+    closeModal();
+    await run(() => api('setShowStatus', { id: S.showId, status: 'confirmed', force: true }), '已確認檔期(有缺口)').catch(() => { });
+    S.showLines = null; render();
+  },
+  'show-gen': async () => {
+    if (!confirmInline('依地點產生借用單?每個還需要開單的地點各開一張,直接成為已核准。')) return;
+    const r = await run(() => api('createLoansFromShow', { id: S.showId })).catch(() => null);
+    if (!r) return;
+    S.showLines = null;
+    const ids = r.ids.join('、');
+    openModal(`<h2>已產生 ${r.ok} 張借用單</h2>${ids ? `<p class="mono">${esc(ids)}</p>` : ''}
+      ${r.fail.length ? `<div class="banner bad">有 ${r.fail.length} 個地點沒成功:<br>`
+        + r.fail.map(f => esc(f.location) + ':' + esc(f.error)).join('<br>') + '</div>' : ''}
+      <div class="modal-f"><button class="btn pri" data-act="close-render">知道了</button></div>`);
+  },
+  'show-del': () => {
+    if (!confirmInline('刪除這場展覽?此動作無法復原。')) return;
+    run(() => api('deleteShow', { id: S.showId }), '已刪除')
+      .then(() => { S.showId = null; S.showLines = null; render(); }).catch(() => { });
+  },
+  'show-extend': async () => {
+    const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });
+    const live = (v.loans || []).filter(L => ['approved', 'out'].includes(L.status));
+    if (!live.length) return toast('底下沒有可以延期的借用單(只有已核准 / 出借中的單能延)', true);
+    const newEnd = esc(v.to);
+    openModal(`<h2>批次延期</h2>
+      <p class="meta">改檔期不會自動改單。勾選要一起延的,系統會逐張檢查延長那一段的庫存,一張失敗不影響其他張。</p>
+      <label class="f"><span>新的歸還日</span><input type="date" id="se-end" value="${newEnd}"></label>
+      ${live.map(L => `<label class="chk"><input type="checkbox" class="se-id" value="${esc(L.id)}" ${L.end < v.to ? 'checked' : ''}>
+        <span class="mono">${esc(L.id)}</span> ${esc(L.applicant)}・${fmtD(L.start)} → ${fmtD(L.end)}</label>`).join('')}
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="se-force">庫存不足仍延期</label>
+      <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-extend-ok">送出</button></div>`);
+  },
+  'show-extend-ok': async () => {
+    const ids = $$('.se-id').filter(c => c.checked).map(c => c.value);
+    if (!ids.length) return toast('請先勾選要延期的借用單', true);
+    const r = await run(() => api('extendMany', { ids: ids, end: $('#se-end').value, note: '展期延長', force: $('#se-force').checked })).catch(() => null);
+    if (!r) return;
+    closeModal();
+    toast('已延期 ' + r.ok + ' 張' + (r.fail.length ? ',' + r.fail.length + ' 張沒成功' : ''));
+    S.showLines = null;
+    if (r.fail.length) openModal(`<h2>有 ${r.fail.length} 張沒延成功</h2>
+      <div class="banner bad">${r.fail.map(f => esc(f.id) + ':' + esc(f.error)).join('<br>')}</div>
+      <div class="modal-f"><button class="btn pri" data-act="close-render">知道了</button></div>`);
+    else render();
+  },
   'clear-cart': () => { if (confirmInline('清空規劃清單?')) { S.cart = []; saveCart(); render(); } },
   'copy-plan': async () => {
     const all = S.items.length ? S.items : await api('catalog');

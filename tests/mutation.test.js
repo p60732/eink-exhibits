@@ -31,7 +31,7 @@ const M = [
   ['20_logic.gs', "if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');", '', '同一張單可以同時掛兩個請求'],
   ['20_logic.gs', "catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }", 'catch (e) { ok++; }', '批次核准把失敗的也算成功'],
   // 效能索引:資料變了卻沒清掉快取,會算出過期的可借量
-  ['20_logic.gs', "if (t === 'Loans') m.li = null;", '', '借用單索引沒隨資料更新'],
+  ['20_logic.gs', "if (t === 'Loans') { m.li = null; m.si = null; }", '', '借用單索引沒隨資料更新'],
   // 刪除展品與照片上傳的守門
   ['20_logic.gs', "if (used) throw E('「' + it.name + '」已經有 '", "if (false) throw E('「' + it.name + '」已經有 '", '借過的展品也能被刪掉'],
   ['60_files.gs', "if (!mime) throw err_('只接受 JPG / PNG / WebP');", "mime = mime || 'image/jpeg';", '什麼檔案都收'],
@@ -48,7 +48,16 @@ const M = [
   // 防資料遺失的三道保險
   ['30_memory.gs', "if (!full[key]) throw fail_('「' + SHEET_NAMES[key] + '」這次只讀了一部分", "if (false) throw fail_('「' + SHEET_NAMES[key] + '」這次只讀了一部分", '只讀一部分也能整張寫回(會清掉沒讀到的資料)'],
   ['30_memory.gs', "if (!sh) throw fail_('找不到工作表「'", "if (!sh) return create_(key); if (!sh) throw fail_('找不到工作表「'", '工作表不見時自動重建並塞回預設值'],
-  ['30_memory.gs', "if (miss.length) throw fail_('工作表「'", "if (false) throw fail_('工作表「'", '表頭對不上也照讀(等於認錯試算表)']
+  ['30_memory.gs', "if (miss.length) throw fail_('工作表「'", "if (false) throw fail_('工作表「'", '表頭對不上也照讀(等於認錯試算表)'],
+  // 展覽的殘額佔位:這幾條紅了才代表「不會重複扣庫存」真的被守住
+  ['20_logic.gs', "sum += Math.max(0, int(ln.qty) - (issued[S.id + '|' + lineKey(ln)] || 0));", 'sum += int(ln.qty);', '展覽卡位沒扣掉已開單量(同一批東西被扣兩次)'],
+  ['20_logic.gs', "      - showHold(db, item.id, where, from, to, excludeShowId || null);", '      - 0;', '可借量沒扣掉展覽的卡位(展覽等於沒卡位)'],
+  ['20_logic.gs', "var ISSUED_ST = { approved: 1, out: 1 };", "var ISSUED_ST = { pending: 1, approved: 1, out: 1 };", '待審核就讓展覽放手(審核期間出現空窗)'],
+  ['20_logic.gs', "if (S.status !== 'confirmed' || S.id === excludeShowId) return;", "if (S.id === excludeShowId) return;", '規劃中 / 已結案的展覽也在卡位'],
+  ['00_gateway.gs', "SHOW_CALC: ['id', 'name', 'from', 'to', 'status', 'lines'],", "SHOW_CALC: ['id', 'name', 'from', 'to', 'status'],", '算卡位時少讀展覽的規劃清單'],
+  ['20_logic.gs', "if (live.length) throw E('底下還有 ' + live.length + ' 張沒結束的借用單('", "if (false) throw E('底下還有 ' + live.length + ' 張沒結束的借用單('", '底下還有沒結束的單也能結案'],
+  ['20_logic.gs', "if (mine.length) throw E('這場展覽底下已經有 ' + mine.length + ' 張借用單,不能刪除。請改成「取消」以保留紀錄');", '', '有借用單的展覽也能刪掉'],
+  ['20_logic.gs', "        if (!isAdmin) throw E('只有管理者可以把借用單掛到展覽底下');", '', '同仁也能把單掛到展覽底下(可以解掉別人的卡位)']
   // 註:單獨拿掉 ITEM_CALC 的 qty 欄是等價突變 —— 讀取會把相鄰欄位合併成連續段(spans_ 的 gap=3),
   //     qty 夾在 mode 與 location 中間,不在清單上也會被順便讀到。真正有效的守門是上面的 stock 欄。
   // 註:`m.cap` 的失效目前沒有路徑會在同一次請求裡「先算總數 → 改 Items/Units → 再算總數」,

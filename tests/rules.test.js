@@ -76,4 +76,68 @@ t('純函式:同樣輸入同樣輸出、不改輸入', () => {
   const a = JSON.stringify(R.stats(d, TODAY)), b = JSON.stringify(R.stats(d, TODAY));
   assert.strictEqual(a, b); assert.strictEqual(JSON.stringify(d), snap);
 });
+
+/* ---------- 展覽的殘額佔位 ----------
+ * 這幾條是整個展覽功能的命脈:展覽會卡位,底下又會開借用單,
+ * 兩邊都扣就會把同一批東西扣兩次,可借量憑空少一半而且不會報錯。
+ */
+const sdb = (loans) => ({
+  Items: [{ id: 'P1', mode: 'qty', qty: 10, location: '新竹' }],
+  Units: [],
+  Loans: loans || [],
+  Shows: [{ id: 'S1', status: 'confirmed', from: '2026-12-01', to: '2026-12-10',
+    lines: [{ itemId: 'P1', location: '新竹', qty: 5 }] }]
+});
+const loan = (st, qty) => ({ id: 'LX', status: st, start: '2026-12-01', end: '2026-12-10', showId: 'S1',
+  lines: [{ itemId: 'P1', location: '新竹', qty: qty, returned: 0, lost: 0 }] });
+const hold = (d) => R.showHold(d, 'P1', '新竹', '2026-12-03', '2026-12-04', null);
+
+t('展覽卡位:還沒開單時佔滿規劃量', () => {
+  assert.strictEqual(hold(sdb()), 5);
+});
+t('展覽卡位:開了單就讓出那一份,兩邊加起來還是 5', () => {
+  const d = sdb([loan('approved', 3)]);
+  assert.strictEqual(hold(d), 2);                                                   // 展覽只剩 2
+  assert.strictEqual(R.reservedInRange(d, 'P1', '新竹', '2026-12-03', '2026-12-04', null, TODAY), 3);
+  assert.strictEqual(R.availableInRange(d, d.Items[0], '新竹', '2026-12-03', '2026-12-04', null, TODAY), 5);
+});
+t('展覽卡位:全部開完就完全放手', () => {
+  assert.strictEqual(hold(sdb([loan('approved', 5)])), 0);
+});
+t('展覽卡位:開超過規劃量不會變成負的', () => {
+  assert.strictEqual(hold(sdb([loan('out', 8)])), 0);
+});
+t('展覽卡位:待審核的單還沒佔住庫存,所以展覽要繼續佔著(不可以有空窗)', () => {
+  const d = sdb([loan('pending', 5)]);
+  assert.strictEqual(hold(d), 5);
+  assert.strictEqual(R.reservedInRange(d, 'P1', '新竹', '2026-12-03', '2026-12-04', null, TODAY), 0);
+  assert.strictEqual(R.availableInRange(d, d.Items[0], '新竹', '2026-12-03', '2026-12-04', null, TODAY), 5);
+});
+t('展覽卡位:單被取消 / 駁回,那一份回到展覽身上', () => {
+  assert.strictEqual(hold(sdb([loan('cancelled', 5)])), 5);
+  assert.strictEqual(hold(sdb([loan('rejected', 5)])), 5);
+});
+t('展覽卡位:只有「已確認」才卡位,規劃中 / 結案 / 取消都不卡', () => {
+  ['draft', 'closed', 'cancelled'].forEach(st => {
+    const d = sdb(); d.Shows[0].status = st;
+    assert.strictEqual(hold(d), 0, st + ' 不應該卡位');
+  });
+});
+t('展覽卡位:檔期沒重疊就不影響', () => {
+  assert.strictEqual(R.showHold(sdb(), 'P1', '新竹', '2026-11-01', '2026-11-30', null), 0);
+  assert.strictEqual(R.showHold(sdb(), 'P1', '新竹', '2026-12-10', '2026-12-20', null), 5);   // 同一天算重疊
+});
+t('展覽卡位:別的地點不受影響', () => {
+  assert.strictEqual(R.showHold(sdb(), 'P1', '林口', '2026-12-03', '2026-12-04', null), 0);
+});
+t('展覽卡位:排除自己那場,否則展覽會擋住它自己要開的單', () => {
+  assert.strictEqual(R.showHold(sdb(), 'P1', '新竹', '2026-12-03', '2026-12-04', 'S1'), 0);
+});
+t('展覽卡位:兩場展覽各自卡位,會疊加', () => {
+  const d = sdb();
+  d.Shows.push({ id: 'S2', status: 'confirmed', from: '2026-12-05', to: '2026-12-08',
+    lines: [{ itemId: 'P1', location: '新竹', qty: 2 }] });
+  assert.strictEqual(hold(d), 5);                                                   // 12-03~04 只跟 S1 重疊
+  assert.strictEqual(R.showHold(d, 'P1', '新竹', '2026-12-06', '2026-12-07', null), 7);
+});
 console.log('✔ 規則層 ' + n + ' 項通過');

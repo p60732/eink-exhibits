@@ -294,6 +294,49 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   const allTxt = await p.textContent('#llist');
   if (!/測試員工B/.test(allTxt)) throw new Error('轉借後借用人沒換人');
   if (!new RegExp(d(30)).test(allTxt)) throw new Error('延期後歸還日沒改成 ' + d(30));
+  /* ---- 展覽檔期:新增 → 整批貼上 → 確認卡位 → 產生借用單 ---- */
+  await p.click('[data-v=shows]'); await wait(700);
+  await p.click('[data-act=show-new]'); await p.waitForSelector('#shform'); await wait(300);
+  // 整批貼上:對不到的那一行要留在框裡讓人修,其餘照樣加入
+  await p.click('[data-act=show-paste]'); await p.waitForSelector('#sp-txt');
+  await p.fill('#sp-txt', '雙廠展示機\t林口\t2\n根本沒有這個展品\t1');
+  await p.click('[data-act=show-paste-ok]'); await wait(600);
+  const pasteMsg = await p.textContent('#sp-out');
+  if (!/有 1 行對不到/.test(pasteMsg)) throw new Error('沒有回報對不到的行:' + pasteMsg.replace(/\n/g, ' ').slice(0, 120));
+  if (!/根本沒有這個展品/.test(await p.inputValue('#sp-txt'))) throw new Error('對不到的行應該留在輸入框裡');
+  await p.click('.modal [data-act=close]'); await wait(400);
+  if ((await p.$$('#shlines .line')).length !== 1) throw new Error('貼上之後應該有 1 行');
+  // 填檔期 → 缺口即時算出來
+  await p.fill('#shform [name=name]', '春季巡迴展');
+  await p.fill('#shform [name=from]', d(40)); await p.fill('#shform [name=to]', d(50)); await wait(900);
+  await p.fill('#shform [name=owner]', '10231');
+  if (!/足夠|缺/.test(await p.textContent('#shsum'))) throw new Error('沒有即時算出可借量');
+  await p.click('#shform button'); await wait(1200);
+  if (!/春季巡迴展/.test(await p.textContent('#main'))) throw new Error('建立展覽後沒有回到明細:' + (await p.textContent('#main')).replace(/\n/g, ' ').slice(0, 200));
+  await shot('show-new');
+  // 確認檔期 → 開始卡位;可借量要跟著少 2
+  const availOf = () => p.evaluate(async () => {
+    const it = (await Api.call('catalog', {}, S.token)).find(i => i.name === '雙廠展示機');
+    const r = await Api.call('check', { start: S._t1, end: S._t2, lines: [{ itemId: it.id, location: '林口', qty: 1 }] }, S.token);
+    return r[0].available;
+  });
+  await p.evaluate(([a, b2]) => { S._t1 = a; S._t2 = b2; }, [d(42), d(44)]);
+  const before2 = await availOf();
+  await p.click('[data-act=show-status][data-s=confirmed]'); await wait(1400);
+  const after2 = await availOf();
+  if (after2 !== before2 - 2) throw new Error('確認檔期後應該卡住 2 台:' + before2 + ' → ' + after2);
+  // 產生借用單 → 卡位讓給借用單,合計不變(重複扣的話這裡會再少 2)
+  await p.click('[data-act=show-gen]'); await p.waitForSelector('.modal [data-act=close-render]'); await wait(300);
+  const genTxt = await p.textContent('.modal');
+  if (!/已產生 1 張借用單/.test(genTxt)) throw new Error('產生借用單結果不對:' + genTxt.replace(/\n/g, ' ').slice(0, 140));
+  await p.click('.modal [data-act=close-render]'); await wait(1400);
+  const after3 = await availOf();
+  if (after3 !== after2) throw new Error('★ 開單後可借量不該再變(重複扣庫存):' + after2 + ' → ' + after3);
+  if (!/已開單 2/.test(await p.textContent('#shlines'))) throw new Error('需求清單沒顯示已開單量');
+  await shot('show-detail');
+  await p.click('[data-act=show-back]'); await wait(900);
+  if (!/春季巡迴展/.test(await p.textContent('#main'))) throw new Error('展覽清單沒有這一場');
+  await p.click('[data-v=loans]'); await wait(700); await p.click('[data-f=all]'); await wait(1000);
   // 列印:攔下 window.open,檢查產出的單據內容
   await p.evaluate(() => { window.__printed = ''; window.open = () => ({ document: { write: h => { window.__printed = h; }, close() { } }, print() { } }); });
   await (await p.$('[data-act=print-loan]')).click(); await wait(700);

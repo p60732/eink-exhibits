@@ -8,19 +8,20 @@
  */
 var Memory = (function () {
   var TZ = 'Asia/Taipei';
-  var SHEET_NAMES = { Cats: '分類', Items: '展品', Units: '單台編號', Loans: '借用單', Users: '使用者', Logs: '操作紀錄' };
+  var SHEET_NAMES = { Cats: '分類', Items: '展品', Units: '單台編號', Loans: '借用單', Shows: '展覽', Users: '使用者', Logs: '操作紀錄' };
   var SCHEMA = {
     Cats: ['id', 'name', 'sort', 'archived', 'updatedAt'],
     Items: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'spec', 'note', 'image', 'archived', 'countedAt', 'updatedAt'],
     Units: ['id', 'itemId', 'serial', 'status', 'location', 'note', 'countedAt', 'updatedAt'],
     Loans: ['id', 'applicant', 'applicantId', 'dept', 'contact', 'event', 'venue', 'purpose', 'start', 'end', 'status', 'lines',
-      'createdBy', 'createdAt', 'reviewer', 'reviewedAt', 'reviewNote', 'outAt', 'returnedAt', 'note', 'request'],
+      'createdBy', 'createdAt', 'reviewer', 'reviewedAt', 'reviewNote', 'outAt', 'returnedAt', 'note', 'request', 'showId'],
+    Shows: ['id', 'name', 'from', 'to', 'venue', 'owner', 'status', 'lines', 'note', 'createdBy', 'createdAt', 'updatedAt'],
     Users: ['id', 'empNo', 'name', 'dept', 'email', 'role', 'pinHash', 'mustChange', 'sessionVer', 'active', 'createdAt'],
     Logs: ['ts', 'user', 'action', 'ref', 'detail']
   };
   // stock:數量型展品的各地點庫存 {"新竹":{"數量":3,"盤點":"2026-09-23"}};qty 與 countedAt 由後端回填
-  var JSON_FIELDS = { Loans: { lines: [], request: null }, Items: { stock: {} } };   // 欄位 → 空值預設
-  var TABLES = ['Cats', 'Items', 'Units', 'Loans', 'Users'];
+  var JSON_FIELDS = { Loans: { lines: [], request: null }, Items: { stock: {} }, Shows: { lines: [] } };   // 欄位 → 空值預設
+  var TABLES = ['Cats', 'Items', 'Units', 'Loans', 'Shows', 'Users'];
   // 分類第一次建立時先放進來的七類(之後可在畫面上自行新增 / 改名 / 調順序)
   var SEED = { Cats: ['eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'] };
 
@@ -31,7 +32,7 @@ var Memory = (function () {
    */
   var MUST_HAVE = {
     Cats: ['id', 'name'], Items: ['id', 'name'], Units: ['id', 'itemId'],
-    Loans: ['id', 'status'], Users: ['id', 'empNo'], Logs: ['ts', 'action']
+    Loans: ['id', 'status'], Shows: ['id', 'name'], Users: ['id', 'empNo'], Logs: ['ts', 'action']
   };
   /**
    * 資料守門的錯誤:標成 userFacing,讓訊息原封不動送到畫面上。
@@ -300,6 +301,26 @@ var Memory = (function () {
     }).reverse();
   }
 
+  /**
+   * 升級用:只建立這個版本新增的工作表,核心表缺了照樣報錯。
+   * 跟 setup() 分開是因為 setup() 會把「工作表被改名 / 開錯試算表」當成「還沒建立」,
+   * 在那種情況下跑 setup() 會生出一張空表,讓人以為資料真的沒了。升級只該補新的。
+   */
+  var NEW_SHEETS = ['Shows'];
+  function upgrade() {
+    var ss = ss_(), made = [];
+    Object.keys(SHEET_NAMES).forEach(function (key) {
+      if (NEW_SHEETS.indexOf(key) >= 0) return;
+      if (!ss.getSheetByName(SHEET_NAMES[key])) throw fail_('找不到工作表「' + SHEET_NAMES[key] + '」。'
+        + '升級不會幫你重建核心資料表(重建等於把資料清空)。請先確認是不是開錯試算表、或工作表被改名。');
+    });
+    NEW_SHEETS.forEach(function (key) {
+      if (ss.getSheetByName(SHEET_NAMES[key])) return;
+      create_(key); made.push(SHEET_NAMES[key]);
+    });
+    return made;
+  }
+
   /** 建立所有工作表並移除空白預設工作表 */
   function setup() {
     Object.keys(SHEET_NAMES).forEach(create_);
@@ -308,5 +329,5 @@ var Memory = (function () {
     return Object.keys(SHEET_NAMES).map(function (k) { return SHEET_NAMES[k]; });
   }
 
-  return { SCHEMA: SCHEMA, load: load, save: save, readLogs: readLogs, setup: setup };
+  return { SCHEMA: SCHEMA, load: load, save: save, readLogs: readLogs, setup: setup, upgrade: upgrade };
 })();

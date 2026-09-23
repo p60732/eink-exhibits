@@ -251,6 +251,91 @@ bad('uploadImage', { name: 'x', data: 'AAAA', ext: 'jpeg' }, U, /管理者權限
 // 一般欄位的長度上限沒有被放寬
 bad('saveItem', { item: { name: 'x'.repeat(501) } }, A, /文字過長/);
 
+/* ===== 展覽:規劃 → 卡位 → 開單 → 批次延期 → 結案 =====
+ * 最重要的一條在「開單之後可借量不可以再掉一次」——
+ * 展覽卡位與借用單佔用如果重複計算,同一批東西會被扣兩次,而且不會報任何錯。
+ */
+const expo = ok('saveItem', { item: { name: '展覽用展示機', mode: 'qty', category: 'Signage', sites: [{ location: '新竹', qty: 10 }] } }, A);
+const availAt = (a, b) => ok('check', { start: a, end: b, lines: [{ itemId: expo.id, location: '新竹', qty: 1 }] }, U)[0].available;
+const avail = () => availAt('2027-03-02', '2027-03-04');
+assert.strictEqual(avail(), 10, '還沒有任何展覽時全部可借');
+
+// 規劃中不卡位
+let SH = ok('saveShow', { show: { name: '春季巡迴展', from: '2027-03-01', to: '2027-03-10', venue: '南港展覽館', owner: '10231',
+  lines: [{ itemId: expo.id, location: '新竹', qty: 5 }] } }, A);
+assert.strictEqual(SH.status, 'draft');
+assert.strictEqual(SH.lines[0].need, 5, '還沒開單,整個規劃量都還要借');
+assert.strictEqual(avail(), 10, '「規劃中」不可以卡位');
+bad('setShowStatus', { id: SH.id, status: 'closed' }, A, /不能直接改成/);
+bad('createLoansFromShow', { id: SH.id }, A, /改成「已確認」/);
+
+// 確認檔期 → 開始卡位
+SH = ok('setShowStatus', { id: SH.id, status: 'confirmed' }, A);
+assert.strictEqual(avail(), 5, '確認之後展覽要卡住 5 台');
+bad('setShowStatus', { id: SH.id, status: 'nonsense' }, A, /不認得/);
+
+/* 待審核的單還沒佔住庫存,所以展覽不可以放手 ——
+ * 如果展覽這時就把那一份讓出去,審核那段時間就是空窗,別人剛好可以把東西搶走。 */
+const PS = ok('createLoan', { event: '插隊測試', start: '2027-03-02', end: '2027-03-04',
+  lines: [{ itemId: expo.id, location: '新竹', qty: 5 }], showId: SH.id }, A);
+assert.strictEqual(PS.status, 'pending');
+assert.strictEqual(avail(), 5, '★ 底下只有一張待審核的單時,展覽要繼續卡著 5 台(放手的話會變成 10)');
+ok('cancelLoan', { id: PS.id, reason: '測試' }, A);
+assert.strictEqual(avail(), 5, '取消之後那一份回到展覽身上');
+bad('createLoan', { event: '同仁不能掛展覽', start: '2027-03-02', end: '2027-03-04',
+  lines: [{ itemId: expo.id, location: '新竹', qty: 1 }], showId: SH.id }, U, /只有管理者/);
+
+// 產生借用單:卡位讓給借用單,合計不變 —— 這條紅了就是重複扣庫存
+const gen = ok('createLoansFromShow', { id: SH.id }, A);
+assert.strictEqual(gen.ok, 1, '只有新竹有東西,應該只開一張單');
+assert.strictEqual(avail(), 5, '★ 開單之後可借量必須維持 5(重複扣的話會變成 0)');
+const SL = gen.ids[0];
+SH = ok('show', { id: SH.id }, A);
+assert.strictEqual(SH.lines[0].issued, 5, '已開單量');
+assert.strictEqual(SH.lines[0].need, 0, '不用再開單了');
+assert.deepStrictEqual([SH.loanCount, SH.liveCount], [2, 1], '取消掉的那張仍留在歷史裡,但不算「還在跑」');
+assert.strictEqual(ok('loans', { filter: 'all' }, A).find(L => L.id === SL).showName, '春季巡迴展', '借用單要看得到屬於哪一場');
+
+// 展期往後延 → 底下的單不會自動跟著改,要看得見,然後批次延期
+SH = ok('saveShow', { show: { id: SH.id, name: '春季巡迴展', from: '2027-03-01', to: '2027-03-20', owner: '10231',
+  lines: [{ itemId: expo.id, location: '新竹', qty: 5 }] } }, A);
+assert.deepStrictEqual(SH.mismatch, [SL], '改了檔期之後要指出哪幾張單的日期對不上');
+const extMany = ok('extendMany', { ids: [SL], end: '2027-03-20', note: '展期延長' }, A);
+assert.deepStrictEqual([extMany.ok, extMany.fail.length], [1, 0]);
+assert.strictEqual(ok('show', { id: SH.id }, A).mismatch.length, 0, '延期之後就對得上了');
+// 批次裡有一張過不了,只回報那一張,不會整批失敗
+const extBad = ok('extendMany', { ids: [SL, 'L-沒這張'], end: '2027-03-15' }, A);
+assert.strictEqual(extBad.ok, 0);
+assert.strictEqual(extBad.fail.length, 2);
+assert.match(extBad.fail[0].error, /要比原本的/);
+assert.match(extBad.fail[1].error, /找不到借用單/);
+bad('extendMany', { ids: [], end: '2027-03-25' }, A, /請先勾選/);
+
+// 缺口:第二場要 8 台,只剩 5 台 → 要明確認帳才能確認
+let SH2 = ok('saveShow', { show: { name: '同期的另一場', from: '2027-03-05', to: '2027-03-08', owner: '10477',
+  lines: [{ itemId: expo.id, location: '新竹', qty: 8 }] } }, A);
+assert.strictEqual(SH2.lines[0].short, 3, '應該算得出缺 3 台');
+bad('setShowStatus', { id: SH2.id, status: 'confirmed' }, A, /缺 3/);
+SH2 = ok('setShowStatus', { id: SH2.id, status: 'confirmed', force: true }, A);
+assert.strictEqual(SH2.status, 'confirmed');
+assert.strictEqual(avail(), 5, '第二場的檔期沒蓋到 3/02~3/04,不該影響那幾天');
+assert.strictEqual(availAt('2027-03-06', '2027-03-07'), 0, '第二場的檔期內被卡光(借用單 5 + 第二場 8 > 10)');
+ok('deleteShow', { id: SH2.id }, A);           // 沒有借用單才可以刪
+assert.strictEqual(availAt('2027-03-06', '2027-03-07'), 5, '刪掉之後卡位要跟著釋放');
+
+// 結案前底下不能還有沒結束的單
+bad('setShowStatus', { id: SH.id, status: 'closed' }, A, /沒結束的借用單/);
+bad('deleteShow', { id: SH.id }, A, /不能刪除/);
+ok('checkout', { id: SL, units: {} }, A);
+ok('receive', { id: SL, lines: [{ itemId: expo.id, location: '新竹', returned: 5 }] }, A);
+SH = ok('setShowStatus', { id: SH.id, status: 'closed' }, A);
+assert.strictEqual(SH.status, 'closed');
+assert.strictEqual(avail(), 10, '結案之後全部釋放');
+
+// 編輯中的試算(還沒存檔也要算得出缺口)
+const pre = ok('showCheck', { from: '2027-03-01', to: '2027-03-10', lines: [{ itemId: expo.id, location: '新竹', qty: 12 }] }, A);
+assert.deepStrictEqual([pre[0].available, pre[0].short], [10, 2]);
+
 // ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
 // 多做一筆封存展品與一筆待審單,讓限縮欄位(archived / status / request)都被走到
 const U2b = ok('login', { emp: '10477' }).token;   // 先前登出過,重新取得憑證
@@ -372,6 +457,9 @@ const readActions = [
   ['dashboard', {}, A], ['items', {}, A], ['units', {}, A], ['units', { itemId: panel.id }, A]
 ];
 ['all', 'active', 'overdue', 'request', 'pending', 'returned'].forEach(f => readActions.push(['loans', { filter: f }, A]));
+['open', 'all', 'draft', 'confirmed', 'closed'].forEach(f => readActions.push(['shows', { filter: f }, A]));
+readActions.push(['show', { id: SH.id }, A]);
+readActions.push(['showCheck', { id: SH.id, from: '2027-03-01', to: '2027-03-10', lines: [{ itemId: expo.id, location: '新竹', qty: 6 }] }, A]);
 readActions.forEach(([act, p2, tok]) => {
   const restricted = run(act, p2, tok);
   G.ctx.Memory.load = function () { return origLoad(); };          // 忽略限縮,整張整欄載入

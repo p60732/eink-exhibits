@@ -11,6 +11,9 @@ var Logic = (function () {
   var LOAN_ST = { pending: '待審核', approved: '已核准', out: '出借中', returned: '已歸還', rejected: '已駁回', cancelled: '已取消' };
   var REQ_ST = { pickup: '待確認領取', 'return': '待確認歸還', extend: '待確認延期', transfer: '待確認轉借' };
   var UNIT_ST = { 'in': '在庫', out: '借出', repair: '維修', lost: '遺失', retired: '報廢' };
+  var SHOW_ST = { draft: '規劃中', confirmed: '已確認', closed: '已結案', cancelled: '已取消' };
+  // 展覽狀態只能這樣走;進 closed / cancelled 之前必須沒有還在跑的借用單
+  var SHOW_FLOW = { draft: ['confirmed', 'cancelled'], confirmed: ['draft', 'closed', 'cancelled'], closed: ['confirmed'], cancelled: ['draft'] };
   var FOREVER = '9999-12-31';
 
   /* ---------- 小工具 ---------- */
@@ -36,14 +39,15 @@ var Logic = (function () {
   var MEMO = new WeakMap();
   function memo(db) {
     var m = MEMO.get(db);
-    if (!m) { m = { cap: {}, li: null, us: null }; MEMO.set(db, m); }
+    if (!m) { m = { cap: {}, li: null, us: null, si: null }; MEMO.set(db, m); }
     return m;
   }
   function dirty(db, t) {
     db._dirty[t] = true;
     var m = memo(db);
     if (t === 'Units' || t === 'Items') { m.cap = {}; m.us = null; }
-    if (t === 'Loans') m.li = null;
+    if (t === 'Loans') { m.li = null; m.si = null; }   // 借用單一變,展覽的「已開單量」也跟著變
+    if (t === 'Shows') m.si = null;
   }
   function byId(list, id) { for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]; return null; }
   function nextId(list, prefix, width) {
@@ -210,14 +214,58 @@ var Logic = (function () {
     });
     return sum;
   }
-  function availableInRange(db, item, where, from, to, excludeId, today) {
-    return capacity(db, item, where) - reservedInRange(db, item.id, where, from, to, excludeId, today);
+
+  /* ---------- 展覽的殘額佔位 ----------
+   * 展覽要「卡位」,底下又會開借用單,兩邊都扣就會把同一批東西扣兩次。
+   * 所以展覽佔的不是規劃量,而是**還沒被借用單佔住的那一段**:
+   *     展覽佔用量 = max(0, 規劃量 − 已開單量)
+   *
+   * 「已開單量」只算**已核准 / 出借中** —— 那才是真正佔住庫存的狀態。
+   *   · 待審核:單子還沒佔住庫存,所以展覽繼續幫它佔著(否則審核那段時間是空窗,會被別人搶走)
+   *   · 已駁回 / 已取消:那份回到展覽身上,可以重開單
+   *   · 已歸還:展覽會把那份重新佔回來,直到把展覽結案或改掉規劃量。
+   *     這是刻意選保守的一邊(寧可擋住,也不要超賣),而且只影響展覽檔期之內的查詢。
+   */
+  var ISSUED_ST = { approved: 1, out: 1 };
+  /** showId + '|' + 品項@地點 → 已開單量;一次請求只算一次 */
+  function showIssued(db) {
+    var m = memo(db);
+    if (m.si) return m.si;
+    var idx = {};
+    (db.Loans || []).forEach(function (L) {
+      var sid = s(L.showId);
+      if (!sid || !ISSUED_ST[L.status]) return;
+      (L.lines || []).forEach(function (ln) {
+        var k = sid + '|' + lineKey(ln);
+        idx[k] = (idx[k] || 0) + int(ln.qty);
+      });
+    });
+    return (m.si = idx);
   }
-  function checkLines(db, lines, from, to, excludeId, today) {
+  /** where 省略 = 整個品項;excludeShowId 是「這張單本來就屬於那場展覽」時要排除自己 */
+  function showHold(db, itemId, where, from, to, excludeShowId) {
+    var issued = showIssued(db), sum = 0, want = where == null ? null : loc(where);
+    (db.Shows || []).forEach(function (S) {
+      if (S.status !== 'confirmed' || S.id === excludeShowId) return;
+      if (s(S.from) > to || s(S.to) < from) return;
+      (S.lines || []).forEach(function (ln) {
+        if (s(ln.itemId) !== itemId) return;
+        if (want != null && loc(ln.location) !== want) return;
+        sum += Math.max(0, int(ln.qty) - (issued[S.id + '|' + lineKey(ln)] || 0));
+      });
+    });
+    return sum;
+  }
+  function availableInRange(db, item, where, from, to, excludeId, today, excludeShowId) {
+    return capacity(db, item, where)
+      - reservedInRange(db, item.id, where, from, to, excludeId, today)
+      - showHold(db, item.id, where, from, to, excludeShowId || null);
+  }
+  function checkLines(db, lines, from, to, excludeId, today, excludeShowId) {
     return lines.map(function (ln) {
       var it = byId(db.Items, ln.itemId), where = loc(ln.location);
       if (!it) return { itemId: ln.itemId, location: where, name: '(已刪除)', qty: int(ln.qty), available: 0, short: int(ln.qty) };
-      var av = availableInRange(db, it, where, from, to, excludeId, today);
+      var av = availableInRange(db, it, where, from, to, excludeId, today, excludeShowId || null);
       return { itemId: it.id, location: where, name: it.name, qty: int(ln.qty), available: Math.max(0, av), short: Math.max(0, int(ln.qty) - av) };
     });
   }
@@ -226,6 +274,8 @@ var Logic = (function () {
     var o = {};
     for (var k in L) o[k] = L[k];
     o.statusLabel = LOAN_ST[L.status] || L.status;
+    o.showId = s(L.showId);
+    if (o.showId) { var sw = byId(db.Shows || [], o.showId); o.showName = sw ? sw.name : ''; }
     o.request = L.request && L.request.type ? L.request : null;
     o.stage = o.request ? (REQ_ST[o.request.type] || '待確認') : '';
     o.overdue = isOverdue(L, today);
@@ -351,7 +401,7 @@ var Logic = (function () {
   function checkExtend(db, L, newEnd, today) {
     if (!isDate(newEnd)) throw E('請填寫新的歸還日');
     if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');
-    return checkLines(db, L.lines, addDays(L.end, 1), newEnd, L.id, today).filter(function (x) { return x.short > 0; });
+    return checkLines(db, L.lines, addDays(L.end, 1), newEnd, L.id, today, s(L.showId)).filter(function (x) { return x.short > 0; });
   }
   function doExtend(c, L, newEnd, note, force) {
     var short = checkExtend(c.db, L, newEnd, c.today);
@@ -478,6 +528,87 @@ var Logic = (function () {
     return L;
   }
 
+  /* ---------- 展覽 ----------
+   * 展覽是「專案」那一層:底下掛多張借用單(新竹一張、林口一張),
+   * 各自走原本的核准 / 點交 / 歸還流程,展覽頁只負責規劃、卡位與總覽。
+   */
+  /** 規劃清單:跟借用單一樣依「品項+地點」合併,地點只有一個就自動補上 */
+  function cleanShowLines(db, lines) {
+    var merged = {}, meta = {};
+    (lines || []).forEach(function (ln) {
+      var id = s(ln.itemId), q = int(ln.qty);
+      if (!id || q <= 0) return;
+      var it = byId(db.Items, id);
+      if (!it) throw E('找不到展品 ' + id);
+      var where = s(ln.location), sites = Object.keys(siteMap(db, it));
+      if (!where) {
+        if (sites.length > 1) throw E('「' + it.name + '」放在 ' + sites.join('、') + ',請指定要從哪一個地點出');
+        where = sites[0] || loc(it.location);
+      } else if (sites.length && sites.indexOf(where) < 0) {
+        throw E('「' + it.name + '」在 ' + where + ' 沒有庫存');
+      }
+      var k = id + '@' + where;
+      merged[k] = (merged[k] || 0) + q;
+      meta[k] = { itemId: id, location: where, note: s(ln.note) };
+    });
+    return Object.keys(merged).map(function (k) {
+      return { itemId: meta[k].itemId, location: meta[k].location, qty: merged[k], note: meta[k].note };
+    });
+  }
+  function loansOfShow(db, showId) {
+    return (db.Loans || []).filter(function (L) { return s(L.showId) === showId; });
+  }
+  function liveLoansOfShow(db, showId) {
+    return loansOfShow(db, showId).filter(function (L) {
+      return L.status === 'pending' || L.status === 'approved' || L.status === 'out';
+    });
+  }
+  /**
+   * 一行規劃的缺口。
+   *   還要借的 = 規劃量 − 已開單量
+   *   可借量   = 扣掉別人的借用單與**別場**展覽的卡位(自己這場要排除,否則會擋住自己的單)
+   */
+  function showLineView(db, S, ln, today) {
+    var it = byId(db.Items, ln.itemId), where = loc(ln.location), qty = int(ln.qty);
+    var issued = showIssued(db)[S.id + '|' + lineKey(ln)] || 0;
+    var need = Math.max(0, qty - issued);
+    var o = { itemId: s(ln.itemId), location: where, qty: qty, note: s(ln.note), issued: issued, need: need,
+      over: Math.max(0, issued - qty),
+      name: it ? it.name : '(已刪除)', mode: it ? it.mode : 'qty', category: it ? it.category : '', available: 0, short: need };
+    if (!it) return o;
+    var av = availableInRange(db, it, where, s(S.from), s(S.to), null, today, S.id);
+    o.available = Math.max(0, av);
+    o.short = Math.max(0, need - av);
+    return o;
+  }
+  function showView(db, S, today, withLoans) {
+    var lines = (S.lines || []).map(function (ln) { return showLineView(db, S, ln, today); });
+    var o = {
+      id: S.id, name: s(S.name), from: s(S.from), to: s(S.to), venue: s(S.venue), owner: s(S.owner),
+      status: s(S.status) || 'draft', note: s(S.note), createdBy: s(S.createdBy), createdAt: s(S.createdAt),
+      lines: lines,
+      statusLabel: SHOW_ST[S.status] || SHOW_ST.draft,
+      itemCount: lines.length,
+      qtyTotal: lines.reduce(function (a, x) { return a + x.qty; }, 0),
+      issuedTotal: lines.reduce(function (a, x) { return a + x.issued; }, 0),
+      shortTotal: lines.reduce(function (a, x) { return a + x.short; }, 0)
+    };
+    var mine = loansOfShow(db, S.id);
+    o.loanCount = mine.length;
+    o.liveCount = liveLoansOfShow(db, S.id).length;
+    // 檔期跟底下借用單對不上時要看得見:展覽改期不會自動改單,要人決定
+    o.mismatch = mine.filter(function (L) {
+      return L.status !== 'cancelled' && L.status !== 'rejected' && (s(L.start) !== o.from || s(L.end) !== o.to);
+    }).map(function (L) { return L.id; });
+    if (withLoans) o.loans = mine.slice().sort(sortLoans).map(function (L) { return enrichLoan(db, L, today); });
+    return o;
+  }
+  function showById(c) {
+    var S = byId(c.db.Shows || [], s(c.p.id));
+    if (!S) throw E('找不到展覽');
+    return S;
+  }
+
   /* ---------- 同仁可用的動作 ---------- */
   var USER = {
     catalog: function (c) {
@@ -496,8 +627,13 @@ var Logic = (function () {
       var r = validRange(c.p), today = c.today, isAdmin = c.user.role === 'admin';
       if (!isAdmin && r[0] < today) throw E('借出日不可早於今天');
       if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
+      var showId = s(c.p.showId);
+      if (showId) {
+        if (!isAdmin) throw E('只有管理者可以把借用單掛到展覽底下');
+        if (!byId(c.db.Shows || [], showId)) throw E('找不到展覽 ' + showId);
+      }
       var lines = cleanLines(c.db, c.p.lines);
-      var chk = checkLines(c.db, lines, r[0], r[1], null, today);
+      var chk = checkLines(c.db, lines, r[0], r[1], null, today, showId || null);
       var short = chk.filter(function (x) { return x.short > 0; });
       if (short.length && !(isAdmin && c.p.force)) {
         throw E('以下展品在該期間數量不足:' + short.map(function (x) { return x.name + '(需 ' + x.qty + ',可借 ' + x.available + ')'; }).join('、'));
@@ -518,7 +654,7 @@ var Logic = (function () {
         start: r[0], end: r[1], status: onBehalf ? 'approved' : 'pending', lines: lines,
         createdBy: c.user.name, createdAt: c.now,
         reviewer: onBehalf ? c.user.name : '', reviewedAt: onBehalf ? c.now : '', reviewNote: onBehalf ? '管理者代為登記' : '',
-        outAt: '', returnedAt: '', note: s(c.p.note), request: null
+        outAt: '', returnedAt: '', note: s(c.p.note), request: null, showId: showId
       };
       L.request = null;
       c.db.Loans.push(L); dirty(c.db, 'Loans');
@@ -540,7 +676,7 @@ var Logic = (function () {
       if (!isAdmin && r[0] < c.today) throw E('借出日不可早於今天');
       if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
       var lines = cleanLines(c.db, c.p.lines);
-      var short = checkLines(c.db, lines, r[0], r[1], L.id, c.today).filter(function (x) { return x.short > 0; });
+      var short = checkLines(c.db, lines, r[0], r[1], L.id, c.today, s(L.showId)).filter(function (x) { return x.short > 0; });
       if (short.length && !(isAdmin && c.p.force)) {
         throw E('以下展品在該期間數量不足:' + short.map(function (x) { return x.name + '(需 ' + x.qty + ',可借 ' + x.available + ')'; }).join('、'));
       }
@@ -677,14 +813,14 @@ var Logic = (function () {
         return L.status === f;
       }).slice().sort(sortLoans).map(function (L) {
         var o = enrichLoan(c.db, L, today);
-        if (L.status === 'pending' || L.status === 'approved') o.check = checkLines(c.db, L.lines, L.start, L.end, L.id, today);
+        if (L.status === 'pending' || L.status === 'approved') o.check = checkLines(c.db, L.lines, L.start, L.end, L.id, today, s(L.showId));
         return o;
       });
     },
     approve: function (c) {
       var L = byId(c.db.Loans, s(c.p.id)), today = c.today;
       if (!L || L.status !== 'pending') throw E('此申請不是待審核狀態');
-      var short = checkLines(c.db, L.lines, L.start, L.end, L.id, today).filter(function (x) { return x.short > 0; });
+      var short = checkLines(c.db, L.lines, L.start, L.end, L.id, today, s(L.showId)).filter(function (x) { return x.short > 0; });
       if (short.length && !c.p.force) throw E('數量不足:' + short.map(function (x) { return x.name + ' 缺 ' + x.short; }).join('、') + '。若仍要核准請勾選「強制核准」');
       L.status = 'approved'; L.reviewer = c.user.name; L.reviewedAt = c.now; L.reviewNote = s(c.p.note);
       dirty(c.db, 'Loans'); log(c, '核准借用', L.id, s(c.p.note));
@@ -733,6 +869,129 @@ var Logic = (function () {
           today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify };
         try { ADMIN.approve(sub); ok++; }
         catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }
+      });
+      return { ok: ok, fail: fail };
+    },
+    /* ---------- 展覽 ---------- */
+    shows: function (c) {
+      var today = c.today, f = s(c.p.filter) || 'open';
+      return (c.db.Shows || []).filter(function (S) {
+        var st = s(S.status) || 'draft';
+        if (f === 'all') return true;
+        if (f === 'open') return st === 'draft' || st === 'confirmed';
+        return st === f;
+      }).slice().sort(function (a, b) { return s(a.from) < s(b.from) ? 1 : -1; })
+        .map(function (S) { return showView(c.db, S, today, false); });
+    },
+    show: function (c) { return showView(c.db, showById(c), c.today, true); },
+    /** 編輯中即時看缺口:還沒存檔也能算,所以清單由參數帶進來 */
+    showCheck: function (c) {
+      if (!isDate(c.p.from) || !isDate(c.p.to)) throw E('請先填寫檔期起訖日期');
+      if (s(c.p.from) > s(c.p.to)) throw E('結束日不可早於開始日');
+      var draft = { id: s(c.p.id) || '-', from: s(c.p.from), to: s(c.p.to), lines: cleanShowLines(c.db, c.p.lines) };
+      return draft.lines.map(function (ln) { return showLineView(c.db, draft, ln, c.today); });
+    },
+    saveShow: function (c) {
+      var p = c.p.show || {}, id = s(p.id), today = c.today, name = s(p.name);
+      if (!name) throw E('請填寫展覽名稱');
+      if (name.length > 60) throw E('展覽名稱過長(上限 60 字)');
+      if (!isDate(p.from) || !isDate(p.to)) throw E('請填寫檔期起訖日期');
+      if (s(p.from) > s(p.to)) throw E('結束日不可早於開始日');
+      if (s(p.owner) && !findByEmp(c.db, p.owner)) throw E('查無承辦人工號 ' + s(p.owner));
+      var lines = cleanShowLines(c.db, p.lines);
+      if (lines.length > 300) throw E('一場展覽最多 300 項');
+      var S = id ? byId(c.db.Shows, id) : null;
+      if (id && !S) throw E('找不到展覽');
+      if (S && (S.status === 'closed' || S.status === 'cancelled')) throw E('「' + SHOW_ST[S.status] + '」的展覽不能修改,請先改回進行中的狀態');
+      var before = S ? (s(S.name) + '|' + s(S.from) + '~' + s(S.to) + '|' + (S.lines || []).length + ' 項 → ') : '';
+      if (!S) {
+        S = { id: nextId(c.db.Shows, 'S' + today.slice(2, 4) + '-', 3), status: 'draft', createdBy: c.user.name, createdAt: c.now };
+        c.db.Shows.push(S);
+      }
+      S.name = name; S.from = s(p.from); S.to = s(p.to); S.venue = s(p.venue);
+      S.owner = s(p.owner).toUpperCase(); S.note = s(p.note); S.lines = lines; S.updatedAt = c.now;
+      dirty(c.db, 'Shows');
+      log(c, id ? '修改展覽' : '新增展覽', S.id, before + name + '|' + S.from + '~' + S.to + '|' + lines.length + ' 項');
+      return showView(c.db, S, today, true);
+    },
+    /** 狀態切換。確認檔期時才開始卡位;結案 / 取消前底下不能還有沒結束的借用單 */
+    setShowStatus: function (c) {
+      var S = showById(c), today = c.today, from = s(S.status) || 'draft', to = s(c.p.status);
+      if (!SHOW_ST[to]) throw E('不認得的展覽狀態');
+      if (to === from) return showView(c.db, S, today, true);
+      if ((SHOW_FLOW[from] || []).indexOf(to) < 0) throw E('「' + SHOW_ST[from] + '」不能直接改成「' + SHOW_ST[to] + '」');
+      if (to === 'closed' || to === 'cancelled') {
+        var live = liveLoansOfShow(c.db, S.id);
+        if (live.length) throw E('底下還有 ' + live.length + ' 張沒結束的借用單(' + live.map(function (L) { return L.id; }).join('、')
+          + '),請先處理完再' + (to === 'closed' ? '結案' : '取消'));
+      }
+      if (to === 'confirmed') {
+        if (!(S.lines || []).length) throw E('規劃清單是空的,沒有東西可以確認');
+        var short = (S.lines || []).map(function (ln) { return showLineView(c.db, S, ln, today); })
+          .filter(function (x) { return x.short > 0; });
+        // 有缺口不直接擋:現實上常常是「先確認展覽,東西之後再喬」。要管理者明確認帳,並留紀錄。
+        if (short.length && !bool(c.p.force)) {
+          throw E('以下展品在這個檔期不夠:' + short.map(function (x) { return x.name + '(' + x.location + ')缺 ' + x.short; }).join('、')
+            + '。確定仍要確認檔期,請勾選「知道有缺口,仍要確認」');
+        }
+        if (short.length) log(c, '確認展覽(有缺口)', S.id, short.map(function (x) { return x.name + '@' + x.location + ' 缺 ' + x.short; }).join(';'));
+      }
+      S.status = to; S.updatedAt = c.now;
+      dirty(c.db, 'Shows');
+      log(c, '展覽改為' + SHOW_ST[to], S.id, S.name);
+      return showView(c.db, S, today, true);
+    },
+    deleteShow: function (c) {
+      var S = showById(c), mine = loansOfShow(c.db, S.id);
+      if (mine.length) throw E('這場展覽底下已經有 ' + mine.length + ' 張借用單,不能刪除。請改成「取消」以保留紀錄');
+      c.db.Shows = c.db.Shows.filter(function (x) { return x.id !== S.id; });
+      dirty(c.db, 'Shows');
+      log(c, '刪除展覽', S.id, S.name);
+      return { id: S.id };
+    },
+    /**
+     * 依地點把「還沒開單的部分」各開一張借用單。
+     * 開出來的單直接是「已核准」—— 展覽本身已經確認過檔期與缺口,再跑一次審核只是多一道手續;
+     * 而且核准後借用單就接手佔住庫存,跟展覽的卡位無縫接上,中間不會有空窗。
+     */
+    createLoansFromShow: function (c) {
+      var S = showById(c), today = c.today;
+      if (S.status !== 'confirmed') throw E('請先把展覽狀態改成「已確認」再產生借用單');
+      if (!s(S.owner)) throw E('請先填寫展覽的承辦人工號 —— 產生的借用單要掛在他名下');
+      var who = findByEmp(c.db, S.owner);
+      if (!who) throw E('查無承辦人工號 ' + s(S.owner));
+      var only = (c.p.locations || []).map(s).filter(Boolean), want = {};
+      (S.lines || []).forEach(function (ln) {
+        var v = showLineView(c.db, S, ln, today);
+        if (v.need <= 0) return;
+        if (only.length && only.indexOf(v.location) < 0) return;
+        (want[v.location] = want[v.location] || []).push({ itemId: v.itemId, location: v.location, qty: v.need });
+      });
+      var locs = Object.keys(want).sort();
+      if (!locs.length) throw E('沒有還需要開單的項目');
+      var made = [], fail = [];
+      locs.forEach(function (where) {
+        var sub = { db: c.db, user: c.user, today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify,
+          p: { event: S.name, venue: s(S.venue), purpose: '', contact: '', note: '由展覽「' + S.name + '」產生(' + where + ')',
+            start: s(S.from), end: s(S.to), lines: want[where], onBehalf: true, applicant: s(S.owner),
+            dept: s(who.dept), force: bool(c.p.force), showId: S.id } };
+        try { made.push(USER.createLoan(sub).id); }
+        catch (e) { fail.push({ location: where, error: e.userFacing ? e.message : '無法產生借用單' }); }
+      });
+      log(c, '由展覽產生借用單', S.id, made.join('、') || '全部失敗');
+      return { ok: made.length, ids: made, fail: fail, show: showView(c.db, S, today, true) };
+    },
+    /** 批次延期:展期往後延時,底下的單不用一張一張延。一張失敗不影響其他張 */
+    extendMany: function (c) {
+      var ids = (c.p.ids || []).map(s).filter(Boolean), ok = 0, fail = [];
+      if (!ids.length) throw E('請先勾選要延期的借用單');
+      if (ids.length > 50) throw E('一次最多延期 50 張');
+      if (!isDate(c.p.end)) throw E('請填寫新的歸還日');
+      ids.forEach(function (id) {
+        var sub = { db: c.db, p: { id: id, end: s(c.p.end), note: s(c.p.note), force: bool(c.p.force) }, user: c.user,
+          today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify };
+        try { ADMIN.extendLoan(sub); ok++; }
+        catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法延期' }); }
       });
       return { ok: ok, fail: fail };
     },
@@ -987,6 +1246,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules, LOAN_ST: LOAN_ST };
 })();

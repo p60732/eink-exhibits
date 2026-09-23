@@ -38,9 +38,13 @@ function routes_() {
     UNIT_PICK: ['id', 'itemId', 'status', 'serial', 'location'],
     ITEM_CALC: ['id', 'name', 'mode', 'qty', 'location', 'stock', 'archived'],
     ITEM_CAT: ['id', 'name', 'category', 'archived'],
-    USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange']   // 不讀 pinHash / email
+    USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange'],  // 不讀 pinHash / email
+    SHOW_CALC: ['id', 'name', 'from', 'to', 'status', 'lines'],                            // 算展覽卡位 + 借用單上顯示場次名稱
+    LOAN_SHOW: ['id', 'status', 'start', 'end', 'lines', 'showId', 'applicant', 'dept', 'event', 'createdAt']
   };
-  var A_ALL = { Items: '*', Units: '*', Loans: '*', Users: C.USER_AUTH };
+  var A_ALL = { Items: '*', Units: '*', Loans: '*', Shows: C.SHOW_CALC, Users: C.USER_AUTH };
+  // 展覽會卡位,所以凡是要算「這段期間可借幾台」的讀取都得把展覽讀進來,否則會算得比實際多
+  var SHOWS_ = C.SHOW_CALC;
   // 只做庫存 / 可借量計算時,已歸還與已取消的舊單完全用不到:
   // 記憶積木會先只讀 status 欄找出第一筆未結案的位置,再從那裡讀到最後
   var LIVE = { field: 'status', values: ['pending', 'approved', 'out'] };
@@ -54,41 +58,50 @@ function routes_() {
   add('admin', true, I, { saveUser: ['user'], importUsers: ['rows'] });
   // 邏輯積木:同仁
   add('user', false, U, { catalog: ['start', 'end'], check: ['start', 'end', 'lines', 'excludeId'] },
-    { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC, only: LIVE }, Users: C.USER_AUTH });
+    { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC.concat(['showId']), only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
   add('user', false, U, { myLoans: [] },
-    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Users: C.USER_AUTH });
+    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Shows: SHOWS_, Users: C.USER_AUTH });
   add('user', false, U, { pickupOptions: ['id'] },
     { Items: C.ITEM_CALC, Units: C.UNIT_PICK, Loans: C.LOAN_MINE, Users: C.USER_AUTH });
   add('user', false, U, { cats: [] }, { Cats: '*', Items: C.ITEM_CAT, Users: C.USER_AUTH });
   add('user', false, U, { lookup: ['code'] }, A_ALL);
   add('user', true, U, {
-    createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force'],
+    createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force', 'showId'],
     updateLoan: ['id', 'event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'force'],
     cancelLoan: ['id', 'reason'], requestPickup: ['id', 'units', 'note'], requestReturn: ['id', 'lines', 'note'], cancelRequest: ['id'],
     requestExtend: ['id', 'end', 'note'], requestTransfer: ['id', 'emp', 'note']
   });
   // 邏輯積木:管理者
   add('admin', false, A, { dashboard: [] },
-    { Items: '*', Units: '*', Loans: { cols: '*', only: LIVE }, Users: C.USER_AUTH });
+    { Items: '*', Units: '*', Loans: { cols: '*', only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
   // 借用單:只看進行中的那幾個分頁不必翻出歷史單,只有「已歸還 / 全部 / 已駁回 / 已取消」才整張讀
   var HISTORY_ = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
   add('admin', false, A, { loans: ['filter'] }, function (p) {
     var live = !HISTORY_[String((p && p.filter) || 'active')];
-    return { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Users: C.USER_AUTH,
+    return { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Users: C.USER_AUTH, Shows: SHOWS_,
       Loans: live ? { cols: '*', only: LIVE } : '*' };
   });
   add('admin', false, A, { items: [] },
     { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC, only: LIVE }, Users: C.USER_AUTH });
   add('admin', false, A, { units: ['itemId'] },
-    { Items: C.ITEM_CALC, Units: '*', Loans: C.LOAN_HOLD, Users: C.USER_AUTH });
+    { Items: C.ITEM_CALC, Units: '*', Loans: C.LOAN_HOLD, Shows: SHOWS_, Users: C.USER_AUTH });
   add('admin', false, A, { allCats: [] }, { Cats: '*', Items: C.ITEM_CAT, Users: C.USER_AUTH });
   add('admin', false, A, { logs: ['limit'] }, { Users: C.USER_AUTH });
+  // 展覽:showIssued 要看到掛在展覽底下的每一張單(含已歸還),所以不截尾,只限縮欄位
+  add('admin', false, A, { shows: ['filter'] },
+    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: C.LOAN_SHOW, Shows: '*', Users: C.USER_AUTH });
+  // 展覽明細會把底下每一張借用單整張帶出來,所以這裡不能限縮借用單的欄位
+  add('admin', false, A, { show: ['id'], showCheck: ['id', 'from', 'to', 'lines'] },
+    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Shows: '*', Users: C.USER_AUTH });
   add('admin', true, A, {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
     stocktake: ['location', 'qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
     saveCat: ['cat'], moveCat: ['id', 'dir'],
     approveMany: ['ids', 'note', 'force'], decideRequest: ['id', 'ok', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force'],
+    extendMany: ['ids', 'end', 'note', 'force'],
+    saveShow: ['show'], setShowStatus: ['id', 'status', 'force'], deleteShow: ['id'],
+    createLoansFromShow: ['id', 'locations', 'force'],
     deleteItem: ['id']
   });
   // 照片上傳:交給檔案積木放進雲端硬碟,試算表只存連結。不碰試算表,所以不算寫入。
@@ -174,6 +187,16 @@ function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).se
 function assertOwner_() {
   var active = Session.getActiveUser().getEmail(), eff = Session.getEffectiveUser().getEmail();
   if (!active || active !== eff) throw new Error('只有專案擁有者可以執行');
+}
+
+/**
+ * 升級用:在編輯器手動執行一次,只補這個版本新增的工作表(展覽)。
+ * 跟 setupSheets 不一樣 —— 核心工作表缺了它會報錯而不是重建,所以不會把異常變成一張看起來正常的空表。
+ */
+function upgradeSheets() {
+  assertOwner_();
+  var made = Memory.upgrade();
+  console.log(made.length ? '已新增工作表:' + made.join('、') : '沒有需要新增的工作表,資料表已經是最新的');
 }
 
 /** 首次使用:在編輯器手動執行一次(建立工作表) */
