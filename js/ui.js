@@ -11,7 +11,7 @@ const S = {
   cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
   loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, logQ: '',
-  showId: null, showFilter: 'open', showLines: null
+  showId: null, showFilter: 'open', showLines: null, showPick: null
 };
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -171,6 +171,8 @@ async function openScanner(onCode, title = '掃描 QR Code') {
 async function boot() {
   S.token = store.get('token', null); S.user = store.get('user', null);
   S.cart = store.get('cart', []); S.plan = store.get('plan', { start: '', end: '' });
+  S.showPick = store.get('showpick', null);
+  if (S.showPick) { S.showId = S.showPick.id; S.showLines = store.get('showlines', []); S.view = 'catalog'; }
   if (S.token && S.user) {
     try { S.user = await api('me'); store.set('user', S.user); return enterApp(); } catch (e) { }
   }
@@ -393,24 +395,35 @@ function groupByCat(cats, list) {
 }
 
 VIEWS.catalog = async main => {
-  const f = S.filters, range = f.start && f.end && f.start <= f.end;
+  const f = S.filters;
+  // 為展覽挑選時,日期一律用展覽的檔期(不讓人在這裡改),可借量也要排除這場自己的卡位
+  const pick = S.showPick;
+  const rs = pick ? pick.from : f.start, re = pick ? pick.to : f.end;
+  const range = rs && re && rs <= re;
   S.cats = await cachedGet('cats', 'cats');
-  return withData(main, 'catalog|' + (range ? f.start + '~' + f.end : ''), 'catalog', range ? { start: f.start, end: f.end } : {}, items => {
+  const req = range ? { start: rs, end: re } : {};
+  if (pick) req.showId = pick.id;
+  return withData(main, 'catalog|' + (range ? rs + '~' + re : '') + (pick ? '|show=' + pick.id : ''), 'catalog', req, items => {
   S.items = items;
   if (f.cat && !S.cats.some(c => c.name === f.cat)) f.cat = '';
-  main.innerHTML = `<div class="eyebrow">Catalog</div><h1>展品目錄</h1><p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「展覽規劃」。</p>
+  const picked = () => (S.showLines || []).reduce((a, l) => a + l.qty, 0);
+  main.innerHTML = `<div class="eyebrow">Catalog</div><h1>展品目錄</h1>
+    ${pick ? '' : `<p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「展覽規劃」。</p>`}
+    ${pick ? `<div class="card bulkbar" id="pickbar"></div>` : ''}
     <div class="toolbar">
       <input class="grow" type="search" id="cq" placeholder="搜尋品名、規格、位置…" value="${esc(f.q)}">
-      <span class="row" style="gap:6px"><input type="date" id="cs" value="${esc(f.start)}" aria-label="起"><span class="meta">→</span><input type="date" id="ce" value="${esc(f.end)}" aria-label="迄"></span>
+      ${pick ? '' : `<span class="row" style="gap:6px"><input type="date" id="cs" value="${esc(f.start)}" aria-label="起"><span class="meta">→</span><input type="date" id="ce" value="${esc(f.end)}" aria-label="迄"></span>`}
       <label class="chk"><input type="checkbox" id="cav" ${f.onlyAvail ? 'checked' : ''}>只看可借</label>
-      <button class="btn" data-act="export">${ICON.dl}<span class="lbl-hide">匯出</span></button>
+      ${pick ? '' : `<button class="btn" data-act="export">${ICON.dl}<span class="lbl-hide">匯出</span></button>`}
     </div>
     <div id="cbar"></div>
     <div id="mbar"></div>
-    ${range ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到展覽規劃</a></div>` : ''}
+    ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到展覽規劃</a></div>` : ''}
     <div id="cgrid"></div>`;
   const card = i => {
-    const inCart = S.cart.filter(c => c.itemId === i.id).reduce((a, c) => a + c.qty, 0);
+    const inCart = pick
+      ? (S.showLines || []).filter(l => l.itemId === i.id).reduce((a, l) => a + l.qty, 0)
+      : S.cart.filter(c => c.itemId === i.id).reduce((a, c) => a + c.qty, 0);
     const av = range ? i.available : null;
     const gs = i.sites || [];
     const picker = gs.length > 1
@@ -425,7 +438,7 @@ VIEWS.catalog = async main => {
       <div class="meta">存放:</div>${distHtml}
       <div class="nums"><div class="${i.inStock ? '' : 'zero'}"><b>${i.inStock}</b>倉庫在庫</div><div><b>${i.out}</b>出借中</div><div><b>${i.reserved}</b>已預約</div><div><b>${i.total}</b>總數</div></div>
       ${range ? `<div class="avail ${av ? '' : 'none'}">期間可借 <b>${av}</b></div>` : ''}
-      <div class="addrow">${picker}<input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="add-cart" data-id="${i.id}">${inCart ? `加入規劃(已選 ${inCart})` : '加入規劃'}</button></div>
+      <div class="addrow">${picker}<input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="${pick ? 'show-add-cat' : 'add-cart'}" data-id="${i.id}">${inCart ? (pick ? `加入展覽(已選 ${inCart})` : `加入規劃(已選 ${inCart})`) : (pick ? '加入展覽' : '加入規劃')}</button></div>
     </div>`;
   };
   let draw = () => {
@@ -441,6 +454,7 @@ VIEWS.catalog = async main => {
       : groupByCat(S.cats, shown).map(([name, arr]) => `<h2 class="cath">${esc(name)}<span class="chipnum">${arr.length}</span></h2>` + block(arr)).join('');
   };
   const mbar = () => {
+    if (pick) { $('#mbar').innerHTML = ''; return; }
     $('#mbar').innerHTML = S.multi.size
       ? `<div class="card bulkbar multibar"><b>已選 ${S.multi.size} 項</b><span class="meta">預設各 1 個,到規劃頁可以改數量</span>
          <span class="spacer"></span><button class="btn" data-act="multi-clear">清空</button><button class="btn brand" data-act="multi-go">一起填單</button></div>`
@@ -450,14 +464,23 @@ VIEWS.catalog = async main => {
     el.checked ? S.multi.add(el.dataset.mpick) : S.multi.delete(el.dataset.mpick);
     mbar();
   });
+  const pickbar = () => {
+    if (!pick) return;
+    const nm = pick.name, a = pick.from, b = pick.to;   // 純文字,插值時各自 esc()
+    $('#pickbar').innerHTML = `<b>正在為「${esc(nm)}」挑選展品</b>
+      <span class="meta">${esc(a)} → ${esc(b)}・已選 ${(S.showLines || []).length} 項 ${picked()} 件</span>
+      <span class="spacer"></span><button class="btn brand" data-act="show-pick-done">完成,回到展覽</button>`;
+  };
   const draw0 = draw;
-  draw = () => { draw0(); wirePick(); mbar(); };
+  draw = () => { draw0(); wirePick(); mbar(); pickbar(); };
   draw();
   $('#cq').oninput = e => { f.q = e.target.value; draw(); };
   $('#cav').onchange = e => { f.onlyAvail = e.target.checked; draw(); };
   S._catDraw = draw;
-  const dch = () => { f.start = $('#cs').value; f.end = $('#ce').value; if ((f.start && f.end) || (!f.start && !f.end)) render(); };
-  $('#cs').onchange = dch; $('#ce').onchange = dch;
+  if (!pick) {
+    const dch = () => { f.start = $('#cs').value; f.end = $('#ce').value; if ((f.start && f.end) || (!f.start && !f.end)) render(); };
+    $('#cs').onchange = dch; $('#ce').onchange = dch;
+  }
   });
 };
 
@@ -968,6 +991,8 @@ VIEWS.shows = async main => {
 
 /** 編輯中的清單放在 S.showLines,存檔前都只是草稿 */
 function showDraftLines() { return (S.showLines || []).map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty, note: l.note || '' })); }
+/** 挑選期間把清單也寫進 localStorage,重新整理不會白挑 */
+function saveShowLines() { S.showLines = S.showLines || []; if (S.showPick) store.set('showlines', showDraftLines()); }
 
 async function drawShow(main) {
   const isNew = S.showId === 'new';
@@ -980,6 +1005,7 @@ async function drawShow(main) {
   main.innerHTML = `<div class="row"><button class="btn sm ghost" data-act="show-back">← 回展覽清單</button><span class="spacer"></span>
       ${isNew ? '' : `<span class="mono meta">${esc(v.id)}</span> ${showPill(v)}`}</div>
     <h1>${isNew ? '新增展覽' : esc(v.name)}</h1>
+    ${isNew ? `<p class="sub">先把檔期跟場地定下來。建立之後才會出現需求清單 —— 缺口要有檔期才算得出來。</p>` : ''}
     ${locked ? `<div class="banner info">${esc(v.statusLabel)}的展覽不能修改,也不再卡住庫存。要繼續編輯請先改回「${v.status === 'closed' ? '已確認' : '規劃中'}」。</div>` : ''}
     ${(v.mismatch || []).length ? `<div class="banner warn">有 ${v.mismatch.length} 張借用單的日期跟檔期不一樣(${v.mismatch.map(x => esc(x)).join('、')})。
       改檔期不會自動改單,確認要一起延的話請用下面的「批次延期」。</div>` : ''}
@@ -998,14 +1024,14 @@ async function drawShow(main) {
       <button class="btn pri" ${locked ? 'disabled' : ''} style="width:100%">${isNew ? '建立展覽' : '儲存'}</button>
     </form>
 
-    <div class="card">
+    ${isNew ? '' : `<div class="card">
       <div class="row"><b>需求清單</b><span class="spacer"></span>
-        <button class="btn sm" data-act="show-add" ${locked ? 'disabled' : ''}>${ICON.plus}加展品</button>
+        <button class="btn brand sm" data-act="show-pick" ${locked ? 'disabled' : ''}>${ICON.plus}去展品目錄挑選</button>
         <button class="btn sm" data-act="show-paste" ${locked ? 'disabled' : ''}>整批貼上</button></div>
-      <div class="meta" style="margin:6px 0">一場 30～100 件用貼的最快:從 Excel 複製「展品名稱 / 地點 / 數量」三欄直接貼進來。</div>
+      <div class="meta" style="margin:6px 0">到目錄挑選時會直接顯示這個檔期能借幾台;一次 30～100 件的話,「整批貼上」從 Excel 複製「展品名稱 / 地點 / 數量」三欄最快。</div>
       <div class="lines" id="shlines"></div>
       <div id="shsum"></div>
-    </div>
+    </div>`}
 
     ${isNew ? '' : `<div class="card">
       <div class="row"><b>狀態與借用單</b><span class="spacer"></span></div>
@@ -1028,6 +1054,7 @@ async function drawShow(main) {
   const nameOf = Object.fromEntries(S.items.map(i => [i.id, i.name]));
   let gaps = [];
   const drawLines = () => {
+    if (!$('#shlines')) return;                       // 新增階段還沒有需求清單
     const g = Object.fromEntries(gaps.map(x => [x.itemId + '@' + nloc(x.location), x]));
     const L2 = S.showLines;
     $('#shlines').innerHTML = !L2.length ? `<div class="meta">還沒有東西。</div>` : L2.map((l, idx) => {
@@ -1043,7 +1070,7 @@ async function drawShow(main) {
     }).join('');
     $$('[data-shq]').forEach(inp => inp.onchange = () => {
       S.showLines[+inp.dataset.shq].qty = Math.max(1, parseInt(inp.value, 10) || 1);
-      recheck();
+      saveShowLines(); recheck();
     });
     const short = gaps.filter(x => x.short);
     const total = L2.reduce((a, x) => a + x.qty, 0);
@@ -1062,14 +1089,17 @@ async function drawShow(main) {
   };
   S._showRecheck = recheck;
   S._showItems = S.items;
+  S._showView = { id: isNew ? '' : v.id, name: v.name, from: v.from, to: v.to, venue: v.venue, owner: v.owner, note: v.note };
   $('#shform').querySelectorAll('input[type=date]').forEach(el => el.onchange = recheck);
   api('users').then(us => { const d = $('#ulist'); if (d) d.innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
   $('#shform').onsubmit = async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
-    const saved = await run(() => api('saveShow', { show: { ...fd, id: isNew ? '' : v.id, lines: showDraftLines() } }), '已儲存').catch(() => null);
+    const saved = await run(() => api('saveShow', { show: { ...fd, id: isNew ? '' : v.id, lines: showDraftLines() } }),
+      isNew ? '展覽已建立,接下來去挑展品' : '已儲存').catch(() => null);
     if (!saved) return;
     S.showId = saved.id; S.showLines = null;
+    store.del('showlines');
     render();
   };
   recheck();
@@ -1789,15 +1819,51 @@ const ACT = {
   /* ---- 展覽檔期 ---- */
   'show-new': () => { S.showId = 'new'; S.showLines = []; go('shows'); },
   'show-open': el => { S.showId = el.dataset.id; S.showLines = null; go('shows'); },
-  'show-back': () => { S.showId = null; S.showLines = null; render(); },
+  'show-back': () => { S.showId = null; S.showLines = null; S.showPick = null; store.del('showpick'); store.del('showlines'); render(); },
   'show-filter': el => { S.showFilter = el.dataset.f; render(); },
-  'show-add': () => showAddDialog(),
+  /** 去目錄挑選:檔期已經定好,目錄會直接用那個區間算可借量 */
+  'show-pick': () => {
+    const v = S._showView;
+    if (!v || !v.id) return toast('請先建立展覽', true);
+    if (!v.from || !v.to) return toast('請先填好檔期起訖再挑展品', true);
+    S.showPick = { id: v.id, name: v.name, from: v.from, to: v.to };
+    store.set('showpick', S.showPick);
+    saveShowLines();
+    go('catalog');
+  },
+  'show-add-cat': el => {
+    const id = el.dataset.id, q = Math.max(1, parseInt(($('#q-' + id) || {}).value, 10) || 1);
+    const where = (($('#loc-' + id) || {}).value || '').trim() || '未指定';
+    S.showLines = mergeShowLines(S.showLines || [], [{ itemId: id, location: where, qty: q, note: '' }]);
+    saveShowLines();
+    toast('已加入展覽' + (where !== '未指定' ? '(' + where + ')' : ''));
+    S._catDraw();
+  },
+  /**
+   * 挑完直接存檔,不留「還沒存的清單」這種狀態。
+   * 存檔前先跟後端要一次現況 —— 中途重新整理過的話記憶體裡沒有場地 / 承辦人,
+   * 拿空值寫回去會把那幾欄清掉。只有這次挑的「清單」是我們要覆蓋的東西。
+   */
+  'show-pick-done': async () => {
+    const p2 = S.showPick;
+    const cur = await run(() => api('show', { id: p2.id })).catch(() => null);
+    if (!cur) return;                                   // 讀不到就原地不動,清單還留著
+    const ok = await run(() => api('saveShow', { show: {
+      id: cur.id, name: cur.name, from: cur.from, to: cur.to,
+      venue: cur.venue, owner: cur.owner, note: cur.note, lines: showDraftLines()
+    } }), '已加入需求清單').catch(() => null);
+    if (!ok) return;                                    // 存不進去就別把挑好的東西丟掉
+    S.showPick = null; store.del('showpick'); store.del('showlines');
+    S.showId = p2.id; S.showLines = null;
+    go('shows');
+  },
   'show-add-ok': () => {
     const add = [{ itemId: $('#sa-item').value, location: $('#sa-loc').value || '未指定', qty: Math.max(1, parseInt($('#sa-qty').value, 10) || 1), note: '' }];
     S.showLines = mergeShowLines(S.showLines || [], add);
+    saveShowLines();
     closeModal(); S._showRecheck();
   },
-  'show-rm': el => { S.showLines.splice(+el.dataset.i, 1); S._showRecheck(); },
+  'show-rm': el => { S.showLines.splice(+el.dataset.i, 1); saveShowLines(); S._showRecheck(); },
   'show-paste': () => showPasteDialog(),
   'show-paste-ok': () => {
     const r = parsePaste($('#sp-txt').value);
@@ -1809,7 +1875,7 @@ const ACT = {
       $('#sp-txt').value = r.bad.map(b => b.text).join('\n');
     } else closeModal();
     if (r.lines.length) toast('已加入 ' + r.lines.length + ' 項');
-    S._showRecheck();
+    saveShowLines(); S._showRecheck();
   },
   'show-status': async el => {
     const st = el.dataset.s;

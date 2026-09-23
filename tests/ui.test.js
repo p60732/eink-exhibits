@@ -297,23 +297,56 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   /* ---- 展覽檔期:新增 → 整批貼上 → 確認卡位 → 產生借用單 ---- */
   await p.click('[data-v=shows]'); await wait(700);
   await p.click('[data-act=show-new]'); await p.waitForSelector('#shform'); await wait(300);
+  // 第一步只有表單:還沒建立就不該出現需求清單(缺口要有檔期才算得出來)
+  if (await p.$('#shlines')) throw new Error('新增階段不該出現需求清單');
+  if (await p.$('[data-act=show-pick]')) throw new Error('還沒建立就不該能去挑展品');
+  await p.fill('#shform [name=name]', '春季巡迴展');
+  await p.fill('#shform [name=from]', d(40)); await p.fill('#shform [name=to]', d(50));
+  await p.fill('#shform [name=venue]', '南港展覽館');
+  await p.fill('#shform [name=owner]', '10231');
+  await p.click('#shform button'); await wait(1400);
+  if (!/春季巡迴展/.test(await p.textContent('#main'))) throw new Error('建立展覽後沒有回到明細:' + (await p.textContent('#main')).replace(/\n/g, ' ').slice(0, 200));
+  await p.waitForSelector('#shlines');
+  await shot('show-new');
+
+  // 第二步:去展品目錄挑 —— 目錄要自動套用展覽檔期,而且不讓人在那裡改日期
+  await p.click('[data-act=show-pick]'); await wait(1400);
+  const pickTxt = await p.textContent('#pickbar');
+  if (!/正在為「春季巡迴展」挑選展品/.test(pickTxt)) throw new Error('目錄沒有進入挑選模式:' + pickTxt);
+  if (!new RegExp(d(40)).test(pickTxt)) throw new Error('挑選橫幅沒顯示展覽檔期:' + pickTxt);
+  if (await p.$('#cs')) throw new Error('挑選模式不該讓人在目錄改日期');
+  if (!/期間可借/.test(await p.textContent('#cgrid'))) throw new Error('挑選模式要顯示該檔期的可借量');
+  // 挑一台「雙廠展示機(林口)」進來
+  const cards = await p.$$('.item-card');
+  let hit = null;
+  for (const c of cards) if (/雙廠展示機/.test(await c.textContent())) { hit = c; break; }
+  if (!hit) throw new Error('目錄裡找不到雙廠展示機');
+  const iid = await hit.$eval('[data-act=show-add-cat]', e => e.dataset.id);
+  await p.selectOption('#loc-' + iid, '林口');
+  await p.fill('#q-' + iid, '2');
+  await p.click(`[data-act=show-add-cat][data-id="${iid}"]`); await wait(700);
+  const btnTxt = await p.textContent(`[data-act=show-add-cat][data-id="${iid}"]`);
+  const lineN = await p.evaluate(() => JSON.stringify(S.showLines));
+  if (!/加入展覽.已選 2/.test(btnTxt)) throw new Error('卡片沒顯示已選數量,按鈕是「' + btnTxt + '」,S.showLines=' + lineN);
+  await shot('show-pick');
+  await p.click('[data-act=show-pick-done]'); await wait(1800);
+  if (!/林口/.test(await p.textContent('#shlines'))) throw new Error('挑完沒有帶回需求清單');
+  // 場地與承辦人不可以被挑選流程洗掉
+  if (await p.inputValue('#shform [name=venue]') !== '南港展覽館') throw new Error('挑完之後場地被清掉了');
+  if (await p.inputValue('#shform [name=owner]') !== '10231') throw new Error('挑完之後承辦人被清掉了');
+
   // 整批貼上:對不到的那一行要留在框裡讓人修,其餘照樣加入
   await p.click('[data-act=show-paste]'); await p.waitForSelector('#sp-txt');
-  await p.fill('#sp-txt', '雙廠展示機\t林口\t2\n根本沒有這個展品\t1');
+  await p.fill('#sp-txt', '雙廠展示機\t新竹\t1\n根本沒有這個展品\t1');
   await p.click('[data-act=show-paste-ok]'); await wait(600);
   const pasteMsg = await p.textContent('#sp-out');
   if (!/有 1 行對不到/.test(pasteMsg)) throw new Error('沒有回報對不到的行:' + pasteMsg.replace(/\n/g, ' ').slice(0, 120));
   if (!/根本沒有這個展品/.test(await p.inputValue('#sp-txt'))) throw new Error('對不到的行應該留在輸入框裡');
   await p.click('.modal [data-act=close]'); await wait(400);
-  if ((await p.$$('#shlines .line')).length !== 1) throw new Error('貼上之後應該有 1 行');
-  // 填檔期 → 缺口即時算出來
-  await p.fill('#shform [name=name]', '春季巡迴展');
-  await p.fill('#shform [name=from]', d(40)); await p.fill('#shform [name=to]', d(50)); await wait(900);
-  await p.fill('#shform [name=owner]', '10231');
+  if ((await p.$$('#shlines .line')).length !== 2) throw new Error('挑 1 行 + 貼 1 行,應該有 2 行');
+  await wait(900);
   if (!/足夠|缺/.test(await p.textContent('#shsum'))) throw new Error('沒有即時算出可借量');
-  await p.click('#shform button'); await wait(1200);
-  if (!/春季巡迴展/.test(await p.textContent('#main'))) throw new Error('建立展覽後沒有回到明細:' + (await p.textContent('#main')).replace(/\n/g, ' ').slice(0, 200));
-  await shot('show-new');
+  await p.click('#shform button'); await wait(1400);
   // 確認檔期 → 開始卡位;可借量要跟著少 2
   const availOf = () => p.evaluate(async () => {
     const it = (await Api.call('catalog', {}, S.token)).find(i => i.name === '雙廠展示機');
@@ -328,7 +361,7 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   // 產生借用單 → 卡位讓給借用單,合計不變(重複扣的話這裡會再少 2)
   await p.click('[data-act=show-gen]'); await p.waitForSelector('.modal [data-act=close-render]'); await wait(300);
   const genTxt = await p.textContent('.modal');
-  if (!/已產生 1 張借用單/.test(genTxt)) throw new Error('產生借用單結果不對:' + genTxt.replace(/\n/g, ' ').slice(0, 140));
+  if (!/已產生 2 張借用單/.test(genTxt)) throw new Error('產生借用單結果不對(新竹、林口各一張):' + genTxt.replace(/\n/g, ' ').slice(0, 140));
   await p.click('.modal [data-act=close-render]'); await wait(1400);
   const after3 = await availOf();
   if (after3 !== after2) throw new Error('★ 開單後可借量不該再變(重複扣庫存):' + after2 + ' → ' + after3);

@@ -57,7 +57,7 @@ function routes_() {
   add('admin', false, I, { users: [] }, { Users: '*' });
   add('admin', true, I, { saveUser: ['user'], importUsers: ['rows'] });
   // 邏輯積木:同仁
-  add('user', false, U, { catalog: ['start', 'end'], check: ['start', 'end', 'lines', 'excludeId'] },
+  add('user', false, U, { catalog: ['start', 'end', 'showId'], check: ['start', 'end', 'lines', 'excludeId'] },
     { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC.concat(['showId']), only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
   add('user', false, U, { myLoans: [] },
     { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Shows: SHOWS_, Users: C.USER_AUTH });

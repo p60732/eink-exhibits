@@ -309,7 +309,7 @@ var Logic = (function () {
     });
     return h.sort(function (a, b) { return a.start < b.start ? 1 : -1; });
   }
-  function itemView(db, it, st, range, today) {
+  function itemView(db, it, st, range, today, exShow) {
     var x = st[it.id] || { total: 0, out: 0, reserved: 0, inStock: 0, repair: 0, lost: 0 };
     var v = {
       id: it.id, name: it.name, category: it.category, mode: it.mode, location: it.location, spec: it.spec, note: it.note,
@@ -319,10 +319,10 @@ var Logic = (function () {
     v.sites = sitesOf(db, it).map(function (g) {
       var y = st[it.id + '@' + g.location] || { out: 0, reserved: 0, repair: 0, lost: 0 };
       var o = { location: g.location, total: g.qty, countedAt: g.countedAt, out: y.out, reserved: y.reserved, repair: y.repair, lost: y.lost, inStock: g.qty - y.out };
-      if (range) o.available = Math.max(0, availableInRange(db, it, g.location, range[0], range[1], null, today));
+      if (range) o.available = Math.max(0, availableInRange(db, it, g.location, range[0], range[1], null, today, exShow || null));
       return o;
     });
-    if (range) v.available = Math.max(0, availableInRange(db, it, null, range[0], range[1], null, today));
+    if (range) v.available = Math.max(0, availableInRange(db, it, null, range[0], range[1], null, today, exShow || null));
     return v;
   }
   function validRange(p) {
@@ -614,9 +614,12 @@ var Logic = (function () {
     catalog: function (c) {
       var today = c.today, range = null;
       if (isDate(c.p.start) && isDate(c.p.end)) range = [c.p.start, c.p.end];
+      // 為某一場展覽挑選時,要把那場自己的卡位排除掉,否則它會擋住自己
+      var exShow = s(c.p.showId) || null;
+      if (exShow && c.user.role !== 'admin') throw E('只有管理者可以為展覽挑選展品');
       var st = stats(c.db, today);
       return c.db.Items.filter(function (it) { return !bool(it.archived); })
-        .map(function (it) { return itemView(c.db, it, st, range, today); });
+        .map(function (it) { return itemView(c.db, it, st, range, today, exShow); });
     },
     check: function (c) {
       var r = validRange(c.p);
