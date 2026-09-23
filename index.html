@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- 【入口】index.html:只負責載入頁面與資源,不含商業邏輯 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>展品管理</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%230f766e'/><path d='M5 9l7-3.5L19 9l-7 3.5L5 9zM5 9v6.5l7 3.5 7-3.5V9M12 12.5V19' fill='none' stroke='white' stroke-width='1.8'/></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="busy" class="busy hidden"></div>
+<header class="top hidden" id="top">
+  <div class="top-in">
+    <div class="brand"><span class="dot"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 8l8-4 8 4-8 4-8-4zM4 8v8l8 4 8-4V8M12 12v8"/></svg></span>展品管理</div>
+    <span class="spacer"></span>
+    <button class="btn sm hidden" id="lookup-btn" title="查詢 / 掃描編號"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg><span class="lbl-hide">查編號</span></button>
+    <span class="who" id="who"></span>
+    <div class="menu"><button class="btn sm" id="menu-btn" aria-label="帳號選單"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></button>
+      <div class="menu-pop hidden" id="menu-pop"><button id="m-pin">變更 PIN</button><button id="m-out">登出</button></div></div>
+  </div>
+  <nav class="tabs" id="tabs"></nav>
+</header>
+<div id="login" class="login hidden"></div>
+<main id="app" class="hidden"><div id="main"></div></main>
+<div class="toast-box" id="toasts"></div>
+<script src="js/connect.js"></script>
+<script src="js/ui.js"></script>
+<script>
+  /* 【入口】載入後交給展示積木判斷要進登入頁或主畫面 */
+  boot();
+</script>
+</body>
+</html>
