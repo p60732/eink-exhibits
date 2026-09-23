@@ -22,5 +22,5 @@
 - 網頁應用程式部署 ID:`AKfycbyKSJTXKFkZPx0ub45aKd7_0kn3Gv3379GYRJAnE9lfhXpR60HlhtWKSdgreblyZTQssQ`(換版本不換網址)
 - 前端:GitHub Pages `p60732/eink-exhibits`,由 GitHub Actions 測試通過後發佈
 
-## 待辦
-- [ ] 執行一次 `installDailyTrigger()` 安裝每日 08:30 提醒觸發器(需擁有者本人在編輯器中執行)
+## 決定
+- 2026-09-23:**不啟用**每日逾期提醒排程(`installDailyTrigger()` 不執行)。提醒信的程式碼仍在 `50_schedule.gs`,日後要開再手動執行一次即可。
