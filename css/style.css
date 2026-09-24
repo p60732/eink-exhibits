@@ -162,6 +162,16 @@ tr.groupe td{font-size:13px;color:var(--muted);padding:8px 12px}
 .line:last-child{border-bottom:0}
 .line .nm{flex:1 1 170px}
 .line .q{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+/* 清單的「移除」鈕:要一眼看得出是按鈕,而且固定靠右,不要跟旁邊的「在庫 3」黏在一起。
+   手機上整列會換行,靠 margin-left:auto 把它釘在右邊,不會浮在文字中間。 */
+.line .rm{margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;
+  min-height:36px;padding:6px 11px;border:1px solid var(--line);background:var(--surface);
+  border-radius:var(--r-sm);color:var(--muted);font-size:13px;font-family:inherit;cursor:pointer}
+.line .rm:hover:not(:disabled){color:var(--red);border-color:var(--red-line);background:var(--red-soft)}
+.line .rm:disabled{opacity:.4;cursor:not-allowed}
+.line .rm .ico{width:15px;height:15px}
+@media(max-width:480px){.line .rm span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .line .rm{padding:6px 10px}}
 .line .u{font-size:12px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;flex-basis:100%}
 .short{color:var(--red);font-size:13px;font-weight:500}
 .okt{color:var(--ok);font-size:13px;font-weight:500}

@@ -44,8 +44,18 @@ const ICON = {
   clock: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
   alert: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4.5 21 19H3l9-14.5zM12 10v4M12 16.5h.01"/></svg>',
   check: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
-  wrench: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.5 4.5a5 5 0 0 0-6.2 6.2L4 16l4 4 5.3-5.3a5 5 0 0 0 6.2-6.2L16.5 12 12 7.5l3.5-3z"/></svg>'
+  wrench: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15.5 4.5a5 5 0 0 0-6.2 6.2L4 16l4 4 5.3-5.3a5 5 0 0 0 6.2-6.2L16.5 12 12 7.5l3.5-3z"/></svg>',
+  trash: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M10 4h4M9 7v11M12 7v11M15 7v11M6 7l1 13h10l1-13"/></svg>'
 };
+
+/**
+ * 清單裡的「移除這一項」。
+ * 原本只是一個灰色的 ✕,緊貼在「在庫 3」右邊,看起來像標點符號而不是按鈕 ——
+ * 使用者回報「找不到單獨刪除,只能整張清空」。所以這裡一定要有圖示 + 文字 + 框。
+ */
+function rmBtn(act, data, disabled) {
+  return `<button type="button" class="rm" data-act="${act}" ${data} ${disabled ? 'disabled' : ''} aria-label="移除這一項">${ICON.trash}<span>移除</span></button>`;
+}
 
 let busyN = 0;
 function busy(on) { busyN += on ? 1 : -1; $('#busy').classList.toggle('hidden', busyN <= 0); }
@@ -560,7 +570,7 @@ VIEWS.plan = async main => {
       const key = esc(ckey(c));
       return `<div class="line"><span class="nm">${esc(i.name)}<br><span class="meta">${where}</span></span>
         <span class="qtybox"><button type="button" data-act="cq" data-id="${key}" data-d="-1">−</button><input type="number" min="1" value="${c.qty}" data-cqi="${key}"><button type="button" data-act="cq" data-id="${key}" data-d="1">+</button></span>
-        <span style="min-width:120px;text-align:right">${st}</span><button class="btn sm ghost" data-act="rm-cart" data-id="${key}" aria-label="移除">✕</button></div>`;
+        <span style="min-width:120px;text-align:right">${st}</span>${rmBtn('rm-cart', `data-id="${key}"`)}</div>`;
     }).join('');
     $$('[data-cqi]').forEach(inp => inp.onchange = () => { const c = S.cart.find(x => ckey(x) === inp.dataset.cqi); c.qty = Math.max(1, parseInt(inp.value, 10) || 1); saveCart(); recheck(); });
     const short = lastCheck.filter(c => c.short);
@@ -1157,7 +1167,7 @@ async function drawShow(main) {
       return `<div class="line"><span class="nm">${esc(nameOf[l.itemId] || l.itemId)}<br><span class="meta">${esc(l.location)}</span></span>
         <span class="qtybox"><input type="number" min="1" value="${l.qty}" data-shq="${idx}" ${locked ? 'disabled' : ''}></span>
         <span style="min-width:150px;text-align:right">${st}</span>
-        <button class="btn sm ghost" data-act="show-rm" data-i="${idx}" ${locked ? 'disabled' : ''} aria-label="移除">✕</button></div>`;
+        ${rmBtn('show-rm', `data-i="${idx}"`, locked)}</div>`;
     }).join('');
     $$('[data-shq]').forEach(inp => inp.onchange = () => {
       S.showLines[+inp.dataset.shq].qty = Math.max(1, parseInt(inp.value, 10) || 1);

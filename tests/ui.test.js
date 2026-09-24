@@ -163,6 +163,31 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await shot('multi'); await p.click('[data-act=multi-go]'); await wait(600);
   const nLines = await p.$$eval('#plines .line', els => els.length);
   if (nLines !== 2) throw new Error('一起填單應帶入 2 項,實際 ' + nLines);
+  // ★ 每一項都要有看得出來的「移除」鈕(使用者回報過:只有一個灰色 ✕ 貼在「在庫 3」旁邊,
+  //   看起來像標點符號,結果只能整張清空)。所以這裡連「像不像按鈕」一起驗。
+  {
+    const rm = await p.$$eval('#plines .line .rm', els => els.map(e => {
+      const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+      return { w: Math.round(r.width), h: Math.round(r.height), icon: !!e.querySelector('svg'),
+        bordered: cs.borderStyle !== 'none' && cs.borderTopWidth !== '0px' };
+    }));
+    if (rm.length !== 2) throw new Error('★ 每一項都要有自己的移除鈕,實際 ' + rm.length + ' 個');
+    rm.forEach((x, i) => {
+      if (x.w < 32 || x.h < 32) throw new Error('★ 移除鈕太小點不到(第 ' + (i + 1) + ' 個 ' + x.w + '×' + x.h + ')');
+      if (!x.icon || !x.bordered) throw new Error('★ 移除鈕要有圖示與外框,才看得出來是按鈕(第 ' + (i + 1) + ' 個)');
+    });
+    // 按下去只能刪掉那一項,不可以把整張清空
+    await p.click('#plines .line .rm'); await wait(900);
+    const left = await p.$$eval('#plines .line', els => els.length);
+    if (left !== 1) throw new Error('★ 移除一項之後應該剩 1 項,實際 ' + left);
+    // 補回來,後面的步驟仍要兩項
+    await p.click('[data-v=catalog]'); await wait(1000);
+    const again = await p.$$('[data-mpick]');
+    await again[0].check(); await again[1].check(); await wait(400);
+    await p.click('[data-act=multi-go]'); await wait(800);
+    const back = await p.$$eval('#plines .line', els => els.length);
+    if (back !== 2) throw new Error('重新加回來應該是 2 項,實際 ' + back);
+  }
   await p.fill('#ps', d(1)); await p.dispatchEvent('#ps', 'change'); await p.fill('#pe', d(3)); await p.dispatchEvent('#pe', 'change'); await wait(500);
   await p.fill('[name=event]', '台北展'); await wait(200); await shot('plan');
   await p.click('#psubmit'); await wait(500); await p.click('.modal [data-v=mine]'); await wait(600); await shot('mine');
