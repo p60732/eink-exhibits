@@ -272,15 +272,36 @@ function showNewVer(live) {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkBuild(); });
 
 /* ===================== 登入 ===================== */
+/**
+ * 開機。
+ * ⚠️ 這裡**一件事都不能等後端**。一趟來回 1.2～1.8 秒起跳,容器冷掉時 40 秒以上 ——
+ * 原本的寫法是先等 `me`(或 `status`)回來才畫畫面,所以冷啟動時使用者對著白畫面乾等 40 幾秒,
+ * 連登入表單都還沒出現。那才是「開起來很慢」最痛的一段。
+ * 現在改成:畫面先出來,後端在背景確認。順便,那一趟背景請求會把冷掉的容器叫醒,
+ * 等使用者打完工號按下登入時,容器已經熱了。
+ */
 async function boot() {
   checkBuild(true);
   S.token = store.get('token', null); S.user = store.get('user', null);
   if (S.token && S.user) {
-    try { S.user = await api('me'); store.set('user', S.user); return enterApp(); } catch (e) { }
+    // 先用上次記下的身分把畫面開起來(資料也會從 localStorage 快取先畫出來),再去後端確認。
+    // token 真的失效的話,第一個資料請求就會收到「登入已過期」,api() 會自己把人送回登入頁。
+    const was = JSON.stringify([S.user.role, !!S.user.mustChangePin]);
+    enterApp();
+    api('me').then(u => {
+      S.user = u; store.set('user', u);
+      // 權限或強制改 PIN 變了才整個重畫,否則只更新頁首,不要無謂閃一下
+      if (JSON.stringify([u.role, !!u.mustChangePin]) !== was) enterApp(); else syncRole();
+    }).catch(() => { });
+    return;
   }
-  let st = { hasUsers: true };
-  try { st = await api('status'); } catch (e) { toast(e.message, true); }
-  showLogin(st.hasUsers ? 'login' : 'setup');
+  // `status` 只是用來判斷「這個系統有沒有使用者」,不值得讓人對著白畫面等它。
+  showLogin('login');
+  api('status').then(st => {
+    // 只有全新的系統會走到這裡(還沒有任何使用者)。已經在打字就不要把表單換掉。
+    const typed = $('#l-emp') && $('#l-emp').value;
+    if (!st.hasUsers && !typed) showLogin('setup');
+  }).catch(e => { if (!e.silent) toast(e.message, true); });
 }
 function showLogin(mode) {
   $('#app').classList.add('hidden'); $('#top').classList.add('hidden');

@@ -533,6 +533,28 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-v=plan]'); await wait(800);
   if (!/還沒有選任何展品/.test(await p.textContent('#main'))) throw new Error('★ 換人登入後購物車應該是空的');
 
+  // ---- 速度:開機畫面不可以等後端(v2.5.1)----
+  // 容器冷掉時一趟要 40 秒以上。原本 boot() 先等 status 回來才畫登入表單,
+  // 等於讓人對著白畫面乾等 40 幾秒,連帳號都還不能打。
+  {
+    const p7 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    p7.on('dialog', d => d.accept());
+    // status / me 一律不回應,模擬「容器正在冷啟動」
+    await p7.route('**/api', async r => {
+      let act = '';
+      try { act = JSON.parse(r.request().postData() || '{}').action || ''; } catch (e) { }
+      if (act === 'status' || act === 'me') return;          // 卡住不回
+      await r.continue();
+    });
+    const t0 = Date.now();
+    await p7.goto(URL);
+    await p7.waitForSelector('#login-f', { timeout: 3000 })
+      .catch(() => { throw new Error('★ 後端沒回應時登入表單就出不來 —— 冷啟動要 40 秒,使用者會對著白畫面等'); });
+    const ms = Date.now() - t0;
+    if (ms > 3000) throw new Error('★ 登入表單出現得太慢:' + ms + 'ms');
+    await p7.close();
+  }
+
   // ---- 速度:重整之後不該乾等後端(v2.5)----
   // 一趟來回 1.2~1.8 秒起跳、偶爾 8~26 秒,所以快取要跨重整活下來:
   // 打開先畫上次的,背景再更新。這裡把 loans 的請求卡住不回,驗證畫面照樣出得來。
