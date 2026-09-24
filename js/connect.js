@@ -9,7 +9,15 @@ const CONFIG = {
   // 部署 Apps Script 後,把「網頁應用程式」網址貼在這裡
   GAS_URL: '__GAS_URL__',
   APP_NAME: '展品管理',
-  TIMEOUT_MS: 30000
+  /**
+   * 讀取 30 秒:逾時了會自動重試,而重試那一趟容器已經熱了,通常兩秒就回來 ——
+   * 所以讀取「等 30 秒再重試」比「乾等 45 秒」還快,維持原樣。
+   * 寫入 75 秒:**寫入絕對不能中途放棄**。Apps Script 閒置後第一趟要 40 秒以上
+   * (2026-09-24 實測 45.7 秒),30 秒就中斷的話,瀏覽器這邊報逾時、伺服器那邊卻可能已經寫進去了,
+   * 使用者再送一次就變成兩張單。寧可讓他多等一下,也不要留下一張來路不明的單。
+   */
+  TIMEOUT_MS: 30000,
+  WRITE_TIMEOUT_MS: 75000
 };
 
 const Api = (() => {
@@ -17,7 +25,8 @@ const Api = (() => {
   const READ = new Set(['status', 'me', 'catalog', 'check', 'myLoans', 'pickupOptions', 'lookup', 'dashboard', 'loans', 'items', 'units', 'users', 'logs', 'cats', 'allCats', 'shows', 'show', 'showCheck', 'showSettle', 'archivePreview', 'holders', 'showSheet']);
   async function once(action, payload, token) {
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), CONFIG.TIMEOUT_MS);
+    const ms = READ.has(action) ? CONFIG.TIMEOUT_MS : CONFIG.WRITE_TIMEOUT_MS;
+    const timer = setTimeout(() => ctl.abort(), ms);
     try {
       const res = await fetch(CONFIG.GAS_URL, {
         method: 'POST', signal: ctl.signal,
@@ -27,7 +36,12 @@ const Api = (() => {
       if (!res.ok) throw Object.assign(new Error('連線失敗(HTTP ' + res.status + ')'), { network: true });
       return await res.json();
     } catch (e) {
-      if (e.name === 'AbortError') throw Object.assign(new Error('連線逾時,請稍後再試'), { network: true });
+      if (e.name === 'AbortError') {
+        // 寫入逾時不可以說「請稍後再試」—— 那次寫入可能已經成功了,直接再送一次會變成兩張單
+        const msg = READ.has(action) ? '連線逾時,請稍後再試'
+          : '連線逾時。這次的動作可能已經完成了,請先重新整理確認,不要直接重送';
+        throw Object.assign(new Error(msg), { network: true });
+      }
       if (e instanceof TypeError) throw Object.assign(new Error('無法連線到伺服器,請檢查網路'), { network: true });
       throw e;
     } finally { clearTimeout(timer); }

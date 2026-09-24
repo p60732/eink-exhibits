@@ -81,8 +81,50 @@ const fresh = hit => hit && Date.now() - hit.at < FRESH_MS;
 const INFLIGHT = new Map();
 /* 快取世代:寫入就 +1。出發前記下世代,回來時世代變了就代表這份資料是寫入前的,不能用 */
 let CGEN = 0;
-function bumpCache() { CGEN++; RCACHE.clear(); INFLIGHT.clear(); }
-function cacheSet(key, data, gen) { if (gen === CGEN) RCACHE.set(key, { data, at: Date.now() }); }
+/* ---------- 讀取快取存進 localStorage ----------
+ * 量過了(2026-09-24):一趟來回 1.2～1.8 秒是**固定成本**,跟讀多少資料無關 ——
+ * 讀整張借用單表(1,742 ms)跟什麼都不讀的 status(1,729 ms)一樣快,而且偶爾會跳到 8～26 秒。
+ * 所以能做的不是「讀少一點」,是「不要讓人乾等那一趟」。
+ * 記憶體快取重整就沒了,每天早上第一次打開、每次重整,每個分頁都得重等一趟。
+ * 存進 localStorage 之後,打開先畫上次的,背景再更新(withData 本來就是這個模型,
+ * 差別只在 stale 的來源從「這次開著的視窗」變成「上一次用的時候」)。
+ */
+const PERSIST_MAX = 12;                 // 最多留幾份,免得 show|xxx 這種一場一份的把空間塞爆
+const PERSIST_MS = 12 * 3600 * 1000;    // 超過這個時間就不拿來畫,寧可等
+const PERSIST_BYTES = 300000;           // 單筆太大就不存(localStorage 只有幾 MB)
+const pkey = () => 'rc_' + ((S.user && S.user.id) || '-');
+function persistWrite(key, data) {
+  try {
+    const raw = JSON.stringify({ at: Date.now(), data });
+    if (raw.length > PERSIST_BYTES) return;
+    const idx = store.get(pkey(), []).filter(k => k !== key);
+    idx.push(key);
+    while (idx.length > PERSIST_MAX) store.del(pkey() + '|' + idx.shift());
+    localStorage.setItem('exh_' + pkey() + '|' + key, raw);
+    store.set(pkey(), idx);
+  } catch (e) { persistClear(); }       // 空間不夠就整批放棄,不要留下半套
+}
+function persistClear() {
+  try {
+    store.get(pkey(), []).forEach(k => store.del(pkey() + '|' + k));
+    store.del(pkey());
+  } catch (e) { }
+}
+/** 登入後把上次的快取倒回記憶體,讓第一次繪製不用等後端 */
+function hydrateCache() {
+  const now = Date.now();
+  store.get(pkey(), []).forEach(k => {
+    const hit = store.get(pkey() + '|' + k, null);
+    if (!hit || !hit.data || now - hit.at > PERSIST_MS) return;
+    RCACHE.set(k, { data: hit.data, at: hit.at });     // 保留原本的時間 → 不算新鮮 → 畫完會自己去更新
+  });
+}
+function bumpCache() { CGEN++; RCACHE.clear(); INFLIGHT.clear(); persistClear(); }
+function cacheSet(key, data, gen) {
+  if (gen !== CGEN) return;
+  RCACHE.set(key, { data, at: Date.now() });
+  persistWrite(key, data);
+}
 function fetchOnce(key, action, payload) {
   const running = INFLIGHT.get(key);
   if (running) return running;
@@ -100,6 +142,16 @@ async function freshFetch(key, action, payload) {
     if (gen === CGEN) return { data, gen };
   }
   return { data: await fetchOnce(key, action, payload), gen: CGEN };
+}
+/**
+ * 先把請求丟出去,不等它回來。
+ * **一趟來回大約 1.7 秒,容器冷掉時第一趟要 40 秒以上**(2026-09-24 實測)。
+ * 所以真正的成本是「排了幾趟」,不是「讀了幾欄」—— 兩個沒有先後關係的請求排隊等於白等一趟。
+ * fetchOnce 依 key 去重,所以稍後真的要用的人會直接接手同一個 promise,不會變成兩次請求。
+ */
+function warm(key, action, payload = {}) {
+  if (RCACHE.has(key) || INFLIGHT.has(key)) return;
+  fetchOnce(key, action, payload).catch(() => { });
 }
 async function cachedGet(key, action, payload = {}) {
   const hit = RCACHE.get(key);
@@ -265,7 +317,8 @@ function showLogin(mode) {
 }
 function logout(expired) {
   if (!expired && S.token) Api.call('logout', {}, S.token).catch(() => { });   // 後端作廢 token
-  S.token = null; S.user = null; S.asUser = false; bumpCache(); store.del('token'); store.del('user');
+  bumpCache();                                            // 要在清掉 S.user 之前:pkey() 綁使用者
+  S.token = null; S.user = null; S.asUser = false; store.del('token'); store.del('user');
   clearWork();                                            // 不清的話下一個人會看到上一個人的購物車
   if (expired) toast('登入已過期,請重新登入', true);
   showLogin('login');
@@ -288,6 +341,7 @@ function clearWork() {
 }
 function enterApp() {
   loadWork();
+  hydrateCache();                       // 先把上次的資料倒回來,第一次繪製就不用等後端
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); $('#top').classList.remove('hidden');
   S.asUser = isRealAdmin() && !!store.get('asUser_' + S.user.id, false);
   syncRole();
@@ -297,6 +351,17 @@ function enterApp() {
   if (S.showPick) S.view = 'catalog';                    // 挑選到一半重新整理,回到原地繼續
   if (S.user.mustChangePin) { $('#main').innerHTML = ''; renderTabs(); return pinModal(true); }
   render();
+  prefetch();
+}
+/**
+ * 登入之後先把最常點的兩份資料抓起來放著。
+ * 兩個作用:① 使用者真的點進去時已經有了 ② **順便把後端的容器叫醒** ——
+ * Apps Script 閒置一陣子之後第一趟要 40 秒以上(2026-09-24 實測 45.7 秒),
+ * 讓那一趟發生在「剛登入、還在看總覽」的時候,而不是他按下分頁之後。
+ */
+function prefetch() {
+  warm('cats', 'cats');
+  warm('catalog|', 'catalog');
 }
 
 /** 依目前視角同步頁首與選單 */
@@ -477,10 +542,12 @@ VIEWS.catalog = async main => {
   const pick = S.showPick;
   const rs = pick ? pick.from : f.start, re = pick ? pick.to : f.end;
   const range = rs && re && rs <= re;
-  S.cats = await cachedGet('cats', 'cats');
   const req = range ? { start: rs, end: re } : {};
   if (pick) req.showId = pick.id;
-  return withData(main, 'catalog|' + (range ? rs + '~' + re : '') + (pick ? '|show=' + pick.id : ''), 'catalog', req, items => {
+  const ckey2 = 'catalog|' + (range ? rs + '~' + re : '') + (pick ? '|show=' + pick.id : '');
+  warm(ckey2, 'catalog', req);                 // 別排在 cats 後面
+  S.cats = await cachedGet('cats', 'cats');
+  return withData(main, ckey2, 'catalog', req, items => {
   S.items = items;
   if (f.cat && !S.cats.some(c => c.name === f.cat)) f.cat = '';
   const picked = () => (S.showLines || []).reduce((a, l) => a + l.qty, 0);
@@ -562,6 +629,11 @@ VIEWS.catalog = async main => {
 };
 
 VIEWS.plan = async main => {
+  // 可借量的試算跟目錄沒有先後關係,一起發。排隊的話要等兩趟(約 3.5 秒)才看得到數字
+  const P0 = S.plan, ed0 = S.editing;
+  const preCheck = (P0.start && P0.end && P0.start <= P0.end && S.cart.length)
+    ? api('check', { start: P0.start, end: P0.end, lines: S.cart.slice(), excludeId: ed0 ? ed0.id : '' }).catch(() => null)
+    : Promise.resolve(null);
   const all = await cachedGet('catalog|', 'catalog');
   const byId = Object.fromEntries(all.map(i => [i.id, i]));
   S.cart = S.cart.filter(c => byId[c.itemId]); saveCart();
@@ -629,6 +701,12 @@ VIEWS.plan = async main => {
   const dch = () => { P.start = $('#ps').value; P.end = $('#pe').value; if (P.start && !P.end) { P.end = P.start; $('#pe').value = P.start; } saveCart(); recheck(); };
   $('#ps').onchange = dch; $('#pe').onchange = dch;
   $('#pform').oninput = () => { const fd = Object.fromEntries(new FormData($('#pform'))); store.set(uk('draft'), { event: fd.event, venue: fd.venue, contact: fd.contact, purpose: fd.purpose, note: fd.note }); drawLines(); };
+  // 先用在庫數把清單畫出來,不要讓它空在那裡等後端 —— 可借量回來再補上去就好
+  drawLines();
+  preCheck.then(pre => {
+    if (pre) { lastCheck = pre; drawLines(); }
+    else if (P.start && P.end && S.cart.length) recheck();   // 那一趟失敗了才補打一次(順便讓錯誤訊息出得來)
+  });
   if (admin && !ed) {
     $('#ob').onchange = e => $('#obf').classList.toggle('hidden', !e.target.checked);
     api('users').then(us => { $('#ulist').innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
@@ -655,7 +733,6 @@ VIEWS.plan = async main => {
       <div class="modal-f"><button class="btn" data-act="close">留在此頁</button><button class="btn pri" data-act="go" data-v="${L.status === 'approved' ? 'loans' : 'mine'}" data-f="${L.status}">查看借用單</button></div>`);
     render();
   };
-  recheck();
 };
 
 VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
@@ -767,6 +844,7 @@ VIEWS.loans = main => {
 };
 VIEWS.items = async main => {
   const gen = RGEN;
+  warm('items', 'items');                      // 別排在 cats 後面,兩個沒有先後關係
   S.cats = await cachedGet('cats', 'cats');
   return withData(main, 'items', 'items', {}, list => {
   S.items = list;
@@ -1114,6 +1192,10 @@ function settleCard(v, SE) {
 
 async function drawShow(main) {
   const isNew = S.showId === 'new';
+  // 這一頁原本要排四趟(展覽 → 目錄 → 結算 → 缺口試算),約 7 秒。
+  // 前三個彼此沒有先後關係,先一起丟出去。
+  if (!isNew) warm('show|' + S.showId, 'show', { id: S.showId });
+  warm('catalog|', 'catalog');
   let v;
   if (isNew) v = { id: '', name: '', from: '', to: '', venue: '', owner: '', note: '', status: 'draft', statusLabel: '規劃中', lines: [], loans: [], mismatch: [], loanCount: 0 };
   else {
@@ -1133,9 +1215,9 @@ async function drawShow(main) {
   const live = (v.loans || []).filter(L => ['pending', 'approved', 'out'].includes(L.status));
   const outNow = (v.loans || []).filter(L => L.status === 'out');
   const wantSettle = !isNew && (v.archived || v.status === 'closed' || (v.loans || []).some(L => ['out', 'returned'].includes(L.status)));
-  let SE = null;
-  if (wantSettle) { try { SE = await cachedGet('settle|' + v.id, 'showSettle', { id: v.id }); } catch (e) { SE = null; } }
-  S._settle = SE;
+  // 結算卡片在整頁最下面,不該擋住第一次繪製。先留一個位子,資料回來再填進去。
+  S._settle = null;
+  const settleP = wantSettle ? cachedGet('settle|' + v.id, 'showSettle', { id: v.id }).catch(() => null) : null;
   main.innerHTML = `<div class="row"><button class="btn sm ghost" data-act="show-back">← 回展覽清單</button><span class="spacer"></span>
       ${isNew ? '' : `<span class="mono meta">${esc(v.id)}</span> ${showPill(v)}`}</div>
     <h1>${isNew ? '新增展覽' : esc(v.name)}</h1>
@@ -1190,8 +1272,17 @@ async function drawShow(main) {
           : '還沒有借用單。確認檔期之後按「依地點產生借用單」,系統會依各地點各開一張。'}</div>`}
     </div>`}
 
-    ${SE ? settleCard(v, SE) : ''}`;
+    <div id="settle-slot"></div>`;
 
+  if (settleP) {
+    const myGen = RGEN;
+    settleP.then(SE => {
+      const slot = $('#settle-slot');
+      if (!SE || !slot || myGen !== RGEN) return;          // 使用者已經切走了就不要硬塞
+      S._settle = SE;
+      slot.outerHTML = settleCard(v, SE);
+    });
+  }
   const nameOf = Object.fromEntries(S.items.map(i => [i.id, i.name]));
   let gaps = [];
   const drawLines = () => {

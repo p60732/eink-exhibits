@@ -85,6 +85,29 @@ t('歷史工作表只能附加,不可以整張寫回', () => {
 t('積木檔頭:每個檔案宣告所屬積木與禁止事項', () => {
   [...gasFiles.map(f => 'gas/' + f), 'js/connect.js', 'js/ui.js'].forEach(f => { const s = read(f); assert.ok(/【.+積木】/.test(s) && /禁止/.test(s), f); });
 });
+t('速度:一趟來回就要 1.7 秒,沒有先後關係的請求不可以排隊', () => {
+  // 2026-09-24 實測:status(幾乎不讀資料)熱機後 8.2 秒、冷啟動 45.7 秒,catalog 只要 1.7 秒。
+  // 也就是說成本在「排了幾趟」,不在「讀了幾欄」。這一條守住已經拆開的那幾處。
+  const ui = read('js/ui.js');
+  assert.ok(/function warm\(/.test(ui), '要有 warm():先把請求丟出去不等它');
+  assert.ok(/warm\('items', 'items'\)/.test(ui), '展品管理的 items 不可以排在 cats 後面');
+  assert.ok(/warm\(ckey2, 'catalog', req\)/.test(ui), '展品目錄的 catalog 不可以排在 cats 後面');
+  assert.ok(/const preCheck =/.test(ui), '借用申請的可借量試算要跟目錄一起發');
+  assert.ok(/id="settle-slot"/.test(ui), '展後結算在整頁最下面,不可以擋住第一次繪製');
+  // 借用申請頁不可以再回到「先等目錄、再等試算」的排隊寫法
+  const plan = ui.slice(ui.indexOf('VIEWS.plan = '), ui.indexOf('VIEWS.mine = '));
+  assert.ok(plan.indexOf('const preCheck =') < plan.indexOf("await cachedGet('catalog|'"),
+    '★ 試算要在等目錄之前就發出去,否則兩趟加起來要三秒半');
+});
+t('寫入逾時不可以中途放棄,訊息也不可以叫人再送一次', () => {
+  // 冷啟動 45 秒 > 原本的 30 秒逾時:瀏覽器說逾時、伺服器卻可能已經寫進去了,再送一次就變兩張單
+  const c = read('js/connect.js');
+  assert.ok(/WRITE_TIMEOUT_MS/.test(c), '寫入要有自己的逾時');
+  const m = c.match(/WRITE_TIMEOUT_MS:\s*(\d+)/);
+  assert.ok(m && +m[1] >= 60000, '寫入逾時要大於冷啟動的時間(至少 60 秒),實際 ' + (m && m[1]));
+  assert.ok(/READ\.has\(action\) \? CONFIG\.TIMEOUT_MS : CONFIG\.WRITE_TIMEOUT_MS/.test(c), '要依讀寫分開套用');
+  assert.ok(/可能已經完成了/.test(c), '★ 寫入逾時的訊息要說「可能已經完成」,不可以叫人直接重送');
+});
 t('建置:index.html 本身也會被快取,所以要有建置編號 + version.json', () => {
   // `?v=` 只保護得了 js/css。index.html 被快取住時,裡面寫的還是舊的 ?v=,
   // 於是「已經部署好了,重新整理卻還是舊畫面」。這一組是專門守那個情況的。

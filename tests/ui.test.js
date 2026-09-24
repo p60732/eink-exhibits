@@ -533,6 +533,77 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-v=plan]'); await wait(800);
   if (!/還沒有選任何展品/.test(await p.textContent('#main'))) throw new Error('★ 換人登入後購物車應該是空的');
 
+  // ---- 速度:重整之後不該乾等後端(v2.5)----
+  // 一趟來回 1.2~1.8 秒起跳、偶爾 8~26 秒,所以快取要跨重整活下來:
+  // 打開先畫上次的,背景再更新。這裡把 loans 的請求卡住不回,驗證畫面照樣出得來。
+  {
+    const p6 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    p6.on('dialog', d => d.accept());
+    await p6.goto(URL); await p6.waitForSelector('#login-f');
+    await p6.fill('#l-emp', '90001'); await p6.click('#login-f button');
+    await p6.waitForSelector('#l-pin:visible'); await p6.fill('#l-pin', '1234'); await p6.click('#login-f button');
+    await p6.waitForSelector('#tabs .tab');
+    await p6.click('[data-v=loans]'); await p6.waitForTimeout(1500);
+    await p6.click('[data-f=all]'); await p6.waitForTimeout(2000);
+    const before = await p6.textContent('#llist');
+    if (!/\S/.test(before)) throw new Error('借用單清單一開始就是空的,量不出東西');
+    // 重整,並且讓 loans 的請求永遠不回來
+    await p6.route('**/api', async r => {
+      let act = '';
+      try { act = JSON.parse(r.request().postData() || '{}').action || ''; } catch (e) { }
+      if (act === 'loans') return;                      // 卡住不回應
+      await r.continue();
+    });
+    await p6.reload();
+    await p6.waitForSelector('#tabs .tab', { timeout: 15000 });
+    await p6.click('[data-v=loans]');
+    // 後端完全不回的情況下,還是要在兩秒內畫出東西
+    await p6.waitForFunction(() => {
+      const el = document.querySelector('#llist');
+      return el && /\S/.test(el.textContent);
+    }, null, { timeout: 2500 }).catch(() => { throw new Error('★ 重整之後沒有快取可畫,使用者只能乾等後端那一趟'); });
+    await p6.close();
+  }
+
+  // ---- 速度:同一頁不可以把沒有先後關係的請求排成一列(v2.5)----
+  // 一趟來回 1.7 秒,排隊就是倍數。這裡數「開這一頁實際送出幾趟、有沒有重疊」。
+  {
+    const p5 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    p5.on('dialog', d => d.accept());
+    const reqs = [];
+    await p5.route('**/api', async r => {
+      let act = '';
+      try { act = JSON.parse(r.request().postData() || '{}').action || ''; } catch (e) { }
+      const rec = { act, t0: Date.now(), t1: 0 };
+      reqs.push(rec);
+      await r.continue();
+      rec.t1 = Date.now();
+    });
+    await p5.goto(URL); await p5.waitForSelector('#login-f');
+    await p5.fill('#l-emp', '10231'); await p5.click('#login-f button'); await p5.waitForSelector('#tabs .tab');
+    // 放兩項進購物車並填好日期,製造出「目錄 + 試算」兩份需求
+    await p5.click('[data-v=catalog]'); await p5.waitForTimeout(1200);
+    const adds = await p5.$$('[data-act=add-cart]');
+    await adds[0].click(); await p5.waitForTimeout(400);
+    await p5.click('[data-v=plan]'); await p5.waitForTimeout(1200);
+    const dd = k => new Date(Date.now() + k * 864e5).toISOString().slice(0, 10);
+    await p5.fill('#ps', dd(1)); await p5.dispatchEvent('#ps', 'change');
+    await p5.fill('#pe', dd(3)); await p5.dispatchEvent('#pe', 'change');
+    await p5.waitForTimeout(1200);
+    // 重新開一次借用申請,這次才是要量的。
+    // 一定要先清快取 —— 不然目錄直接從快取拿,根本不會送出請求,也就量不到有沒有排隊。
+    await p5.click('[data-v=catalog]'); await p5.waitForTimeout(900);
+    await p5.evaluate(() => bumpCache());
+    reqs.length = 0;
+    await p5.click('[data-v=plan]'); await p5.waitForTimeout(3000);
+    const cat = reqs.find(r => r.act === 'catalog'), chk = reqs.find(r => r.act === 'check');
+    if (!cat) throw new Error('量不到目錄請求(清了快取還是沒送?):' + reqs.map(r => r.act).join(','));
+    if (!chk) throw new Error('借用申請沒有送出可借量試算:' + reqs.map(r => r.act).join(','));
+    if (chk.t0 > cat.t1) throw new Error('★ 試算排在目錄回來之後才發,兩趟加起來要等兩倍('
+      + (chk.t0 - cat.t1) + 'ms 之後才發)');
+    await p5.close();
+  }
+
   // ---- 「系統已經更新」橫幅(v2.3.2)----
   // index.html 本身也會被瀏覽器快取,舊的 HTML 裡寫的還是舊的 ?v=,所以「重新整理」常常沒有用。
   // 這裡假裝「這一份頁面是舊的建置、伺服器上已經是新的」,驗證橫幅會出現、按了會帶著新編號重新載入。
