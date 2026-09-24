@@ -151,7 +151,11 @@ async function freshFetch(key, action, payload) {
  */
 function warm(key, action, payload = {}) {
   if (RCACHE.has(key) || INFLIGHT.has(key)) return;
-  fetchOnce(key, action, payload).catch(() => { });
+  const gen = CGEN;
+  // **一定要把結果收進快取。** 只丟出去不收的話,它比另一個請求早回來時
+  // INFLIGHT 已經清掉、RCACHE 又還沒有,等一下真的要用的人會再送一次 —— 白跑一趟,
+  // 比不做還糟。(2026-09-24 逐頁量測抓到:目錄與展品管理各送了三趟,同一份資料要兩次。)
+  fetchOnce(key, action, payload).then(data => cacheSet(key, data, gen)).catch(() => { });
 }
 async function cachedGet(key, action, payload = {}) {
   const hit = RCACHE.get(key);
@@ -652,6 +656,7 @@ VIEWS.catalog = async main => {
 VIEWS.plan = async main => {
   // 可借量的試算跟目錄沒有先後關係,一起發。排隊的話要等兩趟(約 3.5 秒)才看得到數字
   const P0 = S.plan, ed0 = S.editing;
+  if (isAdmin() && !ed0) warm('users', 'users');   // 代為登記的工號下拉,別排在目錄後面
   const preCheck = (P0.start && P0.end && P0.start <= P0.end && S.cart.length)
     ? api('check', { start: P0.start, end: P0.end, lines: S.cart.slice(), excludeId: ed0 ? ed0.id : '' }).catch(() => null)
     : Promise.resolve(null);
@@ -730,7 +735,7 @@ VIEWS.plan = async main => {
   });
   if (admin && !ed) {
     $('#ob').onchange = e => $('#obf').classList.toggle('hidden', !e.target.checked);
-    api('users').then(us => { $('#ulist').innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
+    cachedGet('users', 'users').then(us => { $('#ulist').innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
   }
   $('#pform').onsubmit = async e => {
     e.preventDefault();
@@ -1216,7 +1221,7 @@ async function drawShow(main) {
   // 這一頁原本要排四趟(展覽 → 目錄 → 結算 → 缺口試算),約 7 秒。
   // 前三個彼此沒有先後關係,先一起丟出去。
   if (!isNew) warm('show|' + S.showId, 'show', { id: S.showId });
-  warm('catalog|', 'catalog');
+  warm('catalog|', 'catalog'); warm('users', 'users');
   let v;
   if (isNew) v = { id: '', name: '', from: '', to: '', venue: '', owner: '', note: '', status: 'draft', statusLabel: '規劃中', lines: [], loans: [], mismatch: [], loanCount: 0 };
   else {
@@ -1345,8 +1350,12 @@ async function drawShow(main) {
   };
   S._showRecheck = recheck;
   S._showItems = S.items;
+  // `show` 的回應裡每一行已經帶了 available / short(showLineView 算好的),
+  // 第一次繪製直接用,不要再為了同一組數字多打一趟 showCheck。
+  // 之後使用者改日期或改數量時才需要 —— 那時清單還沒存檔,後端不知道要算什麼。
+  if (!isNew && (v.lines || []).length) { gaps = v.lines; }
   $('#shform').querySelectorAll('input[type=date]').forEach(el => el.onchange = recheck);
-  api('users').then(us => { const d = $('#ulist'); if (d) d.innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
+  cachedGet('users', 'users').then(us => { const d = $('#ulist'); if (d) d.innerHTML = us.filter(u => u.active).map(u => `<option value="${esc(u.empNo)}">${esc(u.name)} ${esc(u.dept || '')}</option>`).join(''); }).catch(() => { });
   $('#shform').onsubmit = async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -1357,7 +1366,8 @@ async function drawShow(main) {
     store.del(uk('showlines')); store.del(uk('showpick'));   // 只清一半的話,重整之後會拿空清單覆蓋掉後端
     render();
   };
-  recheck();
+  // 已經有現成的缺口數字就直接畫,不要為了同一組數字再打一趟後端
+  if (gaps.length) drawLines(); else recheck();
 }
 
 /**

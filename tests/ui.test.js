@@ -533,6 +533,37 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-v=plan]'); await wait(800);
   if (!/還沒有選任何展品/.test(await p.textContent('#main'))) throw new Error('★ 換人登入後購物車應該是空的');
 
+  // ---- 速度:同一次開頁不可以把同一份資料要兩次(v2.5.2)----
+  // warm() 如果只把請求丟出去、沒把結果收進快取,它早回來時 INFLIGHT 已經清掉、
+  // RCACHE 又還沒有,等一下真的要用的人會再送一次 —— 白跑一趟,比不做還糟。
+  // 2026-09-24 逐頁量測就是這樣抓到的(目錄與展品管理各送了三趟)。
+  {
+    const p8 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    p8.on('dialog', d => d.accept());
+    let seen = [];
+    await p8.route('**/api', async r => {
+      let act = '';
+      try { act = JSON.parse(r.request().postData() || '{}').action || ''; } catch (e) { }
+      seen.push(act);
+      await new Promise(z => setTimeout(z, 250));     // 本機太快,拉開一點才量得到重複
+      await r.continue();
+    });
+    await p8.goto(URL); await p8.waitForSelector('#login-f');
+    await p8.fill('#l-emp', '90001'); await p8.click('#login-f button');
+    await p8.waitForSelector('#l-pin:visible'); await p8.fill('#l-pin', '1234'); await p8.click('#login-f button');
+    await p8.waitForSelector('#tabs .tab');
+    for (const tab of ['catalog', 'items']) {
+      await p8.click('[data-v=dash]'); await p8.waitForTimeout(500);
+      await p8.evaluate(() => bumpCache());
+      seen = [];
+      await p8.click('[data-v=' + tab + ']'); await p8.waitForTimeout(3000);
+      const dup = seen.filter((a, i) => seen.indexOf(a) !== i);
+      if (dup.length) throw new Error('★ 開「' + tab + '」把同一份資料要了兩次:' + seen.join(',')
+        + ' —— warm() 沒有把結果收進快取的話就會這樣');
+    }
+    await p8.close();
+  }
+
   // ---- 速度:開機畫面不可以等後端(v2.5.1)----
   // 容器冷掉時一趟要 40 秒以上。原本 boot() 先等 status 回來才畫登入表單,
   // 等於讓人對著白畫面乾等 40 幾秒,連帳號都還不能打。
