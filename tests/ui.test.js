@@ -407,6 +407,51 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   if (!/已開單 2/.test(await p.textContent('#shlines'))) throw new Error('需求清單沒顯示已開單量');
   await shot('show-detail');
 
+  // ---- v2.4:缺口點得開 / 備料清單 / 匯出 CSV ----
+  {
+    // 先把這場的規劃量加到超過庫存,逼出一個缺口
+    await p.evaluate(async () => {
+      const id = S.showId;
+      const v = await Api.call('show', { id }, S.token);
+      const lines = v.lines.map(l => ({ itemId: l.itemId, location: l.location, qty: l.qty + 50, note: l.note || '' }));
+      await Api.call('saveShow', { show: { id, name: v.name, from: v.from, to: v.to, venue: v.venue, owner: v.owner, note: v.note, lines } }, S.token);
+    });
+    await p.evaluate(() => { bumpCache(); S.showLines = null; render(); }); await wait(2000);
+    const gapBtn = await p.$('#shlines [data-act=who]');
+    if (!gapBtn) throw new Error('★ 有缺口時「缺 N」要是可以點的');
+    await gapBtn.click(); await wait(2000);
+    const whoTxt = await p.textContent('.modal');
+    if (!/是誰佔著/.test(whoTxt)) throw new Error('缺口來源視窗沒開:' + whoTxt.replace(/\n/g, ' ').slice(0, 160));
+    if (!/借用單佔|展覽卡著|沒有人佔著/.test(whoTxt)) throw new Error('★ 缺口視窗要講清楚是被誰佔著:' + whoTxt.replace(/\n/g, ' ').slice(0, 200));
+    await shot('who-holds');
+    await p.click('.modal [data-act=close]'); await wait(700);
+    // 備料清單:規劃中 / 已確認都要印得出來,攔下 window.open 檢查內容
+    await p.evaluate(() => { window.__printed = ''; window.open = () => ({ document: { write: h => { window.__printed = h; }, close() { } }, print() { } }); });
+    await p.click('[data-act=sheet-print]'); await wait(2000);
+    const sheet = await p.evaluate(() => window.__printed || '');
+    if (!/備料清單/.test(sheet)) throw new Error('備料清單沒印出來');
+    if (!/新竹|林口/.test(sheet)) throw new Error('★ 備料清單要依廠區分段:' + sheet.slice(0, 200));
+    if (!/點貨人簽名/.test(sheet)) throw new Error('備料清單要有簽名欄');
+    if (!/class="bx"/.test(sheet)) throw new Error('★ 備料清單每一項要有可以手勾的格子');
+    // 匯出 CSV:攔下下載
+    const dl = p.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+    await p.click('[data-act=sheet-csv]'); await wait(1500);
+    const got = await dl;
+    if (!got) throw new Error('★ 匯出 CSV 沒有產生下載');
+    // 驗內容而不是檔名 —— headless 的 blob 下載回報的檔名不一定帶得出 download 屬性
+    const csv = require('fs').readFileSync(await got.path(), 'utf8');
+    if (!/廠區/.test(csv) || !/規劃量/.test(csv) || !/缺口/.test(csv)) throw new Error('★ CSV 欄位不對:' + csv.slice(0, 200));
+    if (!/春季巡迴展/.test(csv)) throw new Error('CSV 沒帶出展覽名稱');
+    // 把規劃量改回去,後面的步驟還要用
+    await p.evaluate(async () => {
+      const id = S.showId;
+      const v = await Api.call('show', { id }, S.token);
+      const lines = v.lines.map(l => ({ itemId: l.itemId, location: l.location, qty: Math.max(1, l.qty - 50), note: l.note || '' }));
+      await Api.call('saveShow', { show: { id, name: v.name, from: v.from, to: v.to, venue: v.venue, owner: v.owner, note: v.note, lines } }, S.token);
+    });
+    await p.evaluate(() => { bumpCache(); S.showLines = null; render(); }); await wait(2000);
+  }
+
   // ---- v2.3:展後結算 / 批次申請歸還 / 整理歷史 ----
   // 純粹推進狀態的步驟(點交、確認歸還)直接呼叫後端,這一段要驗的是畫面
   const shid = await p.evaluate(() => S.showId);

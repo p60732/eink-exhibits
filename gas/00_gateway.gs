@@ -75,6 +75,9 @@ function routes_() {
   add('user', false, U, { pickupOptions: ['id'] },
     { Items: C.ITEM_CALC, Units: C.UNIT_PICK, Loans: C.LOAN_MINE, Users: C.USER_AUTH });
   add('user', false, U, { cats: [] }, { Cats: '*', Items: C.ITEM_CAT, Users: C.USER_AUTH });
+  // 缺口是誰佔住的:要看得到借用單的人與活動,所以不能只讀 LOAN_CALC
+  add('user', false, U, { holders: ['itemId', 'location', 'from', 'to', 'excludeId', 'excludeShowId'] },
+    { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: { cols: C.LOAN_HOLD.concat(['showId']), only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
   // 掃條碼查單台會列出借用歷程,封存的舊單也要接得起來,否則歷程會在封存那天憑空斷掉
   var LOOKUP_ = { Items: '*', Units: '*', Loans: '*', Shows: C.SHOW_CALC, Users: C.USER_AUTH, Hist: C.HIST_UNIT };
   add('user', false, U, { lookup: ['code'] }, LOOKUP_);
@@ -107,7 +110,7 @@ function routes_() {
   add('admin', false, A, { shows: ['filter'] },
     { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: C.LOAN_SHOW, Shows: '*', Users: C.USER_AUTH });
   // 展覽明細會把底下每一張借用單整張帶出來,所以這裡不能限縮借用單的欄位
-  add('admin', false, A, { show: ['id'], showCheck: ['id', 'from', 'to', 'lines'], showSettle: ['id'] },
+  add('admin', false, A, { show: ['id'], showCheck: ['id', 'from', 'to', 'lines'], showSettle: ['id'], showSheet: ['id'] },
     { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Shows: '*', Users: C.USER_AUTH });
   add('admin', false, A, { archivePreview: ['includePlain'] },
     { Loans: { cols: ['id', 'status', 'showId', 'start', 'end', 'event'], only: null }, Shows: C.SHOW_CALC, Users: C.USER_AUTH });

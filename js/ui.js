@@ -601,7 +601,9 @@ VIEWS.plan = async main => {
     const ck = Object.fromEntries(lastCheck.map(c => [c.itemId + '@' + (c.location || ''), c]));
     $('#plines').innerHTML = S.cart.map(c => {
       const i = byId[c.itemId], k = ck[ckey(c)] || ck[c.itemId + '@'];
-      const st = k ? (k.short ? `<span class="short">缺 ${k.short}(可借 ${k.available})</span>` : `<span class="okt">足夠(可借 ${k.available})</span>`) : `<span class="meta">在庫 ${i.inStock}</span>`;
+      const st = k ? (k.short
+        ? `<button type="button" class="short linkish" data-act="who" data-i="${esc(c.itemId)}" data-w="${esc(c.location || '')}" title="看看是誰佔著">缺 ${k.short}(可借 ${k.available})</button>`
+        : `<span class="okt">足夠(可借 ${k.available})</span>`) : `<span class="meta">在庫 ${i.inStock}</span>`;
       const where = esc(c.location || (i.sites || []).map(g => g.location).join('、'));
       const key = esc(ckey(c));
       return `<div class="line"><span class="nm">${esc(i.name)}<br><span class="meta">${where}</span></span>
@@ -1159,7 +1161,9 @@ async function drawShow(main) {
     ${isNew ? '' : `<div class="card">
       <div class="row"><b>需求清單</b><span class="spacer"></span>
         <button class="btn brand sm" data-act="show-pick" ${locked ? 'disabled' : ''}>${ICON.plus}去展品目錄挑選</button>
-        <button class="btn sm" data-act="show-paste" ${locked ? 'disabled' : ''}>整批貼上</button></div>
+        <button class="btn sm" data-act="show-paste" ${locked ? 'disabled' : ''}>整批貼上</button>
+        <button class="btn sm" data-act="sheet-print" ${v.lines.length ? '' : 'disabled'}>列印備料清單</button>
+        <button class="btn sm" data-act="sheet-csv" ${v.lines.length ? '' : 'disabled'}>${ICON.dl}匯出 CSV</button></div>
       <div class="meta" style="margin:6px 0">到目錄挑選時會直接顯示這個檔期能借幾台;一次 30～100 件的話,「整批貼上」從 Excel 複製「展品名稱 / 地點 / 數量」三欄最快。</div>
       <div class="lines" id="shlines"></div>
       <div id="shsum"></div>
@@ -1196,8 +1200,11 @@ async function drawShow(main) {
     const L2 = S.showLines;
     $('#shlines').innerHTML = !L2.length ? `<div class="meta">還沒有東西。</div>` : L2.map((l, idx) => {
       const k = g[lkey(l)];
+      // 缺口要點得開 —— 只給一個數字,使用者就得自己一張一張去翻借用單
+      const gap = `<button type="button" class="short linkish" data-act="who" data-i="${esc(l.itemId)}" data-w="${esc(l.location || '')}"
+        title="看看是誰佔著">缺 ${k ? k.short : 0}(可借 ${k ? k.available : 0})</button>`;
       const st = !k ? '<span class="meta">填好檔期後會算可借量</span>'
-        : k.short ? `<span class="short">缺 ${k.short}(可借 ${k.available})</span>`
+        : k.short ? gap
           : k.issued ? `<span class="okt">已開單 ${k.issued}</span>`
             : `<span class="okt">足夠(可借 ${k.available})</span>`;
       return `<div class="line"><span class="nm">${esc(nameOf[l.itemId] || l.itemId)}<br><span class="meta">${esc(l.location)}</span></span>
@@ -1239,6 +1246,73 @@ async function drawShow(main) {
     render();
   };
   recheck();
+}
+
+/**
+ * 展覽總清單:備料 / 搬運用的紙本。
+ * **依廠區分頁** —— 點貨的人站在某一個廠區的架子前面,不會想看別廠的東西。
+ * 每一項前面留一個勾選格讓他手勾;逐台編號的把編號印出來,才對得起來。
+ */
+function printShowSheet(d) {
+  const w = window.open('', '_blank', 'width=1000,height=1100');
+  if (!w) return toast('瀏覽器擋掉了列印視窗,請允許彈出視窗', true);
+  const esc2 = esc;
+  const body = d.groups.map((g, gi) => {
+    const rows = g.rows.map(r => {
+      const gap = r.short ? '<span class="sh">缺 ' + r.short + '</span>' : '';
+      const src = r.loans.length ? esc2(r.loans.join('、')) : '<span class="tb">未開單</span>';
+      const un = r.units.length ? '<div class="un">' + esc2(r.units.join('、')) + '</div>' : '';
+      return '<tr><td class="bx"></td><td>' + esc2(r.category || '') + '</td><td>' + esc2(r.name)
+        + (r.note ? '<div class="nt">' + esc2(r.note) + '</div>' : '') + un + '</td>'
+        + '<td class="n">' + r.planned + '</td><td class="n">' + r.issued + '</td>'
+        + '<td class="n">' + (r.short || '') + gap + '</td><td class="src">' + src + '</td></tr>';
+    }).join('');
+    return '<section' + (gi ? ' class="pb"' : '') + '><h2>' + esc2(g.location) + '</h2>'
+      + '<div class="sub">' + g.items + ' 項 ' + g.planned + ' 件'
+      + (g.short ? '・<span class="sh">缺 ' + g.short + ' 件</span>' : '') + '</div>'
+      + '<table class="items"><thead><tr><th class="bx">✓</th><th>分類</th><th>品名 / 單台編號</th>'
+      + '<th class="n">規劃</th><th class="n">已開單</th><th class="n">缺</th><th class="src">借用單號</th></tr></thead>'
+      + '<tbody>' + (rows || '<tr><td colspan="7">這個廠區沒有東西</td></tr>') + '</tbody></table>'
+      + '<div class="sign"><div>點貨人簽名</div><div>日期</div></div></section>';
+  }).join('');
+  w.document.write('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'
+    + esc2(d.name) + ' 備料清單</title><style>'
+    + 'body{font:13px/1.55 system-ui,"Noto Sans TC",sans-serif;color:#333F48;margin:30px}'
+    + 'h1{font-size:19px;margin:0 0 3px;color:#C8102E}h2{font-size:15px;margin:0 0 2px}'
+    + '.hd{color:#6b7280;font-size:12px;margin:0 0 6px}.sub{color:#6b7280;font-size:11px;margin:0 0 8px}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:10px}'
+    + 'th,td{border:1px solid #d8dce0;padding:5px 8px;text-align:left;vertical-align:top}'
+    + 'th{background:#f4f5f7;font-weight:600}td.n,th.n{text-align:right;width:52px}'
+    + '.bx{width:26px;text-align:center}td.bx{height:22px}.src,th.src{width:130px;font-size:11px}'
+    + '.un{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#6b7280;margin-top:2px}'
+    + '.nt{font-size:11px;color:#6b7280}.sh{color:#C8102E;font-weight:600}.tb{color:#9aa3ad}'
+    + '.sign{display:flex;gap:36px;margin:14px 0 26px}'
+    + '.sign div{flex:1;border-top:1px solid #333F48;padding-top:6px;font-size:11px;color:#6b7280}'
+    + 'section.pb{page-break-before:always}@media print{body{margin:10mm}}'
+    + '</style></head><body>'
+    + '<h1>' + esc2(d.name) + ' 備料清單</h1>'
+    + '<div class="hd">' + esc2(d.from) + ' ~ ' + esc2(d.to)
+    + (d.venue ? '・' + esc2(d.venue) : '') + '・' + esc2(d.statusLabel)
+    + (d.ownerName ? '・承辦 ' + esc2(d.ownerName) : '')
+    + '<br>共 ' + d.totals.items + ' 項 ' + d.totals.planned + ' 件,已開單 ' + d.totals.issued + ' 件'
+    + (d.totals.short ? '、<span class="sh">缺 ' + d.totals.short + ' 件</span>' : '')
+    + '・列印於 ' + esc2(todayStr()) + '</div>'
+    + body + '</body></html>');
+  w.document.close();
+  setTimeout(() => w.print(), 300);
+}
+function showSheetCSV(d) {
+  const head = ['廠區', '分類', '展品編號', '品名', '追蹤方式', '規劃量', '已開單', '未開單', '這期間可借', '缺口', '借用單號', '單台編號', '備註'];
+  const rows = d.groups.reduce((a, g) => a.concat(g.rows.map(r => [g.location, r.category, r.itemId, r.name,
+    r.mode === 'unit' ? '逐台編號' : '數量', r.planned, r.issued, r.need, r.available, r.short,
+    r.loans.join(' '), r.units.join(' '), r.note])), []);
+  // 先算進區域變數再插值:結構測試會擋 `${}` 裡直接出現使用者欄位名(就算這裡是檔名不是 HTML)
+  const nm = String(d.name || '').replace(/[\\/:*?"<>|]/g, '_');
+  downloadCSV(`展覽總清單_${nm}_${todayStr()}.csv`,
+    [['展覽', d.name], ['檔期', d.from + ' ~ ' + d.to], ['場地', d.venue], ['狀態', d.statusLabel],
+     ['承辦', d.ownerName || d.owner], ['產生日', todayStr()], []]
+      .concat([head]).concat(rows)
+      .concat([[], ['合計', '', '', d.totals.items + ' 項', '', d.totals.planned, d.totals.issued, d.totals.need, '', d.totals.short]]));
 }
 
 /**
@@ -2116,6 +2190,43 @@ const ACT = {
       ${r.skipped ? `<p class="meta">另有 ${r.skipped} 張本來就已經在歷史表裡(上次搬到一半中斷過),這次跳過。</p>` : ''}
       <p class="meta">要查這些單,請在借用單頁勾選「含歷史資料」。</p>
       <div class="modal-f"><button class="btn pri" data-act="close-render">知道了</button></div>`);
+  },
+  /** 缺口是誰佔著:最早還的排最前面,那通常就是最喬得動的那一張 */
+  'who': async el => {
+    const itemId = el.dataset.i, where = el.dataset.w;
+    // 展覽頁用展覽檔期,借用申請頁用購物車上的日期
+    const inShow = S.view === 'shows' && S.showId && S.showId !== 'new';
+    const f = inShow ? $('#shform') : null;
+    const from = f ? new FormData(f).get('from') : S.plan.start;
+    const to = f ? new FormData(f).get('to') : S.plan.end;
+    if (!from || !to) return toast('請先填好日期', true);
+    const r = await run(() => api('holders', { itemId, location: where, from, to,
+      excludeId: S.editing ? S.editing.id : '', excludeShowId: inShow ? S.showId : '' })).catch(() => null);
+    if (!r) return;
+    const line = (a, b) => `<div class="list-row"><div class="t">${a}</div>${b}</div>`;
+    const loans = r.loans.map(L => {
+      const who = L.applicant ? `${esc(L.applicant)}${L.dept ? '・' + esc(L.dept) : ''}` : '(借用人僅管理者可見)';
+      const ev = L.event ? ' — ' + esc(L.event) : '';
+      return line(`<div><span class="mono">${esc(L.id)}</span> ${esc(L.statusLabel)}${L.overdue ? ' <span class="short">逾期</span>' : ''}</div>
+        <div class="meta">${who}${ev}<br>${fmtD(L.start)} → ${fmtD(L.end)} 歸還</div>`, `<b>${L.qty}</b>`);
+    }).join('');
+    const shows = r.shows.map(x => line(`<div>${esc(x.name)} <span class="pill approved">展覽卡位</span></div>
+      <div class="meta"><span class="mono">${esc(x.id)}</span>・${fmtD(x.from)} ~ ${fmtD(x.to)}</div>`, `<b>${x.qty}</b>`)).join('');
+    const at = where ? '(' + where + ')' : '';          // 純文字,插值前先算進區域變數
+    openModal(`<h2>${esc(r.name)}${esc(at)} 是誰佔著</h2>
+      <p class="meta">${esc(from)} ~ ${esc(to)}・總共 ${r.capacity} 台,這段期間還借得到 <b>${r.available}</b> 台。</p>
+      ${loans ? `<div style="margin-top:10px"><b>借用單佔 ${r.loanQty} 台</b><div class="meta" style="margin:4px 0">依歸還日排序,最早還的在最上面。</div>${loans}</div>` : ''}
+      ${shows ? `<div style="margin-top:14px"><b>其他展覽卡著 ${r.showQty} 台</b><div class="meta" style="margin:4px 0">這些是還沒開成借用單、被展覽先卡住的部分。</div>${shows}</div>` : ''}
+      ${!loans && !shows ? '<div class="banner info">沒有人佔著 —— 這個品項在這個廠區本來就沒有那麼多台,要補只能進貨。</div>' : ''}
+      <div class="modal-f"><button class="btn pri" data-act="close">知道了</button></div>`);
+  },
+  'sheet-print': async () => {
+    const d = await run(() => api('showSheet', { id: S.showId })).catch(() => null);
+    if (d) printShowSheet(d);
+  },
+  'sheet-csv': async () => {
+    const d = await run(() => api('showSheet', { id: S.showId })).catch(() => null);
+    if (d) showSheetCSV(d);
   },
   'show-extend': async () => {
     const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });

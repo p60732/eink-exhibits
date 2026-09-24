@@ -98,7 +98,23 @@ const M = [
    "  add('admin', true, A, { deleteItem: ['id'] }, FULL_);", '刪展品的路由沒把歷史表讀進來'],
   ['00_gateway.gs', "  var LOOKUP_ = { Items: '*', Units: '*', Loans: '*', Shows: C.SHOW_CALC, Users: C.USER_AUTH, Hist: C.HIST_UNIT };",
    "  var LOOKUP_ = { Items: '*', Units: '*', Loans: '*', Shows: C.SHOW_CALC, Users: C.USER_AUTH };",
-   '掃單台時看不到封存的借用歷程']
+   '掃單台時看不到封存的借用歷程'],
+  // v2.4:有多少開多少 / 缺口是誰佔的 / 總清單
+  ['20_logic.gs', "        var take = Math.min(v.need, Math.max(0, v.available));", "        var take = v.need;",
+   '不管借不借得到都照規劃量硬開單(點交一定對不起來)'],
+  ['20_logic.gs', "        if (take <= 0) return;                    // 完全借不到就整行跳過,留在清單上", '',
+   '一台都借不到還是塞一行 0 台進借用單'],
+  ['20_logic.gs', "      if (q <= 0) return;\n      var o = { id: e.L.id, qty: q, status: e.L.status,", "      var o = { id: e.L.id, qty: q, status: e.L.status,",
+   '誰佔住:把已經還完的單也列進去'],
+  ['20_logic.gs', "      if (S.status !== 'confirmed' || S.id === excludeShowId) return;\n      if (s(S.from) > to || s(S.to) < from) return;\n      (S.lines || []).forEach(function (ln) {\n        if (s(ln.itemId) !== itemId) return;\n        if (where != null && loc(ln.location) !== loc(where)) return;\n        var q = Math.max(0, int(ln.qty) - (issued[S.id + '|' + lineKey(ln)] || 0));",
+   "      if (S.status !== 'confirmed' || S.id === excludeShowId) return;\n      if (s(S.from) > to || s(S.to) < from) return;\n      (S.lines || []).forEach(function (ln) {\n        if (s(ln.itemId) !== itemId) return;\n        if (where != null && loc(ln.location) !== loc(where)) return;\n        var q = int(ln.qty);",
+   '誰佔住:展覽已經開成單的那一段被重複列了一次'],
+  ['20_logic.gs', "      if (full) { o.applicant = s(e.L.applicant); o.dept = s(e.L.dept); o.event = s(e.L.event); }",
+   "      o.applicant = s(e.L.applicant); o.dept = s(e.L.dept); o.event = s(e.L.event);",
+   '同仁也看得到別人的借用人姓名'],
+  ['20_logic.gs', "    showSheet: function (c) { return showSheet(c.db, showById(c), c.today); },",
+   "    showSheet: function (c) { var S = showById(c); if (S.status !== 'confirmed') throw E('x'); return showSheet(c.db, S, c.today); },",
+   '總清單要等確認檔期才出得來(備料階段就沒東西可用了)']
   // 註:`doExtend` / `doTransfer` 開頭的狀態檢查是第二層防護。駁回與取消都會把 `L.request` 清掉之後,
   //     已經沒有路徑能帶著待確認的延期請求走到這裡,所以拿掉它測試不會紅(等價突變)。
   //     保留的理由:它擋的是「請求殘留」這一類 bug,而那正是 v2.2 真的發生過的事。

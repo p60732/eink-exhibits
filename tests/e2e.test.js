@@ -413,6 +413,102 @@ assert.strictEqual((rgView.sites.find(g => g.location === '新竹') || {}).count
 // 展覽清單的分類也要讀得到(ITEM_CALC 原本沒宣告 category,只是剛好被連續段順便讀到)
 assert.strictEqual(ok('show', { id: SH.id }, A).lines[0].category, 'Signage', '展覽需求清單要帶得出分類');
 
+/* ===== v2.4:有多少開多少 / 缺口是誰佔的 / 展覽總清單 ===== */
+{
+  // 10 台的品項,先被別人借走 4 台,展覽規劃 8 台 → 只借得到 6 台
+  const PV = ok('saveItem', { item: { name: '部分開單用機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 10 }] } }, A);
+  const other = ok('createLoan', { event: '先卡住的單', start: '2027-04-01', end: '2027-04-10',
+    lines: [{ itemId: PV.id, location: '新竹', qty: 4 }], onBehalf: true, applicant: '10477' }, A);   // 代為登記 = 直接已核准
+  let PS = ok('saveShow', { show: { name: '部分開單測試展', from: '2027-04-02', to: '2027-04-08', owner: '10231',
+    lines: [{ itemId: PV.id, location: '新竹', qty: 8 }] } }, A);
+  assert.deepStrictEqual([PS.lines[0].available, PS.lines[0].short], [6, 2], '規劃 8 只借得到 6');
+  PS = ok('setShowStatus', { id: PS.id, status: 'confirmed', force: true }, A);
+
+  // ★ 有多少開多少:開 6 台,剩下 2 台留在清單上
+  const gen = ok('createLoansFromShow', { id: PS.id }, A);
+  assert.strictEqual(gen.ok, 1, '應該開得出一張');
+  assert.strictEqual(gen.short.length, 1);
+  assert.deepStrictEqual([gen.short[0].want, gen.short[0].got, gen.short[0].short], [8, 6, 2], '★ 要開得出來的那 6 台,不是硬開 8 台');
+  const made = ok('loans', { filter: 'all' }, A).find(x => x.id === gen.ids[0]);
+  assert.strictEqual(made.lines[0].qty, 6, '★ 借用單上只能是 6 台 —— 硬開 8 台之後點交一定對不起來');
+  PS = ok('show', { id: PS.id }, A);
+  assert.deepStrictEqual([PS.lines[0].issued, PS.lines[0].need], [6, 2], '★ 缺的 2 台要留在需求清單上');
+
+  // ★ 剩下的 2 台展覽要繼續卡著,不可以放給別人
+  const freeNow = ok('check', { start: '2027-04-03', end: '2027-04-05', lines: [{ itemId: PV.id, location: '新竹', qty: 1 }] }, A)[0].available;
+  assert.strictEqual(freeNow, 0, '★ 開完單之後那 2 台仍然被展覽卡著(放掉的話就變成 2)');
+
+  // 一台都借不到時要講清楚,而且不可以留下半張空單
+  const ZR = ok('saveItem', { item: { name: '完全借不到的機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 2 }] } }, A);
+  const eat = ok('createLoan', { event: '吃光光', start: '2027-04-01', end: '2027-04-10',
+    lines: [{ itemId: ZR.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10477' }, A);
+  let ZS = ok('saveShow', { show: { name: '完全沒貨的展', from: '2027-04-03', to: '2027-04-06', owner: '10231',
+    lines: [{ itemId: ZR.id, location: '新竹', qty: 2 }] } }, A);
+  ZS = ok('setShowStatus', { id: ZS.id, status: 'confirmed', force: true }, A);
+  bad('createLoansFromShow', { id: ZS.id }, A, /一台都借不到/);
+  assert.strictEqual(ok('show', { id: ZS.id }, A).loanCount, 0, '★ 開不出來就不可以留下半張單');
+
+  // 進貨之後再按一次,就會把剩下的補開
+  const grown = ok('items', {}, A).find(x => x.id === PV.id);
+  ok('saveItem', { item: { id: PV.id, name: grown.name, mode: 'qty', category: grown.category, sites: [{ location: '新竹', qty: 12 }] } }, A);
+  const gen2 = ok('createLoansFromShow', { id: PS.id }, A);
+  assert.strictEqual(gen2.ok, 1);
+  assert.strictEqual(gen2.short.length, 0, '★ 進貨之後缺口就補得齊了');
+  assert.strictEqual(ok('show', { id: PS.id }, A).lines[0].need, 0, '補開之後不用再開單了');
+
+  // ---- 缺口是誰佔的 ----
+  const h = ok('holders', { itemId: ZR.id, location: '新竹', from: '2027-04-03', to: '2027-04-06' }, A);
+  assert.strictEqual(h.loans.length, 1);
+  assert.strictEqual(h.loans[0].id, eat.id);
+  assert.strictEqual(h.loans[0].applicant, '測試員工B', '管理者看得到借用人');
+  assert.strictEqual(h.loanQty, 2);
+  assert.strictEqual(h.available, 0);
+  // 同仁看得到數量與歸還日,看不到姓名
+  const hu = ok('holders', { itemId: ZR.id, location: '新竹', from: '2027-04-03', to: '2027-04-06' }, U);
+  assert.strictEqual(hu.loans[0].applicant, undefined, '★ 同仁不該看到別人的姓名');
+  assert.strictEqual(hu.loans[0].end, '2027-04-10', '但歸還日要看得到');
+  // ★ 展覽已經整批開成借用單的那一段,不可以在「展覽卡位」那邊再列一次(會變成看起來被佔兩倍)
+  {
+    const hp = ok('holders', { itemId: PV.id, location: '新竹', from: '2027-04-03', to: '2027-04-05' }, A);
+    assert.ok(!hp.shows.some(x => x.id === PS.id), '★ 規劃量已經全部開成單了,展覽那邊不可以再列一次');
+    assert.strictEqual(hp.showQty, 0);
+    assert.strictEqual(hp.loanQty, 12, '三張單加起來 4 + 6 + 2');
+  }
+  // ★ 已經還完的行不可以被列進來(單子還沒結案時,某一行可能已經全還了)
+  {
+    const X1 = ok('saveItem', { item: { name: '兩項單甲', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 3 }] } }, A);
+    const X2 = ok('saveItem', { item: { name: '兩項單乙', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 3 }] } }, A);
+    const TL = ok('createLoan', { event: '兩項的單', start: '2026-09-20', end: '2026-11-30',
+      lines: [{ itemId: X1.id, location: '新竹', qty: 3 }, { itemId: X2.id, location: '新竹', qty: 3 }],
+      onBehalf: true, applicant: '10477' }, A);
+    ok('checkout', { id: TL.id, units: {} }, A);
+    ok('receive', { id: TL.id, lines: [{ itemId: X1.id, location: '新竹', returned: 3 }] }, A);
+    assert.strictEqual(ok('loans', { filter: 'all' }, A).find(x => x.id === TL.id).status, 'out', '另一項還沒還,單子仍然是出借中');
+    const h1 = ok('holders', { itemId: X1.id, location: '新竹', from: '2026-10-01', to: '2026-10-05' }, A);
+    assert.strictEqual(h1.loans.length, 0, '★ 這一項已經全部還回來了,不可以還列在「誰佔著」裡面');
+    const h2 = ok('holders', { itemId: X2.id, location: '新竹', from: '2026-10-01', to: '2026-10-05' }, A);
+    assert.strictEqual(h2.loanQty, 3, '沒還的那一項才要列');
+  }
+  bad('holders', { itemId: 'P-沒這個', from: '2027-04-03', to: '2027-04-06' }, A, /找不到展品/);
+  bad('holders', { itemId: ZR.id, from: '2027-04-06', to: '2027-04-03' }, A, /不可早於/);
+
+  // ---- 展覽總清單 ----
+  const sheet = ok('showSheet', { id: PS.id }, A);
+  assert.strictEqual(sheet.groups.length, 1);
+  assert.strictEqual(sheet.groups[0].location, '新竹');
+  assert.strictEqual(sheet.totals.planned, 8);
+  assert.strictEqual(sheet.totals.issued, 8);
+  assert.strictEqual(sheet.groups[0].rows[0].loans.length, 2, '兩次開單都要列出來');
+  assert.strictEqual(sheet.ownerName, '測試員工A', '要帶出承辦人姓名,不能只有工號');
+  // ★ 規劃中就要出得來 —— 備料本來就發生在開單之前
+  const DR = ok('saveShow', { show: { name: '還在規劃的展', from: '2027-07-01', to: '2027-07-05', owner: '10231',
+    lines: [{ itemId: PV.id, location: '新竹', qty: 3 }] } }, A);
+  const ds = ok('showSheet', { id: DR.id }, A);
+  assert.strictEqual(ds.status, 'draft');
+  assert.deepStrictEqual([ds.totals.planned, ds.totals.issued, ds.totals.need], [3, 0, 3], '★ 規劃中也要算得出來');
+  ok('deleteShow', { id: DR.id }, A);
+}
+
 /* ===== v2.3:展後結算 / 批次申請歸還 / 封存到歷史表 ===== */
 
 // ---- 展後結算 ----
@@ -704,6 +800,9 @@ readActions.push(['show', { id: SH.id }, A]);
 readActions.push(['showSettle', { id: SH.id }, A]);
 readActions.push(['showSettle', { id: SS.id }, A]);
 readActions.push(['archivePreview', {}, A]);
+readActions.push(['showSheet', { id: SH.id }, A]);
+readActions.push(['holders', { itemId: expo.id, location: '新竹', from: '2027-03-02', to: '2027-03-04' }, A]);
+readActions.push(['holders', { itemId: expo.id, location: '新竹', from: '2027-03-02', to: '2027-03-04' }, U]);
 readActions.push(['archivePreview', { includePlain: true }, A]);
 ['returned', 'all'].forEach(f => readActions.push(['loans', { filter: f, includeHistory: true }, A]));
 readActions.push(['showCheck', { id: SH.id, from: '2027-03-01', to: '2027-03-10', lines: [{ itemId: expo.id, location: '新竹', qty: 6 }] }, A]);

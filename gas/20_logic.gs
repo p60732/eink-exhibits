@@ -265,6 +265,44 @@ var Logic = (function () {
     });
     return sum;
   }
+  /**
+   * 「這段期間是誰佔著它」。
+   * 只給一個「缺 3」的數字,遇到一場 30～100 件的展覽就只能一張一張去翻借用單 ——
+   * 所以缺口要點得開,直接告訴你是哪幾張單、哪幾場展覽卡著,以及最早什麼時候會還。
+   * `full` 為假時不帶借用人姓名/部門(同仁看得到「被幾張單佔住、最早哪天還」就夠了)。
+   */
+  function holdersOf(db, itemId, where, from, to, today, excludeId, excludeShowId, full) {
+    var key = where == null ? itemId : itemId + '@' + loc(where), loans = [];
+    (loanIndex(db)[key] || []).forEach(function (e) {
+      if (e.L.id === excludeId) return;
+      var w = loanWindow(e.L, today);
+      if (w[0] > to || w[1] < from) return;
+      var q = outstanding(e.ln);
+      if (q <= 0) return;
+      var o = { id: e.L.id, qty: q, status: e.L.status, statusLabel: LOAN_ST[e.L.status] || e.L.status,
+        start: s(e.L.start), end: s(e.L.end), overdue: isOverdue(e.L, today), showId: s(e.L.showId) };
+      if (full) { o.applicant = s(e.L.applicant); o.dept = s(e.L.dept); o.event = s(e.L.event); }
+      loans.push(o);
+    });
+    var issued = showIssued(db), shows = [];
+    (db.Shows || []).forEach(function (S) {
+      if (S.status !== 'confirmed' || S.id === excludeShowId) return;
+      if (s(S.from) > to || s(S.to) < from) return;
+      (S.lines || []).forEach(function (ln) {
+        if (s(ln.itemId) !== itemId) return;
+        if (where != null && loc(ln.location) !== loc(where)) return;
+        var q = Math.max(0, int(ln.qty) - (issued[S.id + '|' + lineKey(ln)] || 0));
+        if (q <= 0) return;
+        shows.push({ id: S.id, name: s(S.name), from: s(S.from), to: s(S.to), qty: q });
+      });
+    });
+    // 最早還的排前面 —— 那通常就是最喬得動的那一張
+    loans.sort(function (a, b) { return a.end < b.end ? -1 : (a.end > b.end ? 1 : 0); });
+    shows.sort(function (a, b) { return a.from < b.from ? -1 : (a.from > b.from ? 1 : 0); });
+    return { loans: loans, shows: shows,
+      loanQty: loans.reduce(function (a, x) { return a + x.qty; }, 0),
+      showQty: shows.reduce(function (a, x) { return a + x.qty; }, 0) };
+  }
   function availableInRange(db, item, where, from, to, excludeId, today, excludeShowId) {
     return capacity(db, item, where)
       - reservedInRange(db, item.id, where, from, to, excludeId, today)
@@ -696,6 +734,50 @@ var Logic = (function () {
     };
   }
 
+  /**
+   * 展覽總清單(備料 / 搬運用)。
+   * **規劃中就出得來** —— 備料本來就發生在開單之前,要等開完單才能印等於沒用。
+   * 依廠區分組,因為點貨的人是站在某一個廠區的架子前面,不會想看別廠的東西。
+   */
+  function showSheet(db, S, today) {
+    var mine = loansOfShow(db, S.id).filter(function (L) { return L.status !== 'rejected' && L.status !== 'cancelled'; });
+    var byLoc = {}, order = [];
+    (S.lines || []).forEach(function (ln) {
+      var v = showLineView(db, S, ln, today), where = v.location;
+      var row = { itemId: v.itemId, name: v.name, category: v.category, mode: v.mode, location: where,
+        planned: v.qty, issued: v.issued, need: v.need, available: v.available, short: v.short,
+        note: s(ln.note), loans: [], units: [] };
+      mine.forEach(function (L) {
+        (L.lines || []).forEach(function (x) {
+          if (s(x.itemId) !== v.itemId || loc(x.location) !== where) return;
+          if (row.loans.indexOf(L.id) < 0) row.loans.push(L.id);
+          (x.units || []).forEach(function (u) { if (row.units.indexOf(u) < 0) row.units.push(u); });
+        });
+      });
+      if (!byLoc[where]) { byLoc[where] = []; order.push(where); }
+      byLoc[where].push(row);
+    });
+    order.sort();
+    var groups = order.map(function (w) {
+      var rows = byLoc[w].slice().sort(function (a, b) {
+        var ka = s(a.category) + '\u0000' + s(a.name), kb = s(b.category) + '\u0000' + s(b.name);
+        return ka < kb ? -1 : (ka > kb ? 1 : 0);
+      });
+      return { location: w, rows: rows, items: rows.length,
+        planned: rows.reduce(function (a, x) { return a + x.planned; }, 0),
+        short: rows.reduce(function (a, x) { return a + x.short; }, 0) };
+    });
+    var all = groups.reduce(function (a, g) { return a.concat(g.rows); }, []);
+    var sum = function (f) { return all.reduce(function (a, x) { return a + x[f]; }, 0); };
+    var who = s(S.owner) ? findByEmp(db, S.owner) : null;
+    return {
+      id: S.id, name: s(S.name), from: s(S.from), to: s(S.to), venue: s(S.venue),
+      owner: s(S.owner), ownerName: who ? s(who.name) : '', note: s(S.note),
+      status: s(S.status) || 'draft', statusLabel: SHOW_ST[S.status] || SHOW_ST.draft,
+      at: today, groups: groups,
+      totals: { items: all.length, planned: sum('planned'), issued: sum('issued'), need: sum('need'), short: sum('short') }
+    };
+  }
   function showById(c) {
     var S = byId(c.db.Shows || [], s(c.p.id));
     if (!S) throw E('找不到展覽');
@@ -860,6 +942,21 @@ var Logic = (function () {
       if (!L.request) throw E('沒有待確認的申請');
       L.request = null; dirty(c.db, 'Loans'); log(c, '取消簽收 / 歸還申請', L.id, '');
       return enrichLoan(c.db, L, c.today);
+    },
+    /** 缺口是誰佔住的。同仁看得到數量與歸還日,看不到借用人姓名(跟借用單卡片同一套規則) */
+    holders: function (c) {
+      var it = byId(c.db.Items, s(c.p.itemId));
+      if (!it) throw E('找不到展品');
+      if (!isDate(c.p.from) || !isDate(c.p.to)) throw E('請指定期間');
+      if (s(c.p.from) > s(c.p.to)) throw E('結束日不可早於開始日');
+      var where = s(c.p.location) ? loc(c.p.location) : null;
+      var r = holdersOf(c.db, it.id, where, s(c.p.from), s(c.p.to), c.today,
+        s(c.p.excludeId) || null, s(c.p.excludeShowId) || null, c.user.role === 'admin');
+      r.itemId = it.id; r.name = it.name; r.location = where || '';
+      r.capacity = capacity(c.db, it, where);
+      r.available = Math.max(0, availableInRange(c.db, it, where, s(c.p.from), s(c.p.to),
+        s(c.p.excludeId) || null, c.today, s(c.p.excludeShowId) || null));
+      return r;
     },
     cats: function (c) {
       var used = {};
@@ -1074,15 +1171,28 @@ var Logic = (function () {
       if (!s(S.owner)) throw E('請先填寫展覽的承辦人工號 —— 產生的借用單要掛在他名下');
       var who = findByEmp(c.db, S.owner);
       if (!who) throw E('查無承辦人工號 ' + s(S.owner));
-      var only = (c.p.locations || []).map(s).filter(Boolean), want = {};
+      /**
+       * 有多少開多少:每一行取 min(還要借的量, 這個檔期真的借得到的量)。
+       * 借不到的那一段**不會**被硬塞進借用單 —— 它留在需求清單上繼續顯示缺口,
+       * 而且展覽會繼續幫它卡著位子(展覽佔用量 = 規劃量 − 已開單量),等進貨進來再按一次就補開。
+       * 硬開一張「帳面 12 台、實際只有 10 台」的單,之後點交一定對不起來,所以寧可開一半。
+       */
+      var only = (c.p.locations || []).map(s).filter(Boolean), want = {}, short = [];
       (S.lines || []).forEach(function (ln) {
         var v = showLineView(c.db, S, ln, today);
         if (v.need <= 0) return;
         if (only.length && only.indexOf(v.location) < 0) return;
-        (want[v.location] = want[v.location] || []).push({ itemId: v.itemId, location: v.location, qty: v.need });
+        var take = Math.min(v.need, Math.max(0, v.available));
+        if (take < v.need) short.push({ itemId: v.itemId, name: v.name, location: v.location, want: v.need, got: take, short: v.need - take });
+        if (take <= 0) return;                    // 完全借不到就整行跳過,留在清單上
+        (want[v.location] = want[v.location] || []).push({ itemId: v.itemId, location: v.location, qty: take });
       });
       var locs = Object.keys(want).sort();
-      if (!locs.length) throw E('沒有還需要開單的項目');
+      if (!locs.length) {
+        if (short.length) throw E('這個檔期一台都借不到:' + short.map(function (x) { return x.name + '(' + x.location + ')缺 ' + x.short; }).join('、')
+          + '。缺口仍然幫你卡著,進貨之後再按一次就會補開。');
+        throw E('沒有還需要開單的項目');
+      }
       var made = [], fail = [];
       locs.forEach(function (where) {
         var sub = { db: c.db, user: c.user, today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify,
@@ -1092,9 +1202,12 @@ var Logic = (function () {
         try { made.push(USER.createLoan(sub).id); }
         catch (e) { fail.push({ location: where, error: e.userFacing ? e.message : '無法產生借用單' }); }
       });
-      log(c, '由展覽產生借用單', S.id, made.join('、') || '全部失敗');
-      return { ok: made.length, ids: made, fail: fail, show: showView(c.db, S, today, true) };
+      log(c, '由展覽產生借用單', S.id, (made.join('、') || '全部失敗')
+        + (short.length ? '|缺:' + short.map(function (x) { return x.name + '@' + x.location + ' 差 ' + x.short; }).join(';') : ''));
+      return { ok: made.length, ids: made, fail: fail, short: short, show: showView(c.db, S, today, true) };
     },
+    /** 展覽總清單:備料 / 搬運用,任何狀態都出得來 */
+    showSheet: function (c) { return showSheet(c.db, showById(c), c.today); },
     /** 展後結算:已封存的看結案當下的快照,其他的即時算 */
     showSettle: function (c) {
       var S = showById(c), today = c.today;
@@ -1466,6 +1579,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules };
 })();

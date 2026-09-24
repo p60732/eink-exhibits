@@ -14,7 +14,7 @@ const CONFIG = {
 
 const Api = (() => {
   // 只有讀取類動作允許自動重試(寫入重試可能造成重複申請)
-  const READ = new Set(['status', 'me', 'catalog', 'check', 'myLoans', 'pickupOptions', 'lookup', 'dashboard', 'loans', 'items', 'units', 'users', 'logs', 'cats', 'allCats', 'shows', 'show', 'showCheck', 'showSettle', 'archivePreview']);
+  const READ = new Set(['status', 'me', 'catalog', 'check', 'myLoans', 'pickupOptions', 'lookup', 'dashboard', 'loans', 'items', 'units', 'users', 'logs', 'cats', 'allCats', 'shows', 'show', 'showCheck', 'showSettle', 'archivePreview', 'holders', 'showSheet']);
   async function once(action, payload, token) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), CONFIG.TIMEOUT_MS);

@@ -219,6 +219,59 @@ t('展後結算:同品項不同地點要分開算', () => {
   assert.strictEqual(r.lines.find(x => x.location === '新竹').returned, 3);
 });
 
+/* ---- 缺口是誰佔住的 ---- */
+const hdb = () => ({
+  Items: [{ id: 'P1', name: '甲機', mode: 'qty', stock: { 新竹: { 數量: 10 } } }],
+  Shows: [
+    { id: 'S1', name: '別場展', status: 'confirmed', from: '2026-12-01', to: '2026-12-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 4 }] },
+    { id: 'S2', name: '自己這場', status: 'confirmed', from: '2026-12-01', to: '2026-12-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 3 }] },
+    { id: 'S3', name: '還在規劃', status: 'draft', from: '2026-12-01', to: '2026-12-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 9 }] },
+    { id: 'S4', name: '檔期沒蓋到', status: 'confirmed', from: '2027-05-01', to: '2027-05-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 9 }] }
+  ],
+  Loans: [
+    { id: 'LA', status: 'out', start: '2026-12-02', end: '2026-12-06', applicant: '甲君', dept: '業務', event: '客戶來訪',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 2, returned: 0, lost: 0 }] },
+    { id: 'LB', status: 'approved', start: '2026-12-03', end: '2026-12-04', applicant: '乙君', dept: '產品', event: '內部測試',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 1, returned: 0, lost: 0 }] },
+    { id: 'LC', status: 'returned', start: '2026-12-01', end: '2026-12-02', applicant: '丙君',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 5, returned: 5, lost: 0 }] },
+    { id: 'LD', status: 'out', start: '2026-12-02', end: '2026-12-03', applicant: '丁君',
+      lines: [{ itemId: 'P1', location: '林口', qty: 3, returned: 0, lost: 0 }] }
+  ]
+});
+const H = (ex) => R.holdersOf(hdb(), 'P1', '新竹', '2026-12-01', '2026-12-10', '2026-11-20', null, ex || null, true);
+t('誰佔住:已歸還的不算、別的廠區不算', () => {
+  assert.strictEqual(H().loans.map(x => x.id).join(), 'LB,LA');   // 依歸還日排序
+  assert.strictEqual(H().loanQty, 3);
+});
+t('誰佔住:最早還的排最前面 —— 那通常最喬得動', () => {
+  const l = H().loans;
+  assert.strictEqual(l[0].id, 'LB');
+  assert.strictEqual(l[0].end, '2026-12-04');
+});
+t('誰佔住:只算已確認且檔期有重疊的展覽,自己那場要排除', () => {
+  assert.strictEqual(H().shows.map(x => x.id).join(), 'S1,S2');
+  assert.strictEqual(H('S2').shows.map(x => x.id).join(), 'S1', '排除自己那場');
+  assert.strictEqual(H('S2').showQty, 4);
+});
+t('誰佔住:展覽已經開成借用單的那一段不可以重複列', () => {
+  const d = hdb();
+  d.Loans.push({ id: 'LS', showId: 'S1', status: 'approved', start: '2026-12-01', end: '2026-12-10',
+    lines: [{ itemId: 'P1', location: '新竹', qty: 4, returned: 0, lost: 0 }] });
+  const r = R.holdersOf(d, 'P1', '新竹', '2026-12-01', '2026-12-10', '2026-11-20', null, null, true);
+  assert.strictEqual((r.shows.find(x => x.id === 'S1') || {}).qty, undefined, '★ 已經整批開成單了,展覽那邊不可以再列一次');
+  assert.ok(r.loans.some(x => x.id === 'LS'), '要改成列那張借用單');
+});
+t('誰佔住:不是管理者就不帶借用人姓名', () => {
+  const r = R.holdersOf(hdb(), 'P1', '新竹', '2026-12-01', '2026-12-10', '2026-11-20', null, null, false);
+  assert.strictEqual(r.loans[0].applicant, undefined);
+  assert.strictEqual(r.loans[0].end, '2026-12-04', '歸還日還是要看得到');
+});
+
 /* ---- 封存的挑選條件 ---- */
 const adb = () => ({
   Shows: [{ id: 'S1', name: '結案的', status: 'closed' }, { id: 'S2', name: '還在跑的', status: 'confirmed' }],
