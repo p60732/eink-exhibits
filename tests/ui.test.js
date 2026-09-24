@@ -687,6 +687,62 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     await p2.close(); await p3.close(); await p4.close();
   }
 
+  // ---- 展品目錄:分類籤條要釘在標題列底下(v2.5.3)----
+  // 展品一多就得一路捲回最上面才換得了分類,捲到下面等於沒有這排籤條。
+  {
+    await p.click('[data-v=catalog]'); await wait(900);
+    const topH = await p.$eval('.top', el => el.getBoundingClientRect().height);
+    await p.evaluate(() => window.scrollTo(0, 2000)); await wait(300);
+    const bar = await p.$('#cbar');
+    if (!bar) throw new Error('找不到分類籤條');
+    const box = await bar.boundingBox();
+    if (!box) throw new Error('★ 捲下去之後分類籤條不見了 —— 要釘在上面');
+    if (Math.abs(box.y - topH) > 3) throw new Error('★ 捲下去時分類籤條要貼在標題列底下('
+      + '標題列高 ' + Math.round(topH) + ',籤條在 ' + Math.round(box.y) + ')');
+    // 釘住的籤條不可以蓋掉標題列
+    const zs = await p.evaluate(() => [getComputedStyle(document.querySelector('.top')).zIndex,
+      getComputedStyle(document.querySelector('#cbar')).zIndex].map(Number));
+    if (!(zs[1] < zs[0])) throw new Error('★ 籤條的 z-index 要低於標題列,不然會蓋住分頁列:' + zs.join('<'));
+    // 點了還要真的換得動分類
+    await p.click('#cbar .catchip:nth-child(2)'); await wait(400);
+    if (!await p.$('#cbar .catchip.on')) throw new Error('釘住之後點籤條沒反應');
+    await p.click('#cbar .catchip:nth-child(1)'); await wait(400);
+    await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+  }
+
+  // ---- 離譜的借出 / 歸還日期不可以送出(v2.5.3)----
+  // 手打 type=date 很容易打成 0025 或 9999,以前一路送進工作表,統計就從那張單開始歪掉。
+  {
+    await p.click('[data-v=catalog]'); await wait(900);
+    await p.click('.item-card [data-act=add-cart]'); await wait(400);
+    await p.click('[data-v=plan]'); await p.waitForSelector('#ps'); await wait(600);
+    const bad = async (a2, b2, why) => {
+      await p.fill('#ps', a2); await p.dispatchEvent('#ps', 'change');
+      await p.fill('#pe', b2); await p.dispatchEvent('#pe', 'change');
+      await wait(700);
+      const sum = await p.textContent('#psum');
+      if (!/日期有問題/.test(sum)) throw new Error('★ ' + why + '(' + a2 + '~' + b2 + ')沒被擋:' + sum);
+      if (!await p.$eval('#psubmit', el => el.disabled)) throw new Error('★ ' + why + ' 還按得下送出');
+    };
+    await bad('0025-10-01', '0025-10-05', '年份少打一位');
+    await bad('9999-01-01', '9999-01-05', '年份多打一位');
+    await bad('2026-12-05', '2026-12-01', '歸還日早於借出日');
+    await bad('2026-12-01', '2030-12-01', '期間長達四年');
+    // 正常的日期要放行
+    const okA = new Date(Date.now() + 86400000 * 7).toISOString().slice(0, 10);
+    const okB = new Date(Date.now() + 86400000 * 10).toISOString().slice(0, 10);
+    await p.fill('#ps', okA); await p.dispatchEvent('#ps', 'change');
+    await p.fill('#pe', okB); await p.dispatchEvent('#pe', 'change');
+    await wait(1500);
+    const sum2 = await p.textContent('#psum');
+    if (/日期有問題/.test(sum2)) throw new Error('★ 正常的日期被誤擋:' + sum2);
+    // 日曆本身也要先擋住,不要讓人選得到離譜的年份
+    const lim = await p.$eval('#ps', el => [el.min, el.max]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lim[0]) || !/^\d{4}-\d{2}-\d{2}$/.test(lim[1]))
+      throw new Error('★ 日期欄位要有 min / max:' + lim.join('~'));
+    await p.click('[data-act=clear-cart]'); await wait(400);
+  }
+
   await p.setViewportSize({ width: 390, height: 844 }); await p.click('[data-v=catalog]'); await wait(300); await shot('mobile');
   const sw = await p.evaluate(() => document.documentElement.scrollWidth);
   console.log(errs.length ? 'ERR ' + errs.join('|') : '✔ UI 流程通過', 'scrollWidth=' + sw);

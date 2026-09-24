@@ -28,6 +28,28 @@ const store = {
 };
 const pad2 = n => String(n).padStart(2, '0');
 const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+
+/* 日期的合理範圍。上下界跟後端 20_logic.gs 的 saneRange 是同一組數字 ——
+   後端才是真正的守門,這裡只是讓人在按送出以前就看到問題,不用白跑一趟。 */
+const DATE_BACK_DAYS = 1095, DATE_FWD_DAYS = 1825, MAX_SPAN_DAYS = 730;
+const shiftDays = (d, k) => { const p = d.split('-'); return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + k)).toISOString().slice(0, 10); };
+const dayGap = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+/** 塞進 <input type="date"> 的 min/max,日曆本身就先擋掉離譜的年份 */
+const DLIM = () => `min="${shiftDays(todayStr(), -DATE_BACK_DAYS)}" max="${shiftDays(todayStr(), DATE_FWD_DAYS)}"`;
+/** 有問題回傳訊息,沒問題回空字串。只填一半也要檢查 —— 年份打錯通常在第一個欄位就看得出來 */
+function rangeProblem(a, b, la = '借出日', lb = '歸還日') {
+  const t = todayStr();
+  for (const [v, l] of [[a, la], [b, lb]]) {
+    if (!v) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return `${l}的格式不對`;
+    if (dayGap(t, v) < -DATE_BACK_DAYS) return `${l} ${v} 太久以前了,請確認年份有沒有打錯`;
+    if (dayGap(t, v) > DATE_FWD_DAYS) return `${l} ${v} 太遠了,請確認年份有沒有打錯`;
+  }
+  if (!a || !b) return '';
+  if (a > b) return `${lb}不可早於${la}`;
+  if (dayGap(a, b) > MAX_SPAN_DAYS) return `期間共 ${dayGap(a, b) + 1} 天,超過上限 ${MAX_SPAN_DAYS} 天,請確認日期有沒有打錯`;
+  return '';
+}
 const fmtD = d => d ? d.slice(5).replace('-', '/') : '';
 const ICON = {
   search: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
@@ -421,9 +443,17 @@ function renderTabs() {
   $('#tabs').innerHTML = tabsFor().map(([k, l]) => `<button class="tab ${S.view === k ? 'on' : ''}" data-act="go" data-v="${k}">${l}</button>`).join('');
 }
 let RGEN = 0;                    // 畫面世代:每次切換分頁 +1,用來丟掉「上一個分頁晚回來的資料」
+/** 量出標題列實際高度寫進 --toph:釘住的分類籤條要貼在它下面,不能猜一個固定值 */
+function measureTop() {
+  const t = document.querySelector('.top');
+  if (t) document.documentElement.style.setProperty('--toph', Math.round(t.getBoundingClientRect().height) + 'px');
+}
+addEventListener('resize', measureTop);
+
 async function render() {
   RGEN++;
   renderTabs();
+  measureTop();
   if (S.user) store.set('view_' + S.user.id, S.view);
   const main = $('#main');
   const V = VIEWS[S.view];
@@ -581,11 +611,11 @@ VIEWS.catalog = async main => {
     ${pick ? `<div class="card bulkbar" id="pickbar"></div>` : ''}
     <div class="toolbar">
       <input class="grow" type="search" id="cq" placeholder="搜尋品名、規格、位置…" value="${esc(f.q)}">
-      ${pick ? '' : `<span class="row" style="gap:6px"><input type="date" id="cs" value="${esc(f.start)}" aria-label="起"><span class="meta">→</span><input type="date" id="ce" value="${esc(f.end)}" aria-label="迄"></span>`}
+      ${pick ? '' : `<span class="row" style="gap:6px"><input type="date" id="cs" ${DLIM()} value="${esc(f.start)}" aria-label="起"><span class="meta">→</span><input type="date" id="ce" ${DLIM()} value="${esc(f.end)}" aria-label="迄"></span>`}
       <label class="chk"><input type="checkbox" id="cav" ${f.onlyAvail ? 'checked' : ''}>只看可借</label>
-      ${pick ? '' : `<button class="btn" data-act="export">${ICON.dl}<span class="lbl-hide">匯出</span></button>`}
+      ${pick ? '' : `<button class="btn" data-act="export" title="把目前的庫存表匯出成 CSV" aria-label="匯出庫存 CSV">${ICON.dl}<span class="lbl-hide">匯出</span></button>`}
     </div>
-    <div id="cbar"></div>
+    <div id="cbar" class="catbar-stick"></div>
     <div id="mbar"></div>
     ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到借用申請</a></div>` : ''}
     <div id="cgrid"></div>`;
@@ -675,7 +705,7 @@ VIEWS.plan = async main => {
   <h1>${ed ? '修改借用申請' : '借用申請'}</h1><p class="sub">先選日期,系統即時比對可借數量。全部足夠即可送出申請${admin && !ed ? ';口頭借用可用「代為登記」直接建單' : ''}。</p>
   <div class="plan">
     <div class="card">
-      <div class="grid2"><label class="f"><span>借出日 <b>*</b></span><input type="date" id="ps" value="${esc(P.start)}"></label><label class="f"><span>歸還日 <b>*</b></span><input type="date" id="pe" value="${esc(P.end)}"></label></div>
+      <div class="grid2"><label class="f"><span>借出日 <b>*</b></span><input type="date" id="ps" ${DLIM()} value="${esc(P.start)}"></label><label class="f"><span>歸還日 <b>*</b></span><input type="date" id="pe" ${DLIM()} value="${esc(P.end)}"></label></div>
       <div class="lines" id="plines"></div>
       <div id="psum"></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" data-act="go" data-v="catalog">${ICON.plus}繼續加展品</button><button class="btn sm ghost" data-act="clear-cart">清空</button><span class="spacer"></span><button class="btn sm" data-act="copy-plan">複製清單</button></div>
@@ -694,7 +724,7 @@ VIEWS.plan = async main => {
       <button class="btn pri" style="width:100%" id="psubmit">${ed ? '儲存修改' : '送出借用申請'}</button>
     </form>
   </div>`;
-  let lastCheck = [];
+  let lastCheck = [], dateErr = rangeProblem(P.start, P.end);
   const drawLines = () => {
     const ck = Object.fromEntries(lastCheck.map(c => [c.itemId + '@' + (c.location || ''), c]));
     $('#plines').innerHTML = S.cart.map(c => {
@@ -710,15 +740,17 @@ VIEWS.plan = async main => {
     }).join('');
     $$('[data-cqi]').forEach(inp => inp.onchange = () => { const c = S.cart.find(x => ckey(x) === inp.dataset.cqi); c.qty = Math.max(1, parseInt(inp.value, 10) || 1); saveCart(); recheck(); });
     const short = lastCheck.filter(c => c.short);
-    const hasRange = P.start && P.end;
-    $('#psum').innerHTML = !hasRange ? `<div class="sumbar banner info">選擇日期後會檢查每項是否足夠</div>`
+    const hasRange = P.start && P.end && !dateErr;
+    $('#psum').innerHTML = dateErr ? `<div class="sumbar banner bad"><b>日期有問題</b>:${esc(dateErr)}</div>`
+      : !hasRange ? `<div class="sumbar banner info">選擇日期後會檢查每項是否足夠</div>`
       : short.length ? `<div class="sumbar banner bad"><b>缺 ${short.length} 項</b>:${short.map(s => esc(s.name) + (s.location ? '(' + esc(s.location) + ')' : '') + ' ×' + s.short).join('、')}</div>`
         : `<div class="sumbar banner ok"><b>全部足夠</b>,共 ${S.cart.length} 項 ${S.cart.reduce((a, c) => a + c.qty, 0)} 件</div>`;
     const force = admin && $('#pform [name=force]') && $('#pform [name=force]').checked;
     $('#psubmit').disabled = !hasRange || (short.length && !force);
   };
   const recheck = async () => {
-    if (P.start && P.end && P.start <= P.end) {
+    dateErr = rangeProblem(P.start, P.end);
+    if (!dateErr && P.start && P.end) {
       try { lastCheck = await api('check', { start: P.start, end: P.end, lines: S.cart, excludeId: ed ? ed.id : '' }); } catch (e) { lastCheck = []; toast(e.message, true); }
     } else lastCheck = [];
     drawLines();
@@ -730,6 +762,7 @@ VIEWS.plan = async main => {
   // 先用在庫數把清單畫出來,不要讓它空在那裡等後端 —— 可借量回來再補上去就好
   drawLines();
   preCheck.then(pre => {
+    if (dateErr) return;                                     // 日期本身就有問題,算可借量沒有意義
     if (pre) { lastCheck = pre; drawLines(); }
     else if (P.start && P.end && S.cart.length) recheck();   // 那一趟失敗了才補打一次(順便讓錯誤訊息出得來)
   });
@@ -740,6 +773,8 @@ VIEWS.plan = async main => {
   $('#pform').onsubmit = async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
+    const bad = rangeProblem(P.start, P.end);
+    if (bad) return toast(bad, true);
     const payload = { ...fd, start: P.start, end: P.end, lines: S.cart, onBehalf: !!fd.onBehalf, force: !!fd.force };
     if (payload.onBehalf && !String(fd.applicant || '').trim()) return toast('請填寫借用人', true);
     if (ed) {
@@ -1254,8 +1289,8 @@ async function drawShow(main) {
     <form class="card" id="shform">
       <label class="f"><span>展覽名稱 <b>*</b></span><input type="text" name="name" required maxlength="60" value="${esc(v.name)}"></label>
       <div class="grid2">
-        <label class="f"><span>檔期開始 <b>*</b></span><input type="date" name="from" required value="${esc(v.from)}"></label>
-        <label class="f"><span>檔期結束 <b>*</b></span><input type="date" name="to" required value="${esc(v.to)}"></label>
+        <label class="f"><span>檔期開始 <b>*</b></span><input type="date" name="from" required ${DLIM()} value="${esc(v.from)}"></label>
+        <label class="f"><span>檔期結束 <b>*</b></span><input type="date" name="to" required ${DLIM()} value="${esc(v.to)}"></label>
       </div>
       <div class="meta" style="margin:-4px 0 12px">檔期要把佈展與撤展的日子算進去 —— 卡位是用這個區間算的。對外的展出日期可以寫在備註。</div>
       <div class="grid2">
@@ -1342,7 +1377,9 @@ async function drawShow(main) {
   };
   const recheck = async () => {
     const f = new FormData($('#shform')), from = f.get('from'), to = f.get('to');
-    if (from && to && from <= to && S.showLines.length) {
+    const bad = rangeProblem(from, to, '檔期開始', '檔期結束');
+    if (bad) { gaps = []; toast(bad, true); return drawLines(); }
+    if (from && to && S.showLines.length) {
       try { gaps = await api('showCheck', { id: isNew ? '' : v.id, from, to, lines: showDraftLines() }); }
       catch (e) { gaps = []; toast(e.message, true); }
     } else gaps = [];
@@ -1359,6 +1396,8 @@ async function drawShow(main) {
   $('#shform').onsubmit = async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
+    const bad = rangeProblem(fd.from, fd.to, '檔期開始', '檔期結束');
+    if (bad) return toast(bad, true);
     const saved = await run(() => api('saveShow', { show: { ...fd, id: isNew ? '' : v.id, lines: showDraftLines() } }),
       isNew ? '展覽已建立,接下來去挑展品' : '已儲存').catch(() => null);
     if (!saved) return;
@@ -1554,7 +1593,7 @@ function extendModal(id, asAdmin) {
   if (!L) return toast('請重新整理這一頁', true);
   const m = openModal(`<h2>${asAdmin ? '延長歸還日' : '申請延長歸還日'} ${esc(id)}</h2>
     <p class="sub">${esc(L.event)}・目前歸還日 <b>${esc(L.end)}</b>。系統會檢查多出來的那一段期間還借不借得到。</p>
-    <label class="f"><span>新的歸還日 <b>*</b></span><input type="date" id="xd" min="${esc(plusDays(L.end, 1))}" value="${esc(plusDays(L.end, 7))}"></label>
+    <label class="f"><span>新的歸還日 <b>*</b></span><input type="date" id="xd" min="${esc(plusDays(L.end, 1))}" max="${esc(shiftDays(todayStr(), DATE_FWD_DAYS))}" value="${esc(plusDays(L.end, 7))}"></label>
     <label class="f"><span>說明</span><input type="text" id="xn" placeholder="例:展期延後一週"></label>
     ${asAdmin ? '<label class="chk"><input type="checkbox" id="xf">數量不足仍延期</label>' : ''}
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="xgo">${asAdmin ? '確定延期' : '送出申請'}</button></div>`);
@@ -2357,7 +2396,7 @@ const ACT = {
     const newEnd = esc(v.to);
     openModal(`<h2>批次延期</h2>
       <p class="meta">改檔期不會自動改單。勾選要一起延的,系統會逐張檢查延長那一段的庫存,一張失敗不影響其他張。</p>
-      <label class="f"><span>新的歸還日</span><input type="date" id="se-end" value="${newEnd}"></label>
+      <label class="f"><span>新的歸還日</span><input type="date" id="se-end" ${DLIM()} value="${newEnd}"></label>
       ${live.map(L => `<label class="chk"><input type="checkbox" class="se-id" value="${esc(L.id)}" ${L.end < v.to ? 'checked' : ''}>
         <span class="mono">${esc(L.id)}</span> ${esc(L.applicant)}・${fmtD(L.start)} → ${fmtD(L.end)}</label>`).join('')}
       <label class="chk" style="margin-top:8px"><input type="checkbox" id="se-force">庫存不足仍延期</label>

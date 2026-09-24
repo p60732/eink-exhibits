@@ -37,6 +37,29 @@ var Logic = (function () {
     var p = d.split('-'), dt = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + k));
     return dt.toISOString().slice(0, 10);
   }
+  function dayDiff(a, b) { return Math.round((Date.parse(b) - Date.parse(a)) / 86400000); }
+  /**
+   * 日期合理範圍。type=date 的欄位很容易打成 0025-03-01 或 20255-03-01,
+   * 日曆上算合法,可是那種單不該進得來 —— 進來之後庫存試算、逾期天數、統計全部會被帶歪。
+   */
+  var DATE_BACK_DAYS = 1095;   // 往前最多 3 年(補登舊紀錄夠用)
+  var DATE_FWD_DAYS = 1825;    // 往後最多 5 年
+  var MAX_SPAN_DAYS = 730;     // 單一期間最長 2 年
+  function saneDate(v, today, label) {
+    if (!isDate(v)) throw E('請填寫' + label);
+    v = s(v);
+    var d = dayDiff(today, v);
+    if (d < -DATE_BACK_DAYS) throw E(label + ' ' + v + ' 太久以前了(最早 ' + addDays(today, -DATE_BACK_DAYS) + '),請確認年份有沒有打錯');
+    if (d > DATE_FWD_DAYS) throw E(label + ' ' + v + ' 太遠了(最晚 ' + addDays(today, DATE_FWD_DAYS) + '),請確認年份有沒有打錯');
+    return v;
+  }
+  function saneRange(a, b, today, la, lb) {
+    var x = saneDate(a, today, la), y = saneDate(b, today, lb);
+    if (x > y) throw E(lb + '不可早於' + la);
+    var span = dayDiff(x, y);
+    if (span > MAX_SPAN_DAYS) throw E('期間共 ' + (span + 1) + ' 天,超過上限 ' + MAX_SPAN_DAYS + ' 天,請確認日期有沒有打錯');
+    return [x, y];
+  }
   /**
    * 本次請求的暫存索引。放在 WeakMap 而不是 db 上,規則層依然沒有碰到資料本身。
    * 資料一變就清掉,不會拿到過期的數字。
@@ -374,10 +397,9 @@ var Logic = (function () {
     if (range) v.available = Math.max(0, availableInRange(db, it, null, range[0], range[1], null, today, exShow || null));
     return v;
   }
-  function validRange(p) {
+  function validRange(p, today) {
     if (!isDate(p.start) || !isDate(p.end)) throw E('請填寫借用起訖日期');
-    if (p.start > p.end) throw E('歸還日不可早於借出日');
-    return [p.start, p.end];
+    return saneRange(p.start, p.end, today, '借出日', '歸還日');
   }
   /** 同一個品項在不同地點算不同行;沒指定地點時,只有一個地點就自動補上,有兩個以上就要求指定 */
   function cleanLines(db, lines) {
@@ -448,8 +470,9 @@ var Logic = (function () {
   /* ---------- 延期 / 轉借(管理者後台與當面確認共用) ---------- */
   /** 只檢查日期與延長期間的可借量,回傳不足的品項 */
   function checkExtend(db, L, newEnd, today) {
-    if (!isDate(newEnd)) throw E('請填寫新的歸還日');
+    newEnd = saneDate(newEnd, today, '新的歸還日');
     if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');
+    if (dayDiff(s(L.start), newEnd) > MAX_SPAN_DAYS) throw E('延長後整段期間共 ' + (dayDiff(s(L.start), newEnd) + 1) + ' 天,超過上限 ' + MAX_SPAN_DAYS + ' 天');
     return checkLines(db, L.lines, addDays(L.end, 1), newEnd, L.id, today, s(L.showId)).filter(function (x) { return x.short > 0; });
   }
   function doExtend(c, L, newEnd, note, force) {
@@ -788,7 +811,7 @@ var Logic = (function () {
   var USER = {
     catalog: function (c) {
       var today = c.today, range = null;
-      if (isDate(c.p.start) && isDate(c.p.end)) range = [c.p.start, c.p.end];
+      if (isDate(c.p.start) && isDate(c.p.end)) range = saneRange(c.p.start, c.p.end, today, '起日', '迄日');
       // 為某一場展覽挑選時,要把那場自己的卡位排除掉,否則它會擋住自己
       var exShow = s(c.p.showId) || null;
       if (exShow && c.user.role !== 'admin') throw E('只有管理者可以為展覽挑選展品');
@@ -797,12 +820,12 @@ var Logic = (function () {
         .map(function (it) { return itemView(c.db, it, st, range, today, exShow); });
     },
     check: function (c) {
-      var r = validRange(c.p);
+      var r = validRange(c.p, c.today);
       var lines = (c.p.lines || []).filter(function (l) { return int(l.qty) > 0; });
       return checkLines(c.db, lines, r[0], r[1], c.p.excludeId || null, c.today);
     },
     createLoan: function (c) {
-      var r = validRange(c.p), today = c.today, isAdmin = c.user.role === 'admin';
+      var today = c.today, r = validRange(c.p, today), isAdmin = c.user.role === 'admin';
       if (!isAdmin && r[0] < today) throw E('借出日不可早於今天');
       if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
       var showId = s(c.p.showId);
@@ -852,7 +875,7 @@ var Logic = (function () {
     updateLoan: function (c) {
       var L = ownLoan(c), isAdmin = c.user.role === 'admin';
       if (L.status !== 'pending') throw E('只有「待審核」的申請可以修改');
-      var r = validRange(c.p);
+      var r = validRange(c.p, c.today);
       if (!isAdmin && r[0] < c.today) throw E('借出日不可早於今天');
       if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
       var lines = cleanLines(c.db, c.p.lines);
@@ -948,13 +971,13 @@ var Logic = (function () {
       var it = byId(c.db.Items, s(c.p.itemId));
       if (!it) throw E('找不到展品');
       if (!isDate(c.p.from) || !isDate(c.p.to)) throw E('請指定期間');
-      if (s(c.p.from) > s(c.p.to)) throw E('結束日不可早於開始日');
+      var hr = saneRange(c.p.from, c.p.to, c.today, '開始日', '結束日');
       var where = s(c.p.location) ? loc(c.p.location) : null;
-      var r = holdersOf(c.db, it.id, where, s(c.p.from), s(c.p.to), c.today,
+      var r = holdersOf(c.db, it.id, where, hr[0], hr[1], c.today,
         s(c.p.excludeId) || null, s(c.p.excludeShowId) || null, c.user.role === 'admin');
       r.itemId = it.id; r.name = it.name; r.location = where || '';
       r.capacity = capacity(c.db, it, where);
-      r.available = Math.max(0, availableInRange(c.db, it, where, s(c.p.from), s(c.p.to),
+      r.available = Math.max(0, availableInRange(c.db, it, where, hr[0], hr[1],
         s(c.p.excludeId) || null, c.today, s(c.p.excludeShowId) || null));
       return r;
     },
@@ -1092,8 +1115,8 @@ var Logic = (function () {
     /** 編輯中即時看缺口:還沒存檔也能算,所以清單由參數帶進來 */
     showCheck: function (c) {
       if (!isDate(c.p.from) || !isDate(c.p.to)) throw E('請先填寫檔期起訖日期');
-      if (s(c.p.from) > s(c.p.to)) throw E('結束日不可早於開始日');
-      var draft = { id: s(c.p.id) || '-', from: s(c.p.from), to: s(c.p.to), lines: cleanShowLines(c.db, c.p.lines) };
+      var dr = saneRange(c.p.from, c.p.to, c.today, '開始日', '結束日');
+      var draft = { id: s(c.p.id) || '-', from: dr[0], to: dr[1], lines: cleanShowLines(c.db, c.p.lines) };
       return draft.lines.map(function (ln) { return showLineView(c.db, draft, ln, c.today); });
     },
     saveShow: function (c) {
@@ -1101,7 +1124,7 @@ var Logic = (function () {
       if (!name) throw E('請填寫展覽名稱');
       if (name.length > 60) throw E('展覽名稱過長(上限 60 字)');
       if (!isDate(p.from) || !isDate(p.to)) throw E('請填寫檔期起訖日期');
-      if (s(p.from) > s(p.to)) throw E('結束日不可早於開始日');
+      var sr = saneRange(p.from, p.to, today, '開始日', '結束日');
       if (s(p.owner) && !findByEmp(c.db, p.owner)) throw E('查無承辦人工號 ' + s(p.owner));
       var lines = cleanShowLines(c.db, p.lines);
       if (lines.length > 300) throw E('一場展覽最多 300 項');
@@ -1113,7 +1136,7 @@ var Logic = (function () {
         S = { id: nextId(c.db.Shows, 'S' + today.slice(2, 4) + '-', 3), status: 'draft', createdBy: c.user.name, createdAt: c.now };
         c.db.Shows.push(S);
       }
-      S.name = name; S.from = s(p.from); S.to = s(p.to); S.venue = s(p.venue);
+      S.name = name; S.from = sr[0]; S.to = sr[1]; S.venue = s(p.venue);
       S.owner = s(p.owner).toUpperCase(); S.note = s(p.note); S.lines = lines; S.updatedAt = c.now;
       dirty(c.db, 'Shows');
       log(c, id ? '修改展覽' : '新增展覽', S.id, before + name + '|' + S.from + '~' + S.to + '|' + lines.length + ' 項');
@@ -1312,7 +1335,7 @@ var Logic = (function () {
       var ids = (c.p.ids || []).map(s).filter(Boolean), ok = 0, fail = [];
       if (!ids.length) throw E('請先勾選要延期的借用單');
       if (ids.length > 50) throw E('一次最多延期 50 張');
-      if (!isDate(c.p.end)) throw E('請填寫新的歸還日');
+      saneDate(c.p.end, c.today, '新的歸還日');
       ids.forEach(function (id) {
         var sub = { db: c.db, p: { id: id, end: s(c.p.end), note: s(c.p.note), force: bool(c.p.force) }, user: c.user,
           today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify };
@@ -1579,6 +1602,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, saneDate: saneDate, saneRange: saneRange, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules };
 })();

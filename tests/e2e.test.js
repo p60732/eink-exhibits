@@ -782,6 +782,38 @@ const itemCountBefore = ok('items', {}, A).length;
   G.sheets['展品'].data[0] = head;
 }
 
+/* ===== v2.5.3:離譜的借出 / 歸還日期不可以送得進來 =====
+   type=date 打成 0025 或 9999 在日曆上是合法日期,以前一路過關到工作表裡;
+   之後逾期天數、可借量、統計全部被那張單帶歪,而且不容易發現是哪一張。 */
+{
+  const DZ = ok('saveItem', { item: { name: '日期檢查用機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 3 }] } }, A);
+  const L1 = [{ itemId: DZ.id, location: '新竹', qty: 1 }];
+  const mk = (start, end, who) => ({ event: '日期測試', start: start, end: end, lines: L1, onBehalf: true, applicant: '10231' });
+
+  bad('createLoan', mk('0025-10-01', '0025-10-05'), A, /太久以前/);
+  bad('createLoan', mk('2026-10-01', '9999-12-31'), A, /太遠/);
+  bad('createLoan', mk('2026-10-05', '2026-10-01'), A, /不可早於/);
+  bad('createLoan', mk('2026-10-01', '2030-10-01'), A, /超過上限/);   // 四年,單一張單不合理
+  // 管理者可以補登舊單,但也只能補到三年內
+  bad('createLoan', mk('2020-01-01', '2020-01-05'), A, /太久以前/);
+  ok('createLoan', mk('2026-10-01', '2026-10-05'), A);                // 正常的照樣過
+
+  // 展覽檔期走同一套
+  bad('saveShow', { show: { name: '年份打錯展', from: '0025-01-01', to: '0025-01-05' } }, A, /太久以前/);
+  bad('saveShow', { show: { name: '三年展', from: '2026-10-01', to: '2029-10-01' } }, A, /超過上限/);
+  // 試算與「缺口是誰佔的」也不該拿離譜的日期去算
+  bad('showCheck', { id: '', from: '2026-10-01', to: '9999-01-01', lines: L1 }, A, /太遠/);
+  bad('holders', { itemId: DZ.id, location: '新竹', from: '0025-01-01', to: '0025-01-05' }, A, /太久以前/);
+  bad('check', { start: '2026-10-01', end: '9999-01-01', lines: L1 }, A, /太遠/);
+
+  // 延期不可以把整段期間撐過上限,也不可以延到天邊
+  const DL = ok('createLoan', { event: '延期上限測試', start: '2026-10-01', end: '2026-10-05',
+    lines: L1, onBehalf: true, applicant: '10231' }, A);
+  bad('extendLoan', { id: DL.id, end: '9999-01-01' }, A, /太遠/);
+  bad('extendLoan', { id: DL.id, end: '2029-10-01' }, A, /超過上限/);
+  ok('extendLoan', { id: DL.id, end: '2026-11-05' }, A);
+}
+
 const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [

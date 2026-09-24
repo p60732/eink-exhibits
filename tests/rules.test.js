@@ -8,6 +8,25 @@ t('日期格式:閏年、月底、錯誤日期', () => {
   assert.ok(R.isDate('2028-02-29')); assert.ok(!R.isDate('2026-02-29'));
   assert.ok(!R.isDate('2026-13-01')); assert.ok(!R.isDate('2026-04-31')); assert.ok(!R.isDate('2026/10/01')); assert.ok(!R.isDate(''));
 });
+t('日期合理範圍:年份打錯(0025 / 9999)日曆上合法,但不可以進得來', () => {
+  const T = '2026-09-22';
+  assert.strictEqual(R.saneDate('2026-10-01', T, '借出日'), '2026-10-01');
+  assert.throws(() => R.saneDate('0025-10-01', T, '借出日'), /太久以前/);
+  assert.throws(() => R.saneDate('9999-12-31', T, '歸還日'), /太遠/);
+  assert.throws(() => R.saneDate('2026-02-29', T, '借出日'), /請填寫/);
+  // 邊界:剛好在界線上要過,再過去一天就不行
+  assert.ok(R.saneDate(R.addDays(T, -1095), T, '借出日'));
+  assert.throws(() => R.saneDate(R.addDays(T, -1096), T, '借出日'), /太久以前/);
+  assert.ok(R.saneDate(R.addDays(T, 1825), T, '歸還日'));
+  assert.throws(() => R.saneDate(R.addDays(T, 1826), T, '歸還日'), /太遠/);
+});
+t('日期合理範圍:期間最長兩年,顛倒的日期照樣擋', () => {
+  const T = '2026-09-22';
+  assert.deepStrictEqual(R.saneRange('2026-10-01', '2026-10-05', T, '借出日', '歸還日').join(), '2026-10-01,2026-10-05');
+  assert.throws(() => R.saneRange('2026-10-05', '2026-10-01', T, '借出日', '歸還日'), /不可早於/);
+  assert.ok(R.saneRange(T, R.addDays(T, 730), T, '借出日', '歸還日'));
+  assert.throws(() => R.saneRange(T, R.addDays(T, 731), T, '借出日', '歸還日'), /超過上限/);
+});
 t('加天數:跨月、跨年', () => {
   assert.strictEqual(R.addDays('2026-01-31', 1), '2026-02-01');
   assert.strictEqual(R.addDays('2026-12-31', 1), '2027-01-01');

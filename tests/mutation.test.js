@@ -12,6 +12,10 @@ const M = [
   ['20_logic.gs', 'if (short.length && !(isAdmin && c.p.force)) {', 'if (false) {', '拿掉庫存不足檢查'],
   ['20_logic.gs', "if (L.applicantId !== c.user.id && c.user.role !== 'admin') throw E('這不是你的借用單');", '', '可操作別人的借用單'],
   ['20_logic.gs', "if (!isDate(p.start) || !isDate(p.end)) throw E('請填寫借用起訖日期');", '', '拿掉日期格式驗證'],
+  ['20_logic.gs', 'if (d < -DATE_BACK_DAYS) throw', 'if (false) throw', '拿掉「日期太久以前」的檢查'],
+  ['20_logic.gs', 'if (d > DATE_FWD_DAYS) throw', 'if (false) throw', '拿掉「日期太遠」的檢查'],
+  ['20_logic.gs', 'if (span > MAX_SPAN_DAYS) throw', 'if (false) throw', '拿掉單一期間長度上限'],
+  ['20_logic.gs', "if (x > y) throw E(lb + '不可早於' + la);", '', '歸還日早於借出日照樣放行'],
   // 效能重構的守門:欄位少讀 / 表少讀 / 快取沒失效,都必須被 e2e 抓到
   ['00_gateway.gs', "LOAN_CALC: ['id', 'status', 'start', 'end', 'lines']", "LOAN_CALC: ['id', 'status', 'start', 'end']", '可借量計算少讀 lines 欄'],
   ['00_gateway.gs', "ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'archived']", "ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'archived']", '展品少讀各地點庫存(stock)欄'],

@@ -130,4 +130,20 @@ t('建置:js/css 必須帶內容雜湊,部署後瀏覽器才不會繼續用舊�
   assert.ok(/\?v=' \+ stamp\(f\)/.test(b), 'build.js 要把 ?v=<雜湊> 掛到 index.html 的資源上');
   assert.ok(/少了快取破壞參數/.test(b), 'build.js 要自我檢查有沒有掛上去');
 });
+t('日期上下界:前端與規則層必須是同一組數字', () => {
+  // 兩邊各寫一份是刻意的(前端先擋一次,不用白跑一趟後端),但數字一旦漂開,
+  // 使用者會看到「前端說可以、後端說不行」這種最難查的狀況。
+  const grab = (src, name) => {
+    const m = src.match(new RegExp(name + '\\s*=\\s*(\\d+)'));
+    assert.ok(m, name + ' 找不到');
+    return m[1];
+  };
+  const g = read('gas/20_logic.gs'), u = read('js/ui.js');
+  ['DATE_BACK_DAYS', 'DATE_FWD_DAYS', 'MAX_SPAN_DAYS'].forEach(k =>
+    assert.strictEqual(grab(u, k), grab(g, k), k + ' 前端與規則層不一致'));
+  // 前端要真的用上它們:欄位要有 min/max,送出前要再檢查一次
+  assert.ok(/const DLIM = \(\) =>[\s\S]{0,200}min="/.test(u), '日期欄位要吐得出 min/max');
+  assert.ok((u.match(/\$\{DLIM\(\)\}/g) || []).length >= 6, '每個日期欄位都要掛上 min/max');
+  assert.ok(/rangeProblem\(/.test(u), '前端要有送出前的日期檢查');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

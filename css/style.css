@@ -96,6 +96,14 @@ label.f b{color:var(--red);font-weight:400}
 /* 分類籤條 */
 .catbar{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .catbar::-webkit-scrollbar{display:none}
+/* 分類籤條釘在標題列底下。展品多的時候,要換分類不必一路捲回最上面。
+   --toph 是標題列實際高度,由 ui.js 量出來寫進 :root(改字級、換行都跟得上)。
+   z-index 要低於 .top(20),籤條才會被標題列蓋住而不是反過來。 */
+.catbar-stick{position:sticky;top:var(--toph,56px);z-index:15;background:var(--bg);
+  margin:0 -20px;padding:10px 20px 0;border-bottom:1px solid var(--line)}
+.catbar-stick .catbar{padding-bottom:10px}
+@media (max-width:760px){ .catbar-stick{margin:0 -16px;padding:8px 16px 0} }
+@media print{ .catbar-stick{position:static;border:0} }
 .catchip{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--line);
   border-radius:999px;background:var(--surface);color:var(--text);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
 .catchip:hover{border-color:var(--gray)}
