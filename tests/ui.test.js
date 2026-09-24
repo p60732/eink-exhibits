@@ -488,6 +488,36 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-v=plan]'); await wait(800);
   if (!/還沒有選任何展品/.test(await p.textContent('#main'))) throw new Error('★ 換人登入後購物車應該是空的');
 
+  // ---- 「系統已經更新」橫幅(v2.3.2)----
+  // index.html 本身也會被瀏覽器快取,舊的 HTML 裡寫的還是舊的 ?v=,所以「重新整理」常常沒有用。
+  // 這裡假裝「這一份頁面是舊的建置、伺服器上已經是新的」,驗證橫幅會出現、按了會帶著新編號重新載入。
+  {
+    const srcHtml = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+    const p2 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    p2.on('dialog', dlg => dlg.accept());
+    await p2.route('**/version.json*', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"build":"bbbbbbbb"}' }));
+    await p2.route(URL, r => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: srcHtml.replace('__BUILD__', 'aaaaaaaa') }));
+    await p2.goto(URL);
+    await p2.waitForSelector('#newver', { timeout: 10000 }).catch(() => { throw new Error('★ 建置編號不一樣時要掛出「系統已經更新」橫幅'); });
+    if (!/已經更新/.test(await p2.textContent('#newver'))) throw new Error('橫幅文字不對');
+    await p2.click('#nv-go'); await p2.waitForTimeout(1500);
+    if (!/\?b=bbbbbbbb/.test(p2.url())) throw new Error('★ 按了更新要換一個帶建置編號的網址(reload 可能又拿到快取裡的舊 HTML):' + p2.url());
+    // 編號一樣的時候不可以打擾使用者
+    const p3 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    await p3.route('**/version.json*', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"build":"aaaaaaaa"}' }));
+    await p3.route(URL, r => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: srcHtml.replace('__BUILD__', 'aaaaaaaa') }));
+    await p3.goto(URL); await p3.waitForTimeout(2500);
+    if (await p3.$('#newver')) throw new Error('★ 編號一樣就不該跳更新橫幅');
+    // 拿不到 version.json 也不可以壞掉(離線 / 還沒部署)
+    const p4 = await b.newPage({ viewport: { width: 1280, height: 900 } });
+    const e4 = []; p4.on('pageerror', e => e4.push(e.message));
+    await p4.route('**/version.json*', r => r.abort());
+    await p4.route(URL, r => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: srcHtml.replace('__BUILD__', 'aaaaaaaa') }));
+    await p4.goto(URL); await p4.waitForSelector('#login-f', { timeout: 10000 });
+    if (e4.length) throw new Error('★ 抓不到 version.json 不可以影響正常使用:' + e4.join('|'));
+    await p2.close(); await p3.close(); await p4.close();
+  }
+
   await p.setViewportSize({ width: 390, height: 844 }); await p.click('[data-v=catalog]'); await wait(300); await shot('mobile');
   const sw = await p.evaluate(() => document.documentElement.scrollWidth);
   console.log(errs.length ? 'ERR ' + errs.join('|') : '✔ UI 流程通過', 'scrollWidth=' + sw);

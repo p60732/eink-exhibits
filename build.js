@@ -48,6 +48,19 @@ const ASSETS = ['css/style.css', 'js/connect.js', 'js/ui.js'];
   fs.writeFileSync(idx, html);
   const missing = ASSETS.filter(f => !new RegExp(f.replace('.', '\\.') + '\\?v=[0-9a-f]{8}').test(html));
   if (missing.length) { console.error('✘ index.html 少了快取破壞參數:' + missing.join('、')); process.exit(1); }
+  /**
+   * 建置編號 + version.json。
+   * 上面那個 `?v=` 只保護得了 js/css —— index.html 自己被瀏覽器快取住的話,裡面寫的還是舊的 `?v=`,
+   * 於是「已經部署好了,使用者重新整理卻還是舊畫面」(2026-09-24 踩到,要硬重新整理才看得到)。
+   * 所以另外放一支不進快取的 version.json,前端拿它跟內嵌的建置編號比,不一樣就掛一條「立即更新」。
+   */
+  const build = require('crypto').createHash('sha256').update(ASSETS.map(stamp).join('|')).digest('hex').slice(0, 8);
+  html = html.replace('__BUILD__', build);
+  fs.writeFileSync(idx, html);
+  if (html.includes('__BUILD__') || html.indexOf('name="build" content="' + build + '"') < 0) {
+    console.error('✘ index.html 沒有填入建置編號'); process.exit(1);
+  }
+  fs.writeFileSync(path.join(dist, 'site/version.json'), JSON.stringify({ build: build }));
 }
 fs.writeFileSync(path.join(dist, 'site/.nojekyll'), '');
 // 後端:原樣複製
@@ -59,7 +72,7 @@ const diff = [];
 ['index.html', 'css/style.css', 'js/ui.js'].forEach(f => {
   const a = fs.readFileSync(path.join(root, f), 'utf8');
   let b = fs.readFileSync(path.join(dist, 'site', f), 'utf8');
-  if (f === 'index.html') b = b.replace(/\?v=[0-9a-f]{8}/g, '');
+  if (f === 'index.html') b = b.replace(/\?v=[0-9a-f]{8}/g, '').replace(/name="build" content="[0-9a-f]{8}"/, 'name="build" content="__BUILD__"');
   if (a !== b) diff.push(f);
 });
 fs.readdirSync(path.join(root, 'gas')).forEach(f => { if (fs.readFileSync(path.join(root, 'gas', f), 'utf8') !== fs.readFileSync(path.join(dist, 'gas', f), 'utf8')) diff.push('gas/' + f); });

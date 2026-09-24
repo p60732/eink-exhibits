@@ -184,8 +184,44 @@ async function openScanner(onCode, title = '掃描 QR Code') {
   }
 }
 
+/* ===================== 新版本偵測 =====================
+ * `?v=<雜湊>` 只破壞得了 js/css 的快取 —— index.html 自己還是會被瀏覽器快取住,
+ * 而舊的 index.html 裡寫的仍然是舊的 `?v=`,所以換版之後「重新整理」常常沒有用(2026-09-24 踩到)。
+ * 做法:每次建置寫一個 version.json,頁面載入時拿它跟自己內嵌的建置編號比。
+ * 就算這份 HTML 是從快取來的也照樣比得出來 —— 因為 version.json 是明確不進快取的。
+ * 不自動重新整理:有人可能正在填單。只掛一條橫幅,由他決定什麼時候更新。
+ */
+const BUILD = (document.querySelector('meta[name=build]') || {}).content || '';
+let lastBuildChk = 0;
+async function checkBuild(force) {
+  if (!BUILD || BUILD.indexOf('__') === 0) return;            // 直接開原始檔(沒經過建置)就不用比
+  if (!force && Date.now() - lastBuildChk < 600000) return;   // 最多十分鐘問一次
+  lastBuildChk = Date.now();
+  try {
+    const r = await fetch('version.json?cb=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const live = (await r.json()).build;
+    if (live && live !== BUILD) showNewVer(live);
+  } catch (e) { /* 連不到就算了,絕對不能影響正常使用 */ }
+}
+function showNewVer(live) {
+  if ($('#newver')) return;
+  const bar = document.createElement('div');
+  bar.id = 'newver'; bar.className = 'newver';
+  bar.innerHTML = `<span>系統已經更新,你看到的是舊畫面。</span><button class="btn sm pri" id="nv-go">立即更新</button>`;
+  document.body.appendChild(bar);
+  $('#nv-go').onclick = () => {
+    // 不能用 location.reload() —— 它可能又從快取拿同一份舊的 index.html。
+    // 換一個網址(帶建置編號)才會真的去抓新的。
+    const to = location.pathname + '?b=' + encodeURIComponent(live);
+    location.replace(to);
+  };
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkBuild(); });
+
 /* ===================== 登入 ===================== */
 async function boot() {
+  checkBuild(true);
   S.token = store.get('token', null); S.user = store.get('user', null);
   if (S.token && S.user) {
     try { S.user = await api('me'); store.set('user', S.user); return enterApp(); } catch (e) { }

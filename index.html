@@ -4,6 +4,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- 這一頁本身不要被瀏覽器快取:`?v=` 只破壞得了 js/css 的快取,index.html 自己被快取住的話,
+     裡面寫的還是舊的 ?v=,換版之後重新整理仍然會看到舊畫面(踩過)。
+     不過各家瀏覽器對這個 meta 的支援不一致,真正可靠的是下面那個建置編號 + version.json 的比對。 -->
+<meta http-equiv="Cache-Control" content="no-cache">
+<meta name="build" content="__BUILD__">
 <title>展品管理</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%230f766e'/><path d='M5 9l7-3.5L19 9l-7 3.5L5 9zM5 9v6.5l7 3.5 7-3.5V9M12 12.5V19' fill='none' stroke='white' stroke-width='1.8'/></svg>">
 <link rel="stylesheet" href="css/style.css">

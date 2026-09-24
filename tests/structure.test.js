@@ -85,6 +85,23 @@ t('歷史工作表只能附加,不可以整張寫回', () => {
 t('積木檔頭:每個檔案宣告所屬積木與禁止事項', () => {
   [...gasFiles.map(f => 'gas/' + f), 'js/connect.js', 'js/ui.js'].forEach(f => { const s = read(f); assert.ok(/【.+積木】/.test(s) && /禁止/.test(s), f); });
 });
+t('建置:index.html 本身也會被快取,所以要有建置編號 + version.json', () => {
+  // `?v=` 只保護得了 js/css。index.html 被快取住時,裡面寫的還是舊的 ?v=,
+  // 於是「已經部署好了,重新整理卻還是舊畫面」。這一組是專門守那個情況的。
+  const h = read('index.html');
+  assert.ok(/name="build" content="__BUILD__"/.test(h), 'index.html 要有建置編號的佔位符');
+  assert.ok(/http-equiv="Cache-Control"/.test(h), 'index.html 要宣告不要被快取');
+  const b = read('build.js');
+  assert.ok(/html\.replace\('__BUILD__', build\)/.test(b), 'build.js 要把建置編號填進去');
+  assert.ok(/site\/version\.json/.test(b), 'build.js 要產生 version.json');
+  assert.ok(/沒有填入建置編號/.test(b), 'build.js 要自我檢查有沒有填進去');
+  const ui = read('js/ui.js');
+  assert.ok(/version\.json\?cb=/.test(ui) && /cache: 'no-store'/.test(ui), 'version.json 不可以進快取,否則比了也是白比');
+  assert.ok(/location\.replace\(/.test(ui), '更新要換一個網址(帶建置編號),重新載入才抓得到新的 index.html');
+  // 註解裡會提到它,所以先把註解拿掉再檢查
+  const code = ui.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*/gm, '');
+  assert.ok(!/location\.reload\(\)/.test(code), 'reload() 可能又拿到快取裡同一份舊 HTML,要換網址才抓得到新的');
+});
 t('建置:js/css 必須帶內容雜湊,部署後瀏覽器才不會繼續用舊版', () => {
   const b = read('build.js');
   assert.ok(/\?v=' \+ stamp\(f\)/.test(b), 'build.js 要把 ?v=<雜湊> 掛到 index.html 的資源上');

@@ -246,6 +246,11 @@ label.btn.sm{cursor:pointer}
 .modal-f{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
 #scanner-bg{z-index:70}
 #reader{width:100%;border-radius:var(--r-sm);overflow:hidden;background:#000;min-height:240px}
+/* 「系統已經更新」橫幅:壓在最上面,但不要蓋掉 toast(z-index 90)與掃描器(70) */
+.newver{position:fixed;left:0;right:0;top:0;z-index:65;display:flex;gap:12px;align-items:center;justify-content:center;
+  flex-wrap:wrap;padding:9px 16px;background:var(--gray);color:#fff;font-size:14px;
+  box-shadow:0 2px 12px rgba(27,36,43,.25)}
+.newver .btn{padding:5px 12px}
 .toast-box{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:90;display:grid;gap:8px;width:min(92vw,460px)}
 .toast{background:var(--gray);color:#fff;padding:11px 15px;border-radius:var(--r-sm);font-size:14px;box-shadow:var(--shadow-lg)}
 .toast.err{background:var(--red)}
