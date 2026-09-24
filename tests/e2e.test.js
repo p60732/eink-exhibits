@@ -413,6 +413,171 @@ assert.strictEqual((rgView.sites.find(g => g.location === '新竹') || {}).count
 // 展覽清單的分類也要讀得到(ITEM_CALC 原本沒宣告 category,只是剛好被連續段順便讀到)
 assert.strictEqual(ok('show', { id: SH.id }, A).lines[0].category, 'Signage', '展覽需求清單要帶得出分類');
 
+/* ===== v2.3:展後結算 / 批次申請歸還 / 封存到歷史表 ===== */
+
+// ---- 展後結算 ----
+// SH(春季巡迴展)已結案:規劃 5、實際借出 5、已歸還 5、未歸還 0;另有一張取消的單不該被算進去
+const st1 = ok('showSettle', { id: SH.id }, A);
+assert.strictEqual(st1.archived, false, '還沒封存 → 即時算');
+assert.deepStrictEqual(
+  [st1.totals.planned, st1.totals.issued, st1.totals.returned, st1.totals.lost, st1.totals.unreturned],
+  [5, 5, 5, 0, 0], '結算四欄');
+assert.strictEqual(st1.lines.length, 1);
+assert.strictEqual(st1.lines[0].location, '新竹');
+
+// 短少要進「短少」而不是「未歸還」
+const SS0 = ok('saveItem', { item: { name: '結算用展品', mode: 'qty', category: '體驗區', sites: [{ location: '林口', qty: 6 }] } }, A);
+let SS = ok('saveShow', { show: { name: '結算測試展', from: '2027-08-01', to: '2027-08-10', venue: '世貿', owner: '10231',
+  lines: [{ itemId: SS0.id, location: '林口', qty: 6 }] } }, A);
+SS = ok('setShowStatus', { id: SS.id, status: 'confirmed' }, A);
+const SSg = ok('createLoansFromShow', { id: SS.id }, A);
+const SSL = SSg.ids[0];
+ok('checkout', { id: SSL, units: {} }, A);
+// 規劃 6、借出 6、還 4、短少 1 → 未歸還 1
+ok('receive', { id: SSL, lines: [{ itemId: SS0.id, location: '林口', returned: 4, lost: 1 }] }, A);
+const st2 = ok('showSettle', { id: SS.id }, A);
+assert.deepStrictEqual(
+  [st2.totals.planned, st2.totals.issued, st2.totals.returned, st2.totals.lost, st2.totals.unreturned],
+  [6, 6, 4, 1, 1], '★ 短少要算進 lost,剩下的才是未歸還');
+assert.deepStrictEqual(st2.lines[0].loans, [SSL], '結算要指得出是哪張單');
+
+// ---- 批次申請歸還 ----
+bad('returnMany', { id: SS.id, ids: [] }, A, /請先勾選/);
+const rm1 = ok('returnMany', { id: SS.id, ids: [SSL], note: '撤場' }, A);
+assert.deepStrictEqual([rm1.ok, rm1.fail.length], [1, 0], '批次歸還應該成功一張');
+const rmLoan = ok('loans', { filter: 'active' }, A).find(x => x.id === SSL);
+assert.strictEqual(rmLoan.request.type, 'return', '要掛上歸還請求');
+assert.strictEqual(rmLoan.request.lines[0].returned, 1, '預設把剩下沒還的全部帶進去');
+// 已經掛了請求的單再按一次要被擋(而不是覆蓋掉)
+const rm2 = ok('returnMany', { id: SS.id, ids: [SSL] }, A);
+assert.deepStrictEqual([rm2.ok, rm2.fail.length], [0, 1]);
+assert.match(rm2.fail[0].error, /待確認的請求/);
+// 不屬於這場的單要被擋,而且不影響同批其他張
+const rm3 = ok('returnMany', { id: SS.id, ids: [SL] }, A);
+assert.match(rm3.fail[0].error, /不屬於這場展覽/);
+ok('cancelRequest', { id: SSL }, A);
+ok('receive', { id: SSL, lines: [{ itemId: SS0.id, location: '林口', returned: 1 }] }, A);
+SS = ok('setShowStatus', { id: SS.id, status: 'closed' }, A);
+
+// ---- 封存到歷史表 ----
+// 預覽:只列「已結案展覽底下、本身也結束了」的單
+const pv = ok('archivePreview', {}, A);
+const pvShow = pv.shows.find(x => x.id === SS.id);
+assert.ok(pvShow, '結案的展覽要出現在預覽裡');
+assert.ok(pvShow.ids.indexOf(SSL) >= 0);
+assert.strictEqual(pv.plain.length, 0, '沒勾「一般單」時不可以列出沒掛展覽的單');
+assert.ok(ok('archivePreview', { includePlain: true }, A).plain.length > 0, '勾了才列一般單');
+// 還沒結案的展覽底下的單絕對不可以被搬走
+let OPEN = ok('saveShow', { show: { name: '還沒結案的展', from: '2027-09-01', to: '2027-09-05', owner: '10231',
+  lines: [{ itemId: SS0.id, location: '林口', qty: 1 }] } }, A);
+OPEN = ok('setShowStatus', { id: OPEN.id, status: 'confirmed' }, A);
+const OPENL = ok('createLoansFromShow', { id: OPEN.id }, A).ids[0];
+ok('reject', { id: OPENL, note: '測試用' }, A);      // 本身結束了,但展覽還沒結案
+assert.ok(!ok('archivePreview', {}, A).shows.some(x => x.id === OPEN.id),
+  '★ 展覽還沒結案,底下的單一張都不能搬');
+
+const beforeLoans = ok('loans', { filter: 'all' }, A).length;
+const arch = ok('archiveLoans', { ids: pvShow.ids }, A);
+assert.strictEqual(arch.moved, pvShow.ids.length, '搬走的張數');
+assert.strictEqual(arch.skipped, 0);
+assert.deepStrictEqual(arch.shows, [SS.id]);
+// 借用單表少了、歷史表多了
+assert.strictEqual(ok('loans', { filter: 'all' }, A).length, beforeLoans - pvShow.ids.length, '借用單表要變少');
+assert.ok(!ok('loans', { filter: 'all' }, A).some(x => x.id === SSL), '預設看不到封存的單');
+const withHist = ok('loans', { filter: 'all', includeHistory: true }, A);
+const back = withHist.find(x => x.id === SSL);
+assert.ok(back, '★ 勾了「含歷史」就要查得到');
+assert.strictEqual(back.archived, true, '要標示這張是封存的');
+assert.strictEqual(back.lines[0].returned + back.lines[0].lost, 6, '封存的單內容要完整保留');
+assert.strictEqual(G.sheets['借用單歷史'].getLastRow(), pvShow.ids.length + 1, '歷史工作表的列數(含表頭)');
+
+// 封存不可以影響可借量(搬走的都是已結束的單,本來就不佔庫存)
+const ssAvail = () => ok('check', { start: '2027-08-02', end: '2027-08-05', lines: [{ itemId: SS0.id, location: '林口', qty: 1 }] }, A)[0].available;
+assert.strictEqual(ssAvail(), 5, '★ 封存之後可借量不可以改變(短少 1 台,所以是 5)');
+
+// 結算改看快照 —— 單已經不在借用單表了,數字還是要在
+const st3 = ok('showSettle', { id: SS.id }, A);
+assert.strictEqual(st3.archived, true);
+assert.deepStrictEqual(
+  [st3.totals.planned, st3.totals.issued, st3.totals.returned, st3.totals.lost, st3.totals.unreturned],
+  [6, 6, 5, 1, 0], '★ 封存之後結算要讀結案當下的快照,不可以歸零');
+
+// 封存過的展覽不准重開、不准刪
+bad('setShowStatus', { id: SS.id, status: 'confirmed' }, A, /已經封存/);
+bad('deleteShow', { id: SS.id }, A, /已經封存/);
+
+// 封存過的展品仍然不准刪(歷史表裡還有它的借用紀錄)
+bad('deleteItem', { id: SS0.id }, A, /已經有 \d+ 筆借用紀錄/);
+
+// 已經搬走的不會再被搬一次
+bad('archiveLoans', { ids: pvShow.ids }, A, /沒有符合條件/);
+bad('archiveLoans', { ids: ['L-沒這張'] }, A, /沒有符合條件/);
+
+// 上一次「歷史表寫進去了、借用單還沒刪」就斷掉時,重跑要安全
+{
+  const shGroup = ok('archivePreview', {}, A).shows.find(x => x.id === SH.id);
+  assert.ok(shGroup && shGroup.ids.length >= 2, '春季巡迴展底下應該有可封存的單');
+  const M3 = G.ctx.Memory, one = M3.load({ Loans: '*' }).Loans.find(L => L.id === shGroup.ids[0]);
+  M3.appendHist([one]);                                   // 模擬:上次只寫到這一步就斷了
+  const histBefore = G.sheets['借用單歷史'].getLastRow();
+  const r = ok('archiveLoans', { ids: shGroup.ids }, A);
+  assert.strictEqual(r.skipped, 1, '★ 已經在歷史表裡的那一張要跳過');
+  assert.strictEqual(r.moved, shGroup.ids.length - 1);
+  assert.strictEqual(G.sheets['借用單歷史'].getLastRow(), histBefore + shGroup.ids.length - 1, '★ 不可以產生重複列');
+  const seen = ok('loans', { filter: 'all', includeHistory: true }, A).filter(x => x.id === shGroup.ids[0]);
+  assert.strictEqual(seen.length, 1, '★ 同一張單不可以在查詢結果裡出現兩次');
+}
+
+// 歷史表只能附加,不可以整張寫回
+{
+  const M2 = G.ctx.Memory, d = M2.load({ Hist: '*' });
+  d._dirty.Hist = 1;
+  assert.throws(() => M2.save(d), /只能附加/, '★ 歷史表整張寫回一定要被擋下來');
+}
+
+// 單台的借用歷程不可以因為封存而斷掉
+{
+  const UH0 = ok('saveItem', { item: { name: '歷程用單台機', mode: 'unit', unitCount: 1, category: '體驗區' } }, A);
+  const uid = ok('units', { itemId: UH0.id }, A)[0].id;
+  let UHS = ok('saveShow', { show: { name: '歷程測試展', from: '2027-10-01', to: '2027-10-05', owner: '10231',
+    lines: [{ itemId: UH0.id, qty: 1 }] } }, A);
+  UHS = ok('setShowStatus', { id: UHS.id, status: 'confirmed' }, A);
+  const uhl = ok('createLoansFromShow', { id: UHS.id }, A).ids[0];
+  ok('checkout', { id: uhl, units: { [UH0.id]: [uid] } }, A);
+  ok('receive', { id: uhl, lines: [{ itemId: UH0.id, unitResults: [{ id: uid, result: 'in' }] }] }, A);
+  ok('setShowStatus', { id: UHS.id, status: 'closed' }, A);
+  ok('archiveLoans', { ids: [uhl] }, A);
+  const got = ok('lookup', { code: uid }, A);
+  assert.ok((got.history || []).some(h => h.id === uhl), '★ 封存之後掃單台還要看得到那一張借用紀錄');
+  // 這個展品現在只剩下「封存到歷史表」的借用紀錄,還是不可以刪
+  bad('deleteItem', { id: UH0.id }, A, /筆借用紀錄/);
+}
+
+// 升級前就已經結案的展覽沒有結算快照 —— 封存時要當場補上,不能讓它變成空的
+{
+  const AD0 = ok('saveItem', { item: { name: '舊版結案展品', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 3 }] } }, A);
+  let OLD = ok('saveShow', { show: { name: '升級前就結案的展', from: '2027-11-01', to: '2027-11-05', owner: '10231',
+    lines: [{ itemId: AD0.id, location: '新竹', qty: 3 }] } }, A);
+  OLD = ok('setShowStatus', { id: OLD.id, status: 'confirmed' }, A);
+  const ol = ok('createLoansFromShow', { id: OLD.id }, A).ids[0];
+  ok('checkout', { id: ol, units: {} }, A);
+  ok('receive', { id: ol, lines: [{ itemId: AD0.id, location: '新竹', returned: 3 }] }, A);
+  ok('setShowStatus', { id: OLD.id, status: 'closed' }, A);
+  // 直接把 settle 欄清掉,模擬「這一列是舊版寫的,根本沒有這一欄」
+  const sh = G.sheets['展覽'], col = sh.data[0].indexOf('settle');
+  assert.ok(col >= 0, '展覽表要有 settle 欄');
+  const at = sh.data.findIndex((r, i) => i > 0 && r[0] === OLD.id);
+  sh.data[at][col] = '';
+  G.ctx.PropertiesService.getScriptProperties().setProperty('DBVER', '777001');   // 清掉讀取快取
+  assert.strictEqual(ok('showSettle', { id: OLD.id }, A).totals.issued, 3, '清掉快照後仍然算得出來(還沒封存)');
+  ok('archiveLoans', { ids: [ol] }, A);
+  const after = ok('showSettle', { id: OLD.id }, A);
+  assert.strictEqual(after.archived, true);
+  assert.deepStrictEqual([after.totals.planned, after.totals.issued, after.totals.returned], [3, 3, 3],
+    '★ 舊資料沒有快照時,封存要當場補上,不可以變成 0');
+}
+
+
 // ---- 效能重構的正確性:限縮載入 vs 全部載入,結果必須一致 ----
 // 多做一筆封存展品與一筆待審單,讓限縮欄位(archived / status / request)都被走到
 const U2b = ok('login', { emp: '10477' }).token;   // 先前登出過,重新取得憑證
@@ -536,10 +701,18 @@ const readActions = [
 ['all', 'active', 'overdue', 'request', 'pending', 'returned'].forEach(f => readActions.push(['loans', { filter: f }, A]));
 ['open', 'all', 'draft', 'confirmed', 'closed'].forEach(f => readActions.push(['shows', { filter: f }, A]));
 readActions.push(['show', { id: SH.id }, A]);
+readActions.push(['showSettle', { id: SH.id }, A]);
+readActions.push(['showSettle', { id: SS.id }, A]);
+readActions.push(['archivePreview', {}, A]);
+readActions.push(['archivePreview', { includePlain: true }, A]);
+['returned', 'all'].forEach(f => readActions.push(['loans', { filter: f, includeHistory: true }, A]));
 readActions.push(['showCheck', { id: SH.id, from: '2027-03-01', to: '2027-03-10', lines: [{ itemId: expo.id, location: '新竹', qty: 6 }] }, A]);
 readActions.forEach(([act, p2, tok]) => {
   const restricted = run(act, p2, tok);
-  G.ctx.Memory.load = function () { return origLoad(); };          // 忽略限縮,整張整欄載入
+  // 忽略欄位/列的限縮,整張整欄載入。歷史表是「有沒有被點名」的差別,不是限縮,所以要跟著帶
+  G.ctx.Memory.load = function (spec) {
+    return origLoad(spec && spec.Hist ? { Cats: '*', Items: '*', Units: '*', Loans: '*', Shows: '*', Users: '*', Hist: '*' } : undefined);
+  };
   const complete = run(act, p2, tok);
   G.ctx.Memory.load = origLoad;
   assert.strictEqual(restricted, complete, act + '(' + JSON.stringify(p2) + ')限縮載入的結果不一致');

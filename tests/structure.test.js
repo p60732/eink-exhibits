@@ -59,6 +59,29 @@ t('路由:每個動作都有欄位白名單', () => {
   const s = read('gas/00_gateway.gs');
   assert.ok(/checkPayload_\(req\.payload, route\.fields, route\.big\)/.test(s));
 });
+t('連線積木的 READ 名單要跟後端的寫入旗標一致', () => {
+  // 名單漏了讀取路由 → 換版那幾秒不會自動重試;誤放了寫入路由 → 寫完快取不會失效,畫面顯示舊資料
+  const { makeEnv } = require('./fake-gas');
+  const R = makeEnv().ctx.routes_();
+  const named = read('js/connect.js').match(/const READ = new Set\(\[([^\]]*)\]/);
+  assert.ok(named, 'connect.js 要有 READ 名單');
+  const listed = new Set(named[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean));
+  // 刻意不自動重試的兩個:login 重試會多吃一次 PIN 錯誤次數;uploadImage 重試會在雲端硬碟多出一張照片
+  const noRetry = ['login', 'uploadImage'];
+  const missing = Object.keys(R).filter(k => !R[k].write && !listed.has(k) && noRetry.indexOf(k) < 0);
+  const extra = [...listed].filter(k => R[k] && R[k].write);
+  assert.deepStrictEqual(missing, [], '讀取路由沒列進 READ:' + missing.join('、'));
+  assert.deepStrictEqual(extra, [], '寫入路由不可以列進 READ:' + extra.join('、'));
+});
+t('歷史工作表只能附加,不可以整張寫回', () => {
+  const m = read('gas/30_memory.gs');
+  assert.ok(/EXTRA_TABLES\.indexOf\(key\) >= 0\) throw fail_/.test(m), 'save() 要擋掉歷史表的整張寫回');
+  assert.ok(/function appendHist/.test(m) && /SpreadsheetApp\.flush\(\)/.test(m), '附加之後要 flush,確定真的寫進去再讓呼叫端刪原本那幾列');
+  const g = read('gas/20_logic.gs');
+  const fn = g.slice(g.indexOf('archiveLoans: function'), g.indexOf('批次延期:展期往後延時'));
+  assert.ok(fn.indexOf('c.appendHist(fresh)') < fn.indexOf('c.db.Loans = c.db.Loans.filter'),
+    '★ 一定要先附加到歷史表,成功了才可以從借用單表移除(順序反了會掉單)');
+});
 t('積木檔頭:每個檔案宣告所屬積木與禁止事項', () => {
   [...gasFiles.map(f => 'gas/' + f), 'js/connect.js', 'js/ui.js'].forEach(f => { const s = read(f); assert.ok(/【.+積木】/.test(s) && /禁止/.test(s), f); });
 });

@@ -381,6 +381,61 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   if (after3 !== after2) throw new Error('★ 開單後可借量不該再變(重複扣庫存):' + after2 + ' → ' + after3);
   if (!/已開單 2/.test(await p.textContent('#shlines'))) throw new Error('需求清單沒顯示已開單量');
   await shot('show-detail');
+
+  // ---- v2.3:展後結算 / 批次申請歸還 / 整理歷史 ----
+  // 純粹推進狀態的步驟(點交、確認歸還)直接呼叫後端,這一段要驗的是畫面
+  const shid = await p.evaluate(() => S.showId);
+  await p.evaluate(async id => {
+    const v = await Api.call('show', { id }, S.token);
+    for (const L of v.loans.filter(x => x.status === 'approved')) await Api.call('checkout', { id: L.id, units: {} }, S.token);
+  }, shid);
+  await p.evaluate(() => { bumpCache(); render(); }); await wait(1800);
+  // 批次申請歸還:撤場時一次送出,預設全勾
+  if (!await p.$('[data-act=show-return]')) throw new Error('底下有出借中的單時應該出現「批次申請歸還」');
+  await p.click('[data-act=show-return]'); await p.waitForSelector('.sr-id');
+  const srN = await p.$$eval('.sr-id', els => els.filter(e => e.checked).length);
+  if (srN !== 2) throw new Error('批次歸還預設應該把出借中的都勾起來:' + srN);
+  await p.click('[data-act=show-return-ok]'); await wait(2000);
+  const srReq = await p.evaluate(async id =>
+    (await Api.call('show', { id }, S.token)).loans.filter(L => L.request && L.request.type === 'return').length, shid);
+  if (srReq !== 2) throw new Error('★ 批次申請歸還沒有把請求掛上去:' + srReq);
+  // 確認歸還 → 結案 → 結算卡片要出現,而且說東西都回來了
+  await p.evaluate(async id => {
+    const v = await Api.call('show', { id }, S.token);
+    for (const L of v.loans.filter(x => x.status === 'out')) {
+      await Api.call('receive', { id: L.id, lines: L.lines.map(ln => ({ itemId: ln.itemId, location: ln.location,
+        returned: ln.qty - (ln.returned || 0) - (ln.lost || 0) })) }, S.token);
+    }
+    await Api.call('setShowStatus', { id, status: 'closed' }, S.token);
+  }, shid);
+  await p.evaluate(() => { bumpCache(); render(); }); await wait(2000);
+  await p.waitForSelector('#settle');
+  const seTxt = await p.textContent('#settle');
+  if (!/東西都回來了/.test(seTxt)) throw new Error('結算卡片應該說東西都回來了:' + seTxt.replace(/\n/g, ' ').slice(0, 220));
+  if (!/規劃/.test(seTxt) || !/未歸還/.test(seTxt)) throw new Error('結算四欄沒出現:' + seTxt.replace(/\n/g, ' ').slice(0, 220));
+  await shot('show-settle');
+
+  // 整理歷史:預覽 → 搬走 → 預設查不到、勾了「含歷史資料」才查得到
+  await p.click('[data-v=loans]'); await wait(1400);
+  await p.click('[data-act=arch-open]'); await p.waitForSelector('.modal .ar-s');
+  if (!/春季巡迴展/.test(await p.textContent('.modal'))) throw new Error('整理歷史的預覽沒列出已結案的展覽');
+  await p.click('[data-act=arch-go]'); await p.waitForSelector('.modal [data-act=close-render]');
+  const archTxt = await p.textContent('.modal');
+  if (!/已搬走 2 張/.test(archTxt)) throw new Error('搬走的張數不對:' + archTxt.replace(/\n/g, ' ').slice(0, 160));
+  await p.click('.modal [data-act=close-render]'); await wait(1600);
+  await p.click('[data-f=all]'); await wait(1600);
+  if (/已封存/.test(await p.textContent('#llist'))) throw new Error('★ 沒勾「含歷史資料」不該列出封存的舊單');
+  await p.click('#lhist'); await wait(1800);
+  if (!/已封存/.test(await p.textContent('#llist'))) throw new Error('★ 勾了「含歷史資料」就要查得到封存的舊單');
+  await p.click('#lhist'); await wait(1600);
+  // 已封存的展覽:結算改看快照,而且不給重新開啟
+  await p.click('[data-v=shows]'); await wait(1400);
+  await p.click('[data-act=show-filter][data-f=all]'); await wait(1400);   // 結案的不在「進行中」那一籤
+  await p.click(`[data-act=show-open][data-id="${shid}"]`); await wait(1800);
+  await p.waitForSelector('#settle');
+  if (!/封存快照/.test(await p.textContent('#settle'))) throw new Error('★ 封存之後結算要標示成快照');
+  if (await p.$('[data-act=show-status][data-s=confirmed]')) throw new Error('★ 已封存的展覽不該還有「重新開啟」');
+
   await p.click('[data-act=show-back]'); await wait(900);
   if (!/春季巡迴展/.test(await p.textContent('#main'))) throw new Error('展覽清單沒有這一場');
   // ★ 點進某一場 → 切走 → 再回來,應該看到清單,不是停在上一場

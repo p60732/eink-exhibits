@@ -24,7 +24,7 @@ function makeEnv(opts = {}) {
   const ctx = {
     console: { log() { }, error: (...a) => opts.verbose && console.error(...a) },
     Date, JSON, Math, Object, Array, String, Number, isFinite, parseInt, Error, RegExp,
-    SpreadsheetApp: { getActiveSpreadsheet: () => SS, openById: () => SS },
+    SpreadsheetApp: { getActiveSpreadsheet: () => SS, openById: () => SS, flush() { } },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; }, remove: k => { delete cache[k]; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() { } }) },

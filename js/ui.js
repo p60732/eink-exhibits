@@ -10,7 +10,7 @@ const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
   cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
-  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false,
+  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, loanHist: false,
   showId: null, showFilter: 'open', showLines: null, showPick: null
 };
 const $ = (s, el = document) => el.querySelector(s);
@@ -299,6 +299,7 @@ function go(v) {
   S.view = v; window.scrollTo(0, 0); render();
 }
 /* ===================== 共用元件 ===================== */
+function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
 function statusPill(L) {
   return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.stage ? ` <span class="pill pending">${esc(L.stage)}</span>` : '') + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
 }
@@ -355,7 +356,7 @@ function loanCard(L, opts = {}) {
   const who = admin ? `<span>借用人 <b>${esc(L.applicant)}</b>${L.dept ? '・' + esc(L.dept) : ''}</span>${L.contact ? `<span>聯絡 ${esc(L.contact)}</span>` : ''}` : '';
   const notes = [L.purpose && '用途:' + L.purpose, L.reviewNote && '審核:' + L.reviewNote + (L.reviewer ? '(' + L.reviewer + ')' : ''), L.note && '備註:' + L.note].filter(Boolean);
   return `<div class="card" id="loan-${L.id}">
-    <div class="loan-h"><span class="id">${esc(L.id)}</span><h3>${esc(L.event)}</h3>${statusPill(L)}</div>
+    <div class="loan-h"><span class="id">${esc(L.id)}</span><h3>${esc(L.event)}</h3>${statusPill(L)}${archPill(L)}</div>
     <div class="loan-meta">${who}<span>期間 <b>${esc(L.start)} → ${esc(L.end)}</b></span>${L.venue ? `<span>地點 ${esc(L.venue)}</span>` : ''}${L.outAt ? `<span>點交 ${esc(L.outAt)}</span>` : ''}${L.returnedAt ? `<span>歸還 ${esc(L.returnedAt)}</span>` : ''}</div>
     <div class="lines">${lines}</div>
     ${notes.length ? `<div class="note">${notes.map(esc).join('<br>')}</div>` : ''}
@@ -672,8 +673,10 @@ const loanTabOf = {
 };
 VIEWS.loans = main => {
   const srv = loanSrv(S.loanFilter);
-  return withData(main, 'loans|' + srv, 'loans', { filter: srv }, all => {
-  if (loanSrv(S.loanFilter) !== srv) return;        // 使用者已經切到別的分頁了
+  // 歷史表預設不讀 —— 讀了就等於沒搬。只有在翻舊單的分頁、而且使用者自己勾了才帶
+  const hist = !!(LOAN_HIST[srv] && S.loanHist);
+  return withData(main, 'loans|' + srv + (hist ? '|h' : ''), 'loans', { filter: srv, includeHistory: hist }, all => {
+  if (loanSrv(S.loanFilter) !== srv || !!(LOAN_HIST[loanSrv(S.loanFilter)] && S.loanHist) !== hist) return;   // 使用者已經切走了
   const pick = loanTabOf[S.loanFilter];
   const list = pick ? all.filter(pick) : all;
   S._loans = all;
@@ -683,7 +686,10 @@ VIEWS.loans = main => {
       const n = loanTabOf[k] ? all.filter(loanTabOf[k]).length : (k === 'all' || k === 'returned' ? null : all.length);
       return `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}${n ? ` <span class="n">${n}</span>` : ''}</button>`;
     }).join('')}</div>
-    <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…"></div>
+    <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…">
+    ${LOAN_HIST[srv] ? `<label class="chk"><input type="checkbox" id="lhist" ${S.loanHist ? 'checked' : ''}>含歷史資料</label>` : ''}
+    <button class="btn sm ghost" data-act="arch-open">整理歷史</button></div>
+    ${hist ? '<div class="banner info">已含封存到歷史工作表的舊單(標示「已封存」的那些)。查完建議取消勾選,平常翻單會比較快。</div>' : ''}
     <div id="lbulk"></div>
     <div class="loans" id="llist"></div>`;
   const sel = new Set();
@@ -707,6 +713,7 @@ VIEWS.loans = main => {
     bulk();
   };
   draw(); $('#lq').oninput = e => draw(e.target.value);
+  if ($('#lhist')) $('#lhist').onchange = e => { S.loanHist = e.target.checked; render(); };
   if (S._focusLoan) { const el = $('#loan-' + S._focusLoan); if (el) { el.scrollIntoView({ block: 'center' }); el.style.outline = '2px solid var(--red)'; } S._focusLoan = null; }
   });
 };
@@ -1028,6 +1035,35 @@ function exitPick() { S.showPick = null; store.del(uk('showpick')); store.del(uk
 /** 挑選期間把清單也寫進 localStorage,重新整理不會白挑 */
 function saveShowLines() { S.showLines = S.showLines || []; if (S.showPick) store.set(uk('showlines'), showDraftLines()); }
 
+/**
+ * 展後結算:規劃 / 實際借出 / 已歸還 / 未歸還 四欄對照。
+ * 「未歸還」只是把數字攤開給人看,系統不會自己去改庫存 —— 追討是人的事,按一個鍵就扣庫存太危險。
+ */
+function settleCard(v, SE) {
+  const T = SE.totals || {};
+  const cell = (n, cls) => `<td class="num${cls && n ? ' ' + cls : ''}">${n || 0}</td>`;
+  const rows = (SE.lines || []).map(r => `<tr>
+      <td>${esc(r.name)}<br><span class="meta">${esc(r.location)}</span></td>
+      ${cell(r.planned)}${cell(r.issued)}${cell(r.returned)}${cell(r.lost, 'short')}${cell(r.unreturned, 'short')}
+      <td class="mono meta">${(r.loans || []).map(esc).join('<br>')}</td></tr>`).join('');
+  const bad = (T.unreturned || 0) + (T.lost || 0);
+  return `<div class="card" id="settle">
+    <div class="row"><b>展後結算</b>
+      ${SE.archived ? '<span class="pill">封存快照</span>' : ''}
+      <span class="spacer"></span>
+      <button class="btn sm" data-act="settle-csv">${ICON.dl}匯出清單</button></div>
+    <div class="meta" style="margin:6px 0">${SE.archived
+      ? '底下的借用單已經封存到歷史工作表,這裡顯示的是結案當下留下的數字。'
+      : '即時計算。駁回與取消的單不算;已開單但還沒領走的另外列在「已開單」。'}</div>
+    ${bad ? `<div class="banner bad"><b>還有 ${T.unreturned || 0} 件沒回來、${T.lost || 0} 件短少</b> —— 明細在下面,請自行追討;系統不會自動扣庫存。</div>`
+      : `<div class="banner ok"><b>東西都回來了</b>,共 ${T.issued || 0} 件。</div>`}
+    <div class="tbl-wrap"><table><thead><tr><th>展品</th><th class="num">規劃</th><th class="num">實際借出</th><th class="num">已歸還</th><th class="num">短少</th><th class="num">未歸還</th><th>借用單</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7" class="empty">沒有資料</td></tr>'}
+      <tr class="grouph"><th>合計</th><th class="num">${T.planned || 0}</th><th class="num">${T.issued || 0}</th><th class="num">${T.returned || 0}</th><th class="num">${T.lost || 0}</th><th class="num">${T.unreturned || 0}</th><th></th></tr></tbody></table></div>
+    ${T.booked ? `<div class="meta" style="margin-top:8px">另有 ${T.booked} 件已開單但還沒領走。</div>` : ''}
+  </div>`;
+}
+
 async function drawShow(main) {
   const isNew = S.showId === 'new';
   let v;
@@ -1047,6 +1083,11 @@ async function drawShow(main) {
   S.items = await cachedGet('catalog|', 'catalog');
   const locked = v.status === 'closed' || v.status === 'cancelled';
   const live = (v.loans || []).filter(L => ['pending', 'approved', 'out'].includes(L.status));
+  const outNow = (v.loans || []).filter(L => L.status === 'out');
+  const wantSettle = !isNew && (v.archived || v.status === 'closed' || (v.loans || []).some(L => ['out', 'returned'].includes(L.status)));
+  let SE = null;
+  if (wantSettle) { try { SE = await cachedGet('settle|' + v.id, 'showSettle', { id: v.id }); } catch (e) { SE = null; } }
+  S._settle = SE;
   main.innerHTML = `<div class="row"><button class="btn sm ghost" data-act="show-back">← 回展覽清單</button><span class="spacer"></span>
       ${isNew ? '' : `<span class="mono meta">${esc(v.id)}</span> ${showPill(v)}`}</div>
     <h1>${isNew ? '新增展覽' : esc(v.name)}</h1>
@@ -1085,16 +1126,21 @@ async function drawShow(main) {
         ${v.status === 'confirmed' ? `<button class="btn sm" data-act="show-status" data-s="draft">改回規劃中</button>
           <button class="btn brand sm" data-act="show-gen">依地點產生借用單</button>
           <button class="btn sm" data-act="show-status" data-s="closed">結案</button>` : ''}
-        ${v.status === 'closed' ? `<button class="btn sm" data-act="show-status" data-s="confirmed">重新開啟</button>` : ''}
+        ${v.status === 'closed' && !v.archived ? `<button class="btn sm" data-act="show-status" data-s="confirmed">重新開啟</button>` : ''}
+        ${v.archived ? `<span class="meta">借用單已封存到歷史工作表,這場不能再重新開啟。</span>` : ''}
         ${v.status === 'cancelled' ? `<button class="btn sm" data-act="show-status" data-s="draft">改回規劃中</button>` : ''}
         ${v.status === 'draft' || v.status === 'confirmed' ? `<button class="btn sm ghost" data-act="show-status" data-s="cancelled">取消展覽</button>` : ''}
         ${live.length ? `<button class="btn sm" data-act="show-extend">批次延期(${live.length} 張)</button>` : ''}
+        ${outNow.length ? `<button class="btn brand sm" data-act="show-return">批次申請歸還(${outNow.length} 張)</button>` : ''}
         <span class="spacer"></span>
-        ${v.loanCount ? '' : `<button class="btn sm ghost" data-act="show-del">刪除</button>`}
+        ${v.loanCount || v.archived ? '' : `<button class="btn sm ghost" data-act="show-del">刪除</button>`}
       </div>
       ${(v.loans || []).length ? `<div style="margin-top:12px">${v.loans.map(L => miniRow(L, `${fmtD(L.start)}~${fmtD(L.end)}`)).join('')}</div>`
-        : `<div class="meta" style="margin-top:12px">還沒有借用單。確認檔期之後按「依地點產生借用單」,系統會依各地點各開一張。</div>`}
-    </div>`}`;
+        : `<div class="meta" style="margin-top:12px">${v.archived ? '底下的借用單已經封存到歷史工作表。要查明細請到「借用單」頁勾選「含歷史資料」。'
+          : '還沒有借用單。確認檔期之後按「依地點產生借用單」,系統會依各地點各開一張。'}</div>`}
+    </div>`}
+
+    ${SE ? settleCard(v, SE) : ''}`;
 
   const nameOf = Object.fromEntries(S.items.map(i => [i.id, i.name]));
   let gaps = [];
@@ -1952,6 +1998,78 @@ const ACT = {
     if (!confirmInline('刪除這場展覽?此動作無法復原。')) return;
     run(() => api('deleteShow', { id: S.showId }), '已刪除')
       .then(() => { exitPick(); S.showId = null; S.showLines = null; render(); }).catch(() => { });
+  },
+  /** 匯出結算清單:未歸還的要追討,通常是丟進 Excel 逐項對 */
+  'settle-csv': () => {
+    const SE = S._settle;
+    if (!SE) return toast('沒有結算資料', true);
+    const nm = SE.name || '';
+    downloadCSV(`展後結算_${nm}_${todayStr()}.csv`,
+      [['展覽', nm], ['檔期', (SE.from || '') + ' ~ ' + (SE.to || '')], ['場地', SE.venue || ''], ['產生日', todayStr()], [],
+       ['展品編號', '品名', '廠區', '規劃', '實際借出', '已歸還', '短少', '未歸還', '借用單']]
+        .concat((SE.lines || []).map(r => [r.itemId, r.name, r.location, r.planned, r.issued, r.returned, r.lost, r.unreturned, (r.loans || []).join(' ')]))
+        .concat([['', '合計', '', SE.totals.planned, SE.totals.issued, SE.totals.returned, SE.totals.lost, SE.totals.unreturned, '']]));
+  },
+  /** 批次申請歸還:撤場時一次把底下出借中的單都送出歸還申請 */
+  'show-return': async () => {
+    const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });
+    const out = (v.loans || []).filter(L => L.status === 'out');
+    if (!out.length) return toast('底下沒有出借中的借用單', true);
+    openModal(`<h2>批次申請歸還</h2>
+      <p class="meta">預設整批全還、還回原本借出的廠區。這一步只是送出申請,實際扣庫存仍然要管理者確認歸還時逐項核對。
+        已經掛著其他請求(延期 / 轉借)的單會被跳過,不會被蓋掉。</p>
+      ${out.map(L => `<label class="chk"><input type="checkbox" class="sr-id" value="${esc(L.id)}" checked>
+        <span class="mono">${esc(L.id)}</span> ${esc(L.applicant)}・${L.lines.length} 項${L.request && L.request.type ? '(已有待確認的請求)' : ''}</label>`).join('')}
+      <label class="f" style="margin-top:8px"><span>備註</span><input type="text" id="sr-note" value="撤場" maxlength="100"></label>
+      <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-return-ok">送出申請</button></div>`);
+  },
+  'show-return-ok': async () => {
+    const ids = $$('.sr-id').filter(c => c.checked).map(c => c.value);
+    if (!ids.length) return toast('請先勾選要申請歸還的借用單', true);
+    const r = await run(() => api('returnMany', { id: S.showId, ids: ids, note: $('#sr-note').value })).catch(() => null);
+    if (!r) return;
+    closeModal();
+    toast('已送出 ' + r.ok + ' 張' + (r.fail.length ? ',' + r.fail.length + ' 張沒成功' : ''));
+    S.showLines = null;
+    if (r.fail.length) openModal(`<h2>有 ${r.fail.length} 張沒送出</h2>
+      <div class="banner bad">${r.fail.map(f => esc(f.id) + ':' + esc(f.error)).join('<br>')}</div>
+      <div class="modal-f"><button class="btn pri" data-act="close-render">知道了</button></div>`);
+    else render();
+  },
+  /** 整理歷史:一定要先看清楚會搬走什麼,再按下去 */
+  'arch-open': async () => {
+    const pv = await run(() => api('archivePreview', { includePlain: true })).catch(() => null);
+    if (!pv) return;
+    S._arch = pv;
+    const showBits = pv.shows.map(x => `<label class="chk"><input type="checkbox" class="ar-s" value="${esc(x.id)}" checked>
+      <b>${esc(x.name)}</b> <span class="meta">${fmtD(x.from)}~${fmtD(x.to)} · ${x.ids.length} 張</span></label>`).join('');
+    openModal(`<h2>整理歷史單</h2>
+      <p class="meta">把已經結束的舊借用單搬到「借用單歷史」工作表,讓平常翻單快一點。
+        <b>只有「已結案展覽底下」而且本身已經結束(已歸還 / 已取消 / 已駁回)的單會被搬。</b>
+        搬過去的單還查得到 —— 在借用單頁勾「含歷史資料」就會一起列出來。</p>
+      <div class="banner warn">搬完之後,那幾場展覽就不能再重新開啟了(結算會改看結案當下的快照)。</div>
+      ${pv.shows.length ? `<div style="margin-top:8px"><b>已結案的展覽</b>${showBits}</div>`
+        : '<div class="meta" style="margin-top:8px">目前沒有已結案展覽的單可以搬。</div>'}
+      ${pv.plain.length ? `<label class="chk" style="margin-top:8px"><input type="checkbox" id="ar-plain">
+        一併搬走沒掛展覽的一般舊單(${pv.plain.length} 張)</label>` : ''}
+      <div class="modal-f"><button class="btn" data-act="close">取消</button>
+        <button class="btn pri" data-act="arch-go" ${pv.total ? '' : 'disabled'}>搬走選取的單</button></div>`);
+  },
+  'arch-go': async () => {
+    const pv = S._arch || { shows: [], plain: [] };
+    const on = new Set($$('.ar-s').filter(c => c.checked).map(c => c.value));
+    let ids = pv.shows.filter(x => on.has(x.id)).reduce((a, x) => a.concat(x.ids), []);
+    const plain = !!($('#ar-plain') && $('#ar-plain').checked);
+    if (plain) ids = ids.concat(pv.plain);
+    if (!ids.length) return toast('請先勾選要搬走的項目', true);
+    if (!confirmInline(`要把 ${ids.length} 張借用單搬到歷史工作表嗎?`)) return;
+    const r = await run(() => api('archiveLoans', { ids, includePlain: plain })).catch(() => null);
+    if (!r) return;
+    closeModal();
+    openModal(`<h2>已搬走 ${r.moved} 張</h2>
+      ${r.skipped ? `<p class="meta">另有 ${r.skipped} 張本來就已經在歷史表裡(上次搬到一半中斷過),這次跳過。</p>` : ''}
+      <p class="meta">要查這些單,請在借用單頁勾選「含歷史資料」。</p>
+      <div class="modal-f"><button class="btn pri" data-act="close-render">知道了</button></div>`);
   },
   'show-extend': async () => {
     const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });

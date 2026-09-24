@@ -8,20 +8,28 @@
  */
 var Memory = (function () {
   var TZ = 'Asia/Taipei';
-  var SHEET_NAMES = { Cats: '分類', Items: '展品', Units: '單台編號', Loans: '借用單', Shows: '展覽', Users: '使用者', Logs: '操作紀錄' };
+  var SHEET_NAMES = { Cats: '分類', Items: '展品', Units: '單台編號', Loans: '借用單', Hist: '借用單歷史', Shows: '展覽', Users: '使用者', Logs: '操作紀錄' };
   var SCHEMA = {
     Cats: ['id', 'name', 'sort', 'archived', 'updatedAt'],
     Items: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'spec', 'note', 'image', 'archived', 'countedAt', 'updatedAt'],
     Units: ['id', 'itemId', 'serial', 'status', 'location', 'note', 'countedAt', 'updatedAt'],
     Loans: ['id', 'applicant', 'applicantId', 'dept', 'contact', 'event', 'venue', 'purpose', 'start', 'end', 'status', 'lines',
       'createdBy', 'createdAt', 'reviewer', 'reviewedAt', 'reviewNote', 'outAt', 'returnedAt', 'note', 'request', 'showId'],
-    Shows: ['id', 'name', 'from', 'to', 'venue', 'owner', 'status', 'lines', 'note', 'createdBy', 'createdAt', 'updatedAt'],
+    Shows: ['id', 'name', 'from', 'to', 'venue', 'owner', 'status', 'lines', 'note', 'settle', 'archived', 'createdBy', 'createdAt', 'updatedAt'],
     Users: ['id', 'empNo', 'name', 'dept', 'email', 'role', 'pinHash', 'mustChange', 'sessionVer', 'active', 'createdAt'],
     Logs: ['ts', 'user', 'action', 'ref', 'detail']
   };
+  // 歷史表跟借用單同一組欄位:搬過去的列原封不動,之後要查才不用做欄位對照
+  SCHEMA.Hist = SCHEMA.Loans.slice();
   // stock:數量型展品的各地點庫存 {"新竹":{"數量":3,"盤點":"2026-09-23"}};qty 與 countedAt 由後端回填
-  var JSON_FIELDS = { Loans: { lines: [], request: null }, Items: { stock: {} }, Shows: { lines: [] } };   // 欄位 → 空值預設
+  var JSON_FIELDS = { Loans: { lines: [], request: null }, Hist: { lines: [], request: null }, Items: { stock: {} }, Shows: { lines: [], settle: null } };   // 欄位 → 空值預設
   var TABLES = ['Cats', 'Items', 'Units', 'Loans', 'Shows', 'Users'];
+  /**
+   * 只有明確點名才會讀的表。歷史表會是整個試算表最大的一張,
+   * 放進 TABLES 的話,每一個「寫入類路由一律全載」的動作都會順便把它整張讀進來 ——
+   * 那就完全抵消掉搬歷史的意義了。
+   */
+  var EXTRA_TABLES = ['Hist'];
   // 分類第一次建立時先放進來的七類(之後可在畫面上自行新增 / 改名 / 調順序)
   var SEED = { Cats: ['eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'] };
 
@@ -32,7 +40,7 @@ var Memory = (function () {
    */
   var MUST_HAVE = {
     Cats: ['id', 'name'], Items: ['id', 'name'], Units: ['id', 'itemId'],
-    Loans: ['id', 'status'], Shows: ['id', 'name'], Users: ['id', 'empNo'], Logs: ['ts', 'action']
+    Loans: ['id', 'status'], Hist: ['id', 'status'], Shows: ['id', 'name'], Users: ['id', 'empNo'], Logs: ['ts', 'action']
   };
   /**
    * 資料守門的錯誤:標成 userFacing,讓訊息原封不動送到畫面上。
@@ -246,8 +254,46 @@ var Memory = (function () {
       db[key] = readTable_(key, w.cols, w.only);
       full[key] = !w.cols && !w.only;          // 欄位與列都沒限縮,才算完整
     });
+    // 額外的表(歷史)只有被點名時才讀。沒點名就給空陣列且標成「不完整」,
+    // 所以就算哪天有人不小心 dirty 了它,save() 也會先擋下來。
+    EXTRA_TABLES.forEach(function (key) {
+      if (want && (key in want)) {
+        var w = want[key];
+        db[key] = readTable_(key, w.cols, w.only);
+        full[key] = !w.cols && !w.only;
+      } else { db[key] = []; full[key] = false; }
+    });
     db._dirty = {}; db._newLogs = []; db._full = full;
     return db;
+  }
+
+  /** 一列物件 → 一列儲存格文字(save 與 appendHist 共用,兩邊的寫法一定要一樣) */
+  function toCells_(key, o) {
+    var head = SCHEMA[key], jf = JSON_FIELDS[key] || {};
+    return head.map(function (h) {
+      var v = o[h];
+      if (h in jf) return v == null ? '' : JSON.stringify(v);
+      if (v === true) return 'TRUE';
+      if (v === false) return 'FALSE';
+      return v == null ? '' : String(v);
+    });
+  }
+
+  /**
+   * 把借用單附加到歷史表。**只附加,永遠不整張重寫** ——
+   * 重寫是「先清空再寫」,歷史表是唯一一張「清空了就真的沒有別的地方還有」的表。
+   * 附加失敗會直接丟出例外,呼叫端因此不會走到「從借用單表刪掉」那一步。
+   */
+  function appendHist(rows) {
+    if (!rows || !rows.length) return 0;
+    var sh = sheet_('Hist'), head = SCHEMA.Hist;
+    head_('Hist');                                   // 先驗表頭,對不上就停
+    var rg = sh.getRange(sh.getLastRow() + 1, 1, rows.length, head.length);
+    rg.setNumberFormat('@');
+    rg.setValues(rows.map(function (o) { return toCells_('Hist', o); }));
+    SpreadsheetApp.flush();                          // 確定真的寫進去了,再讓呼叫端去刪原本那幾列
+    bumpVersion_();
+    return rows.length;
   }
 
   /** 寫回有變動的資料表,並附加新的操作紀錄 */
@@ -259,20 +305,14 @@ var Memory = (function () {
      */
     var full = db._full || {};
     Object.keys(db._dirty || {}).forEach(function (key) {
+      if (EXTRA_TABLES.indexOf(key) >= 0) throw fail_('「' + SHEET_NAMES[key] + '」只能附加,不可以整張寫回。'
+        + '這張表是舊資料唯一的存放處,整張重寫等於先清空 —— 清到一半斷掉就真的沒了。');
       if (!full[key]) throw fail_('「' + SHEET_NAMES[key] + '」這次只讀了一部分,不可以整張寫回(會清掉沒讀到的資料)。'
         + '請把這個動作的路由改成完整載入這張表。');
     });
     Object.keys(db._dirty || {}).forEach(function (key) {
-      var sh = sheet_(key), head = SCHEMA[key], jf = JSON_FIELDS[key] || {};
-      var rows = db[key].map(function (o) {
-        return head.map(function (h) {
-          var v = o[h];
-          if (h in jf) return v == null ? '' : JSON.stringify(v);
-          if (v === true) return 'TRUE';
-          if (v === false) return 'FALSE';
-          return v == null ? '' : String(v);
-        });
-      });
+      var sh = sheet_(key), head = SCHEMA[key];
+      var rows = db[key].map(function (o) { return toCells_(key, o); });
       var last = sh.getLastRow(), lastCol = Math.max(sh.getLastColumn(), head.length);
       if (last > 0) sh.getRange(1, 1, last, lastCol).clearContent();
       var all = [head].concat(rows), rg = sh.getRange(1, 1, all.length, head.length);
@@ -305,7 +345,7 @@ var Memory = (function () {
    * 跟 setup() 分開是因為 setup() 會把「工作表被改名 / 開錯試算表」當成「還沒建立」,
    * 在那種情況下跑 setup() 會生出一張空表,讓人以為資料真的沒了。升級只該補新的。
    */
-  var NEW_SHEETS = ['Shows'];
+  var NEW_SHEETS = ['Shows', 'Hist'];
   function upgrade() {
     var ss = ss_(), made = [];
     Object.keys(SHEET_NAMES).forEach(function (key) {
@@ -328,5 +368,5 @@ var Memory = (function () {
     return Object.keys(SHEET_NAMES).map(function (k) { return SHEET_NAMES[k]; });
   }
 
-  return { SCHEMA: SCHEMA, load: load, save: save, readLogs: readLogs, setup: setup, upgrade: upgrade };
+  return { SCHEMA: SCHEMA, load: load, save: save, appendHist: appendHist, readLogs: readLogs, setup: setup, upgrade: upgrade };
 })();

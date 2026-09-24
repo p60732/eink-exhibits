@@ -170,12 +170,93 @@ t('展覽需求清單:同一套合併規則,但允許空清單(規劃中可以�
   assert.deepStrictEqual([out.length, out[0].qty], [1, 5]);
   assert.deepStrictEqual(R.cleanShowLines(cdb(), []), []);
 });
+/* ---- 展後結算 ---- */
+const stdb = () => ({
+  Items: [{ id: 'P1', name: '甲機', mode: 'qty', stock: { 新竹: { 數量: 10 } } }],
+  Shows: [{ id: 'S1', name: '秋季展', status: 'closed', from: '2026-11-01', to: '2026-11-10',
+    lines: [{ itemId: 'P1', location: '新竹', qty: 6 }] }],
+  Loans: [
+    // 真的出去過:借 4、還 3、短少 1 → 未歸還 0
+    { id: 'LA', showId: 'S1', status: 'returned', start: '2026-11-01', end: '2026-11-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 4, returned: 3, lost: 1 }] },
+    // 還在外面:借 2、還 0 → 未歸還 2
+    { id: 'LB', showId: 'S1', status: 'out', start: '2026-11-01', end: '2026-11-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 2, returned: 0, lost: 0 }] },
+    // 開了單還沒領:算「已開單」,不算「實際借出」
+    { id: 'LC', showId: 'S1', status: 'approved', start: '2026-11-01', end: '2026-11-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 3, returned: 0, lost: 0 }] },
+    // 駁回 / 取消:完全不算
+    { id: 'LD', showId: 'S1', status: 'rejected', start: '2026-11-01', end: '2026-11-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 5, returned: 0, lost: 0 }] },
+    // 別場的單不可以混進來
+    { id: 'LE', showId: 'S9', status: 'out', start: '2026-11-01', end: '2026-11-10',
+      lines: [{ itemId: 'P1', location: '新竹', qty: 7, returned: 0, lost: 0 }] }
+  ]
+});
+t('展後結算:駁回與取消不算,待領只算已開單,短少與未歸還分開', () => {
+  const r = R.settleShow(stdb(), stdb().Shows[0], '2026-11-20');
+  assert.strictEqual([r.totals.planned, r.totals.booked, r.totals.issued, r.totals.returned, r.totals.lost, r.totals.unreturned].join(),
+    '6,3,6,3,1,2');
+  assert.strictEqual(r.lines[0].loans.join(), 'LA,LB,LC');
+});
+t('展後結算:借用單多出來的品項也要列(規劃是 0)', () => {
+  const d = stdb();
+  d.Items.push({ id: 'P9', name: '臨時加的', mode: 'qty', stock: { 林口: { 數量: 2 } } });
+  d.Loans.push({ id: 'LF', showId: 'S1', status: 'out', start: '2026-11-01', end: '2026-11-10',
+    lines: [{ itemId: 'P9', location: '林口', qty: 2, returned: 0, lost: 0 }] });
+  const r = R.settleShow(d, d.Shows[0], '2026-11-20');
+  const extra = r.lines.find(x => x.itemId === 'P9');
+  assert.strictEqual([extra.planned, extra.issued, extra.unreturned].join(), '0,2,2');
+});
+t('展後結算:同品項不同地點要分開算', () => {
+  const d = stdb();
+  d.Shows[0].lines.push({ itemId: 'P1', location: '林口', qty: 2 });
+  d.Loans.push({ id: 'LG', showId: 'S1', status: 'returned', start: '2026-11-01', end: '2026-11-10',
+    lines: [{ itemId: 'P1', location: '林口', qty: 2, returned: 2, lost: 0 }] });
+  const r = R.settleShow(d, d.Shows[0], '2026-11-20');
+  assert.strictEqual(r.lines.length, 2);
+  assert.strictEqual(r.lines.find(x => x.location === '林口').returned, 2);
+  assert.strictEqual(r.lines.find(x => x.location === '新竹').returned, 3);
+});
+
+/* ---- 封存的挑選條件 ---- */
+const adb = () => ({
+  Shows: [{ id: 'S1', name: '結案的', status: 'closed' }, { id: 'S2', name: '還在跑的', status: 'confirmed' }],
+  Loans: [
+    { id: 'A1', showId: 'S1', status: 'returned' },
+    { id: 'A2', showId: 'S1', status: 'cancelled' },
+    { id: 'A3', showId: 'S1', status: 'out' },        // 展覽結案了但這張還沒結束 → 不搬
+    { id: 'B1', showId: 'S2', status: 'returned' },   // 展覽還沒結案 → 不搬
+    { id: 'C1', showId: 'S9', status: 'returned' },   // 展覽不存在 → 不搬
+    { id: 'D1', showId: '', status: 'returned' },     // 一般單
+    { id: 'D2', showId: '', status: 'out' }
+  ]
+});
+t('封存條件:只搬「已結案展覽底下 + 本身也結束」的單', () => {
+  assert.strictEqual(R.archivable(adb(), false).map(L => L.id).join(), 'A1,A2');
+});
+t('封存條件:一般單要另外勾選才搬,而且一樣只搬結束了的', () => {
+  assert.strictEqual(R.archivable(adb(), true).map(L => L.id).join(), 'A1,A2,D1');
+});
+t('封存預覽:依展覽分組,一般單另外一堆', () => {
+  const g = R.archiveGroups(adb(), true);
+  assert.strictEqual(g.total, 3);
+  assert.strictEqual(g.plain.join(), 'D1');
+  assert.strictEqual(g.shows.map(x => x.id).join(), 'S1');
+  assert.strictEqual(g.shows[0].ids.join(), 'A1,A2');
+  assert.strictEqual(g.shows[0].name, '結案的');
+});
+
 t('規則層不可以改到傳入的資料', () => {
   const d = cdb(), before = JSON.stringify(d);
   R.cleanLines(d, [{ itemId: 'P1', qty: 2 }]);
   R.cleanShowLines(d, [{ itemId: 'P2', location: '林口', qty: 1 }]);
   R.showHold(d, 'P1', '新竹', '2026-10-01', '2026-10-02', null);
   assert.strictEqual(JSON.stringify(d), before);
+  const sd = stdb(), stBefore = JSON.stringify(sd);
+  R.settleShow(sd, sd.Shows[0], '2026-11-20');
+  R.archivable(sd, true); R.archiveGroups(sd, true);
+  assert.strictEqual(JSON.stringify(sd), stBefore);
 });
 
 console.log('✔ 規則層 ' + n + ' 項通過');

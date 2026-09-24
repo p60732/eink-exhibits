@@ -312,7 +312,8 @@ var Logic = (function () {
   }
   function unitHistory(db, unitId) {
     var h = [];
-    db.Loans.forEach(function (L) {
+    // 封存到歷史表的舊單也要列進來,否則一台機器的借用歷程會在封存那天憑空斷掉
+    db.Loans.concat(db.Hist || []).forEach(function (L) {
       (L.lines || []).forEach(function (ln) {
         if ((ln.units || []).indexOf(unitId) >= 0) h.push({ id: L.id, applicant: L.applicant, dept: L.dept, event: L.event, start: L.start, end: L.end, outAt: L.outAt, returnedAt: L.returnedAt, status: L.status, statusLabel: LOAN_ST[L.status] || L.status });
       });
@@ -601,6 +602,8 @@ var Logic = (function () {
       status: s(S.status) || 'draft', note: s(S.note), createdBy: s(S.createdBy), createdAt: s(S.createdAt),
       lines: lines,
       statusLabel: SHOW_ST[S.status] || SHOW_ST.draft,
+      archived: bool(S.archived),
+      settled: !!(S.settle && S.settle.totals),
       itemCount: lines.length,
       qtyTotal: lines.reduce(function (a, x) { return a + x.qty; }, 0),
       issuedTotal: lines.reduce(function (a, x) { return a + x.issued; }, 0),
@@ -616,6 +619,83 @@ var Logic = (function () {
     if (withLoans) o.loans = mine.slice().sort(sortLoans).map(function (L) { return enrichLoan(db, L, today); });
     return o;
   }
+  /**
+   * 展後結算:依「品項@地點」把規劃與實際對照起來。
+   *   規劃     = 展覽規劃清單的數量
+   *   已開單   = 開了單但還沒領走(待審核 / 已核准)
+   *   實際借出 = 真的領出去過的(出借中 / 已歸還)
+   *   已歸還 / 短少 / 未歸還 = 從每一行的 returned / lost / outstanding 累加
+   * 駁回與取消的單完全不算 —— 那些東西根本沒出去過。
+   */
+  var WENT_OUT = { out: 1, returned: 1 };
+  var BOOKED_ST = { pending: 1, approved: 1 };
+  function settleShow(db, S, today) {
+    var rows = {}, order = [];
+    function row(itemId, where) {
+      var k = itemId + '@' + where;
+      if (!rows[k]) {
+        var it = byId(db.Items, itemId);
+        rows[k] = { itemId: itemId, location: where, name: it ? it.name : '(已刪除)', mode: it ? it.mode : 'qty',
+          planned: 0, booked: 0, issued: 0, returned: 0, lost: 0, unreturned: 0, loans: [] };
+        order.push(k);
+      }
+      return rows[k];
+    }
+    (S.lines || []).forEach(function (ln) { row(s(ln.itemId), loc(ln.location)).planned += int(ln.qty); });
+    loansOfShow(db, S.id).forEach(function (L) {
+      if (L.status === 'rejected' || L.status === 'cancelled') return;
+      (L.lines || []).forEach(function (ln) {
+        var r = row(s(ln.itemId), loc(ln.location));
+        if (BOOKED_ST[L.status]) r.booked += int(ln.qty);
+        if (WENT_OUT[L.status]) {
+          r.issued += int(ln.qty);
+          r.returned += int(ln.returned);
+          r.lost += int(ln.lost);
+          r.unreturned += outstanding(ln);
+        }
+        if (r.loans.indexOf(L.id) < 0) r.loans.push(L.id);
+      });
+    });
+    var lines = order.map(function (k) { return rows[k]; });
+    var F = ['planned', 'booked', 'issued', 'returned', 'lost', 'unreturned'], totals = {};
+    F.forEach(function (f) { totals[f] = 0; });
+    lines.forEach(function (r) { F.forEach(function (f) { totals[f] += r[f]; }); });
+    return { at: today, lines: lines, totals: totals, loanCount: loansOfShow(db, S.id).length };
+  }
+
+  /* ---------- 封存到歷史表 ----------
+   * 「已結案」的展覽底下、而且本身也已經結束的單才可以搬。
+   * 搬 = 先附加到歷史表,附加確定成功才從借用單表移除;順序反過來就會掉單。
+   * 掛在還沒結案的展覽底下的單一律不搬 —— 展覽還沒結算完,資料不能先被抽走。
+   */
+  var ARCH_ST = { returned: 1, cancelled: 1, rejected: 1 };
+  function archivable(db, includePlain) {
+    var closed = {};
+    (db.Shows || []).forEach(function (S) { if (s(S.status) === 'closed') closed[S.id] = 1; });
+    return (db.Loans || []).filter(function (L) {
+      if (!ARCH_ST[L.status]) return false;
+      var sid = s(L.showId);
+      if (!sid) return !!includePlain;          // 沒掛展覽的一般單:要另外勾選才搬
+      return !!closed[sid];                     // 展覽不存在或還沒結案 → 不搬
+    });
+  }
+  function archiveGroups(db, includePlain) {
+    var list = archivable(db, includePlain), byShow = {}, plain = [];
+    list.forEach(function (L) {
+      var sid = s(L.showId);
+      if (!sid) { plain.push(L.id); return; }
+      (byShow[sid] = byShow[sid] || []).push(L.id);
+    });
+    return {
+      total: list.length,
+      plain: plain,
+      shows: Object.keys(byShow).sort().map(function (sid) {
+        var S = byId(db.Shows || [], sid);
+        return { id: sid, name: S ? s(S.name) : sid, from: S ? s(S.from) : '', to: S ? s(S.to) : '', ids: byShow[sid] };
+      })
+    };
+  }
+
   function showById(c) {
     var S = byId(c.db.Shows || [], s(c.p.id));
     if (!S) throw E('找不到展覽');
@@ -825,7 +905,13 @@ var Logic = (function () {
     },
     loans: function (c) {
       var today = c.today, f = s(c.p.filter) || 'active';
-      return c.db.Loans.filter(function (L) {
+      // 歷史表只有在路由把它讀進來時才有東西(前端勾了「含歷史資料」才會讀)
+      var hist = {}, src = c.db.Loans;
+      if ((c.db.Hist || []).length) {
+        c.db.Hist.forEach(function (h) { hist[s(h.id)] = 1; });
+        src = src.concat(c.db.Hist);
+      }
+      return src.filter(function (L) {
         if (f === 'all') return true;
         if (f === 'active') return !!LIVE_ST[L.status];
         if (f === 'overdue') return isOverdue(L, today);
@@ -833,6 +919,7 @@ var Logic = (function () {
         return L.status === f;
       }).slice().sort(sortLoans).map(function (L) {
         var o = enrichLoan(c.db, L, today);
+        o.archived = !!hist[s(L.id)];
         if (L.status === 'pending' || L.status === 'approved') o.check = checkLines(c.db, L.lines, L.start, L.end, L.id, today, s(L.showId));
         return o;
       });
@@ -941,6 +1028,8 @@ var Logic = (function () {
       if (!SHOW_ST[to]) throw E('不認得的展覽狀態');
       if (to === from) return showView(c.db, S, today, true);
       if ((SHOW_FLOW[from] || []).indexOf(to) < 0) throw E('「' + SHOW_ST[from] + '」不能直接改成「' + SHOW_ST[to] + '」');
+      // 借用單已經搬去歷史表了,重開會變成一場沒有單的展覽,結算數字也會跟著歸零
+      if (from === 'closed' && bool(S.archived)) throw E('這場展覽的借用單已經封存到歷史表,不能再重新開啟。要查資料請到借用單頁勾選「含歷史資料」');
       if (to === 'closed' || to === 'cancelled') {
         var live = liveLoansOfShow(c.db, S.id);
         if (live.length) throw E('底下還有 ' + live.length + ' 張沒結束的借用單(' + live.map(function (L) { return L.id; }).join('、')
@@ -957,13 +1046,17 @@ var Logic = (function () {
         }
         if (short.length) log(c, '確認展覽(有缺口)', S.id, short.map(function (x) { return x.name + '@' + x.location + ' 缺 ' + x.short; }).join(';'));
       }
+      // 結案的當下把結算結果存成快照:之後單被搬去歷史表,結算頁還看得到數字
+      if (to === 'closed') S.settle = settleShow(c.db, S, today);
+      if (from === 'closed' && to === 'confirmed') S.settle = null;
       S.status = to; S.updatedAt = c.now;
       dirty(c.db, 'Shows');
-      log(c, '展覽改為' + SHOW_ST[to], S.id, S.name);
+      log(c, '展覽改為' + SHOW_ST[to], S.id, S.name + (to === 'closed' ? '|結算 未歸還 ' + S.settle.totals.unreturned + '、短少 ' + S.settle.totals.lost : ''));
       return showView(c.db, S, today, true);
     },
     deleteShow: function (c) {
       var S = showById(c), mine = loansOfShow(c.db, S.id);
+      if (bool(S.archived)) throw E('這場展覽的借用單已經封存到歷史表,不能刪除');
       if (mine.length) throw E('這場展覽底下已經有 ' + mine.length + ' 張借用單,不能刪除。請改成「取消」以保留紀錄');
       c.db.Shows = c.db.Shows.filter(function (x) { return x.id !== S.id; });
       dirty(c.db, 'Shows');
@@ -1001,6 +1094,105 @@ var Logic = (function () {
       });
       log(c, '由展覽產生借用單', S.id, made.join('、') || '全部失敗');
       return { ok: made.length, ids: made, fail: fail, show: showView(c.db, S, today, true) };
+    },
+    /** 展後結算:已封存的看結案當下的快照,其他的即時算 */
+    showSettle: function (c) {
+      var S = showById(c), today = c.today;
+      if (bool(S.archived)) {
+        var snap = S.settle || { at: '', lines: [], totals: { planned: 0, booked: 0, issued: 0, returned: 0, lost: 0, unreturned: 0 }, loanCount: 0 };
+        var out = { at: s(snap.at), lines: snap.lines || [], totals: snap.totals, loanCount: int(snap.loanCount) };
+        out.archived = true; out.id = S.id; out.name = s(S.name); out.from = s(S.from); out.to = s(S.to);
+        out.venue = s(S.venue); out.status = s(S.status); out.statusLabel = SHOW_ST[S.status] || '';
+        return out;
+      }
+      var live = settleShow(c.db, S, today);
+      live.archived = false; live.id = S.id; live.name = s(S.name); live.from = s(S.from); live.to = s(S.to);
+      live.venue = s(S.venue); live.status = s(S.status) || 'draft'; live.statusLabel = SHOW_ST[S.status] || SHOW_ST.draft;
+      return live;
+    },
+    /**
+     * 批次申請歸還:撤場時底下的單不用一張一張申請。
+     * 預設整批全還、還回原借出的廠區;真正扣庫存仍然要管理者確認(receive),這裡只是提出申請。
+     */
+    returnMany: function (c) {
+      var S = showById(c), ids = (c.p.ids || []).map(s).filter(Boolean), ok = 0, fail = [];
+      if (!ids.length) throw E('請先勾選要申請歸還的借用單');
+      if (ids.length > 50) throw E('一次最多 50 張');
+      var mine = {};
+      loansOfShow(c.db, S.id).forEach(function (L) { mine[L.id] = L; });
+      ids.forEach(function (id) {
+        var L = mine[id];
+        if (!L) { fail.push({ id: id, error: '這張單不屬於這場展覽' }); return; }
+        if (L.status !== 'out') { fail.push({ id: id, error: '不是「出借中」,不能申請歸還' }); return; }
+        var lines = (L.lines || []).map(function (ln) {
+          var it = byId(c.db.Items, ln.itemId), left = outstanding(ln), where = loc(ln.location);
+          if (it && it.mode === 'unit') {
+            var back = (ln.units || []).filter(function (u) {
+              return (ln.returnedUnits || []).indexOf(u) < 0 && (ln.lostUnits || []).indexOf(u) < 0;
+            });
+            return { itemId: s(ln.itemId), location: where, to: '', returned: 0, lost: 0,
+              unitResults: back.map(function (u) { return { id: u, result: 'in', note: '' }; }) };
+          }
+          return { itemId: s(ln.itemId), location: where, to: '', returned: left, lost: 0, unitResults: [] };
+        }).filter(function (x) { return x.returned > 0 || x.unitResults.length; });
+        if (!lines.length) { fail.push({ id: id, error: '沒有還沒歸還的項目' }); return; }
+        var sub = { db: c.db, user: c.user, today: c.today, now: c.now, log: c.log, logAs: c.logAs, notify: c.notify,
+          p: { id: id, lines: lines, note: s(c.p.note) } };
+        try { USER.requestReturn(sub); ok++; }
+        catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法申請歸還' }); }
+      });
+      log(c, '展覽批次申請歸還', S.id, ok + ' 張' + (fail.length ? ',失敗 ' + fail.length + ' 張' : ''));
+      return { ok: ok, fail: fail, show: showView(c.db, S, c.today, true) };
+    },
+    /** 先看會搬走哪些,再決定要不要搬。這一步完全不寫東西 */
+    archivePreview: function (c) {
+      return archiveGroups(c.db, bool(c.p.includePlain));
+    },
+    /**
+     * 實際封存。順序不可以反:
+     *   ① 先把結算快照補起來(還看得到單的時候算)
+     *   ② 附加到歷史表(失敗就整個中止,借用單一列都沒動)
+     *   ③ 確定附加成功,才從借用單表移除
+     * 中間斷掉的話,重跑一次會跳過已經在歷史表裡的單,所以可以安全重跑。
+     */
+    archiveLoans: function (c) {
+      if (typeof c.appendHist !== 'function') throw E('這個版本的後端還不支援封存');
+      var plain = bool(c.p.includePlain), today = c.today;
+      var list = archivable(c.db, plain);
+      var only = (c.p.ids || []).map(s).filter(Boolean);
+      if (only.length) {
+        var want = {};
+        only.forEach(function (i) { want[i] = 1; });
+        list = list.filter(function (L) { return want[L.id]; });
+      }
+      if (!list.length) throw E('沒有符合條件的借用單。只有「已結案展覽底下」而且本身已經結束的單才會被搬走');
+      if (list.length > 500) list = list.slice(0, 500);      // 一次的寫入量要壓得住
+
+      // ① 快照:一定要在單還在的時候算
+      var shows = {}, marked = [];
+      list.forEach(function (L) { var sid = s(L.showId); if (sid) shows[sid] = 1; });
+      Object.keys(shows).forEach(function (sid) {
+        var S = byId(c.db.Shows || [], sid);
+        if (!S) return;
+        if (!S.settle || !S.settle.totals) S.settle = settleShow(c.db, S, today);
+        S.archived = true; S.updatedAt = c.now;
+        marked.push(sid);
+      });
+      if (marked.length) dirty(c.db, 'Shows');
+
+      // ② 附加(已經在歷史表裡的跳過,讓中斷後重跑是安全的)
+      var already = {};
+      (c.db.Hist || []).forEach(function (h) { already[s(h.id)] = 1; });
+      var fresh = list.filter(function (L) { return !already[L.id]; });
+      if (fresh.length) c.appendHist(fresh);
+
+      // ③ 附加成功才移除
+      var gone = {};
+      list.forEach(function (L) { gone[L.id] = 1; });
+      c.db.Loans = c.db.Loans.filter(function (L) { return !gone[L.id]; });
+      dirty(c.db, 'Loans');
+      log(c, '封存借用單到歷史表', marked.join('、') || '-', list.length + ' 張(重複 ' + (list.length - fresh.length) + ' 張)');
+      return { moved: fresh.length, skipped: list.length - fresh.length, shows: marked, ids: list.map(function (L) { return L.id; }) };
     },
     /** 批次延期:展期往後延時,底下的單不用一張一張延。一張失敗不影響其他張 */
     extendMany: function (c) {
@@ -1115,7 +1307,9 @@ var Logic = (function () {
     deleteItem: function (c) {
       var it = byId(c.db.Items, s(c.p.id));
       if (!it) throw E('找不到展品');
-      var used = c.db.Loans.filter(function (L) {
+      // 歷史表裡的舊單也算借過 —— 不看的話,封存之後這個展品會突然變得可以刪,
+      // 舊單就會永遠顯示「(已刪除)」,查不出當初借了什麼
+      var used = c.db.Loans.concat(c.db.Hist || []).filter(function (L) {
         return (L.lines || []).some(function (ln) { return ln.itemId === it.id; });
       }).length;
       if (used) throw E('「' + it.name + '」已經有 ' + used + ' 筆借用紀錄,不能刪除。請改用「下架」 —— 刪掉的話那些借用單會變成「(已刪除)」,查不出當初借了什麼。');
@@ -1272,6 +1466,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules };
 })();
