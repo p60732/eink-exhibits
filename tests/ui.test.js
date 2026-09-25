@@ -687,27 +687,36 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     await p2.close(); await p3.close(); await p4.close();
   }
 
-  // ---- 展品目錄:分類籤條要釘在標題列底下(v2.5.3)----
+  // ---- 分類籤條要釘在標題列底下(v2.5.3:展品目錄 + 展品管理)----
   // 展品一多就得一路捲回最上面才換得了分類,捲到下面等於沒有這排籤條。
   {
-    await p.click('[data-v=catalog]'); await wait(900);
-    const topH = await p.$eval('.top', el => el.getBoundingClientRect().height);
-    await p.evaluate(() => window.scrollTo(0, 2000)); await wait(300);
-    const bar = await p.$('#cbar');
-    if (!bar) throw new Error('找不到分類籤條');
-    const box = await bar.boundingBox();
-    if (!box) throw new Error('★ 捲下去之後分類籤條不見了 —— 要釘在上面');
-    if (Math.abs(box.y - topH) > 3) throw new Error('★ 捲下去時分類籤條要貼在標題列底下('
-      + '標題列高 ' + Math.round(topH) + ',籤條在 ' + Math.round(box.y) + ')');
-    // 釘住的籤條不可以蓋掉標題列
-    const zs = await p.evaluate(() => [getComputedStyle(document.querySelector('.top')).zIndex,
-      getComputedStyle(document.querySelector('#cbar')).zIndex].map(Number));
-    if (!(zs[1] < zs[0])) throw new Error('★ 籤條的 z-index 要低於標題列,不然會蓋住分頁列:' + zs.join('<'));
-    // 點了還要真的換得動分類
-    await p.click('#cbar .catchip:nth-child(2)'); await wait(400);
-    if (!await p.$('#cbar .catchip.on')) throw new Error('釘住之後點籤條沒反應');
-    await p.click('#cbar .catchip:nth-child(1)'); await wait(400);
-    await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+    // 上面「換人登入」那一段把 p 留在同仁身分,展品管理是管理者分頁,要先換回來
+    await p.click('#menu-btn'); await p.click('#m-out'); await p.waitForSelector('#login-f');
+    await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible');
+    await p.fill('#l-pin', '1234'); await p.click('#login-f button'); await p.waitForSelector('[data-v=items]');
+    const stickyOk = async (view, barSel, label) => {
+      await p.click(`[data-v=${view}]`); await wait(900);
+      await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+      const topH = await p.$eval('.top', el => el.getBoundingClientRect().height);
+      await p.evaluate(() => window.scrollTo(0, 2000)); await wait(300);
+      const bar = await p.$(barSel);
+      if (!bar) throw new Error(label + ':找不到分類籤條 ' + barSel);
+      const box = await bar.boundingBox();
+      if (!box) throw new Error('★ ' + label + ':捲下去之後分類籤條不見了 —— 要釘在上面');
+      if (Math.abs(box.y - topH) > 3) throw new Error('★ ' + label + ':捲下去時分類籤條要貼在標題列底下('
+        + '標題列高 ' + Math.round(topH) + ',籤條在 ' + Math.round(box.y) + ')');
+      // 釘住的籤條不可以蓋掉標題列
+      const zs = await p.evaluate(sel => [getComputedStyle(document.querySelector('.top')).zIndex,
+        getComputedStyle(document.querySelector(sel)).zIndex].map(Number), barSel);
+      if (!(zs[1] < zs[0])) throw new Error('★ ' + label + ':籤條的 z-index 要低於標題列,不然會蓋住分頁列:' + zs.join('<'));
+      // 點了還要真的換得動分類
+      await p.click(`${barSel} .catchip:nth-child(2)`); await wait(400);
+      if (!await p.$(`${barSel} .catchip.on`)) throw new Error(label + ':釘住之後點籤條沒反應');
+      await p.click(`${barSel} .catchip:nth-child(1)`); await wait(400);
+      await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+    };
+    await stickyOk('catalog', '#cbar', '展品目錄');
+    await stickyOk('items', '#ibar', '展品管理');
   }
 
   // ---- 離譜的借出 / 歸還日期不可以送出(v2.5.3)----
