@@ -102,6 +102,8 @@ label.f b{color:var(--red);font-weight:400}
 .catbar-stick{position:sticky;top:var(--toph,56px);z-index:15;background:var(--bg);
   margin:0 -20px;padding:10px 20px 0;border-bottom:1px solid var(--line)}
 .catbar-stick .catbar{padding-bottom:10px}
+/* 盤點頁釘住的是兩排(廠區 + 分類),中間不要留到 10px 那麼開,高度會吃掉手機半個畫面 */
+.catbar-stick .catbar:not(:last-child){padding-bottom:6px}
 @media (max-width:760px){ .catbar-stick{margin:0 -16px;padding:8px 16px 0} }
 @media print{ .catbar-stick{position:static;border:0} }
 .catchip{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--line);

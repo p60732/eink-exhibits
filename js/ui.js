@@ -1035,8 +1035,7 @@ VIEWS.count = async main => {
     <div class="kpis" id="ksum"></div>
     <div class="meta" id="ksub" style="margin:-4px 0 10px"></div>
     <div class="card" style="margin:14px 0"><div class="row"><input class="grow" type="text" id="kscan" placeholder="輸入或用掃描槍刷編號後按 Enter(例:E0001)" style="flex:1 1 240px"><button class="btn" data-act="count-cam">${ICON.scan}相機掃描</button></div><div class="meta" id="klast" style="margin-top:6px"></div></div>
-    <div class="catbar" id="ksite"></div>
-    <div id="kbar"></div>
+    <div class="catbar-stick" id="kbars"><div class="catbar" id="ksite"></div><div id="kbar"></div></div>
     <div id="kbody"></div>
     <div class="card" style="margin-top:14px"><div class="row"><label class="chk"><input type="checkbox" id="kapply" checked>把差異套用到系統數量</label><label class="chk"><input type="checkbox" id="klost">未點到的單台標記為「遺失」</label><span class="spacer"></span><button class="btn pri" data-act="count-submit">完成盤點</button></div></div>`;
 

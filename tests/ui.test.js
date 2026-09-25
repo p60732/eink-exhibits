@@ -717,6 +717,21 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     };
     await stickyOk('catalog', '#cbar', '展品目錄');
     await stickyOk('items', '#ibar', '展品管理');
+    await stickyOk('count', '#kbars', '盤點');
+    // 盤點釘的是兩排(廠區 + 分類),兩排都要在釘住的那一塊裡面,而且要黏在一起
+    {
+      await p.click('[data-v=count]'); await wait(1500);
+      await p.evaluate(() => window.scrollTo(0, 2000)); await wait(300);
+      const [site, cat, wrap] = await p.evaluate(() => ['#ksite', '#kbar', '#kbars']
+        .map(sel => { const r = document.querySelector(sel).getBoundingClientRect(); return { y: r.y, b: r.bottom, h: r.height }; }));
+      if (site.y < wrap.y - 1 || cat.b > wrap.b + 1) throw new Error('★ 盤點:廠區與分類兩排都要在釘住的那一塊裡面');
+      if (cat.y - site.b > 12) throw new Error('★ 盤點:兩排之間離太開(' + Math.round(cat.y - site.b) + 'px),手機上會吃掉太多畫面');
+      // 釘住之後兩排都還要點得動
+      await p.click('#ksite .catchip:nth-child(2)'); await wait(500);
+      if (!await p.$('#ksite .catchip.on')) throw new Error('盤點:釘住之後點廠區沒反應');
+      await p.click('#ksite .catchip:nth-child(1)'); await wait(500);
+      await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+    }
   }
 
   // ---- 離譜的借出 / 歸還日期不可以送出(v2.5.3)----
