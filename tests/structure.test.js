@@ -1,7 +1,12 @@
 // 接線層 / 結構防回歸測試:node tests/structure.test.js
 const assert = require('assert'), fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..');
-const read = f => fs.readFileSync(path.join(root, f), 'utf8');
+/**
+ * js/ui.js 是建置產物(原始碼在 js/src/*.js),所以這裡讀它 = 讀串接後的結果。
+ * 下面那些檢查問的都是「整個前端有沒有做某件事」,要串起來看才對,不能逐檔檢查。
+ */
+const { concat: concatUI, parts: uiParts } = require('../js/src/_concat');
+const read = f => f === 'js/ui.js' ? concatUI() : fs.readFileSync(path.join(root, f), 'utf8');
 const gasFiles = fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs'));
 const webFiles = ['index.html', 'css/style.css', 'js/connect.js', 'js/ui.js'];
 let n = 0; const t = (name, fn) => { try { fn(); n++; } catch (e) { e.message = name + ':' + e.message; throw e; } };
@@ -201,5 +206,29 @@ t('操作紀錄:每一個動作字串都要歸得到大類,不可以掉進「其
   const ui = read('js/ui.js');
   const order = JSON.parse((ui.match(/const LOG_CAT_ORDER = (\[[^\]]*\])/) || [])[1].replace(/'/g, '"'));
   Object.keys(R.LOG_CAT_LABEL).forEach(k => assert.ok(order.includes(k), '前端的 LOG_CAT_ORDER 少了「' + k + '」'));
+});
+t('前端原始碼拆檔:串接順序就是行為,而且不可以留下手改的 js/ui.js', () => {
+  // 1) 產物不可以躺在原始碼目錄裡 —— 留著遲早有人改到那一份,改完卻沒進建置
+  assert.ok(!fs.existsSync(path.join(root, 'js/ui.js')),
+    'js/ui.js 是建置產物,不應該存在於原始碼目錄(要改請改 js/src/*.js)');
+  // 2) 串接結果語法要過,而且關鍵骨架都在(漏掉一個檔就會少東西)
+  const ui = concatUI();
+  new Function(ui);
+  ['const VIEWS = {}', 'const ACT = {', 'const S = ', 'function render('].forEach(k =>
+    assert.ok(ui.includes(k), '串接結果少了「' + k + '」,可能漏掉某個 js/src 檔'));
+  // 3) 順序不變式:常數要在用到它的頁面之前,事件分派要在最後
+  const names = uiParts();
+  assert.ok(names.length >= 5, 'js/src 檔案數不對:' + names.join(','));
+  assert.strictEqual(names.join(','), [...names].sort().join(','), 'parts() 必須是排序過的');
+  const at = k => ui.indexOf(k);
+  assert.ok(at('const REQ_WORD') < at('VIEWS.mine'), 'REQ_WORD 必須排在用到它的頁面之前');
+  assert.ok(at('const LOG_CAT_ORDER') < at('VIEWS.logs'), 'LOG_CAT_ORDER 必須排在操作紀錄之前');
+  assert.ok(at('const PRINT_BAR') < at('function printLoan'), 'PRINT_BAR 必須排在列印函式之前');
+  assert.ok(at('const ACT = {') > at('VIEWS.catalog'), '事件分派必須排在所有頁面之後');
+  // 4) 每個檔案都要小到「改一頁只讀那一頁」還有意義
+  uiParts().forEach(f => {
+    const n2 = fs.readFileSync(path.join(root, 'js/src', f), 'utf8').split('\n').length;
+    assert.ok(n2 <= 600, 'js/src/' + f + ' 有 ' + n2 + ' 行,超過 600 就失去拆檔的意義了');
+  });
 });
 console.log('✔ 結構檢查 ' + n + ' 項通過');

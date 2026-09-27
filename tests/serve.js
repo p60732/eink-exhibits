@@ -11,7 +11,13 @@ http.createServer((req, res) => {
       res.end(G.ctx.doPost({ postData: { contents: b } }).t);
     }); return;
   }
-  const f = path.join(root, decodeURIComponent(req.url.split('?')[0]) === '/' ? 'index.html' : decodeURIComponent(req.url.split('?')[0]));
+  const rel = decodeURIComponent(req.url.split('?')[0]);
+  // js/ui.js 是建置產物,原始碼在 js/src/ —— 這裡即時串,測試才跟正式站跑同一份東西
+  if (rel === '/js/ui.js') {
+    res.writeHead(200, { 'Content-Type': 'text/javascript;charset=utf-8' });
+    return res.end(require('../js/src/_concat').concat());
+  }
+  const f = path.join(root, rel === '/' ? 'index.html' : rel);
   if (!f.startsWith(root) || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
   let body = fs.readFileSync(f);
   if (f.endsWith('connect.js')) body = body.toString().replace('__GAS_URL__', `http://localhost:${port}/api`);

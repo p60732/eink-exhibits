@@ -31,7 +31,24 @@ const copy = (from, to, transform) => {
   fs.writeFileSync(to, transform ? transform(src) : src);
 };
 // 前端:只有 GAS_URL 由建置注入
-['index.html', 'css/style.css', 'js/ui.js'].forEach(f => copy(path.join(root, f), path.join(dist, 'site', f)));
+['index.html', 'css/style.css'].forEach(f => copy(path.join(root, f), path.join(dist, 'site', f)));
+/**
+ * js/ui.js 是**建置產物**,原始碼在 js/src/*.js(依檔名數字前綴串接)。
+ * 串接不做任何轉換,所以產物跟拆檔之前的單一檔案一模一樣 —— 這是「拆檔零風險」的依據。
+ */
+{
+  const { parts, concat } = require('./js/src/_concat');
+  const ui = concat();
+  try { new Function(ui); } catch (e) {
+    console.error('✘ js/src 串接之後語法不正確:' + e.message); process.exit(1);
+  }
+  if (!/const VIEWS = \{\}/.test(ui) || !/const ACT = \{/.test(ui)) {
+    console.error('✘ 串接結果少了 VIEWS 或 ACT,檔案可能漏掉了'); process.exit(1);
+  }
+  fs.mkdirSync(path.join(dist, 'site/js'), { recursive: true });
+  fs.writeFileSync(path.join(dist, 'site/js/ui.js'), ui);
+  console.log('  js/src → js/ui.js(' + parts().length + ' 個檔,' + ui.split('\n').length + ' 行)');
+}
 copy(path.join(root, 'js/connect.js'), path.join(dist, 'site/js/connect.js'), s => s.replace("'__GAS_URL__'", JSON.stringify(cfg.gasUrl)));
 /**
  * 檔名後面掛上內容雜湊:GitHub Pages 會讓瀏覽器快取 js/css 一段時間,
@@ -70,7 +87,8 @@ fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs')).forEach(f 
 const diff = [];
 // index.html 只允許多出 ?v=<雜湊>,其他一個字都不能差
 ['index.html', 'css/style.css', 'js/ui.js'].forEach(f => {
-  const a = fs.readFileSync(path.join(root, f), 'utf8');
+  // js/ui.js 沒有單一原始檔,它的「原始碼」就是 js/src 串起來的結果
+  const a = f === 'js/ui.js' ? require('./js/src/_concat').concat() : fs.readFileSync(path.join(root, f), 'utf8');
   let b = fs.readFileSync(path.join(dist, 'site', f), 'utf8');
   if (f === 'index.html') b = b.replace(/\?v=[0-9a-f]{8}/g, '').replace(/name="build" content="[0-9a-f]{8}"/, 'name="build" content="__BUILD__"');
   if (a !== b) diff.push(f);
