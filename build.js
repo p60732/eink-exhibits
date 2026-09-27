@@ -80,8 +80,8 @@ const ASSETS = ['css/style.css', 'js/connect.js', 'js/ui.js'];
   fs.writeFileSync(path.join(dist, 'site/version.json'), JSON.stringify({ build: build }));
 }
 fs.writeFileSync(path.join(dist, 'site/.nojekyll'), '');
-// 後端:原樣複製
-fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs')).forEach(f => copy(path.join(root, 'gas', f), path.join(dist, 'gas', f)));
+// 後端:原樣複製(.gs 與 appsscript.json;後者由 clasp 自動部署使用,缺了一致性檢查會失敗)
+fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs') || f === 'appsscript.json').forEach(f => copy(path.join(root, 'gas', f), path.join(dist, 'gas', f)));
 
 // 單一來源檢查
 const diff = [];
