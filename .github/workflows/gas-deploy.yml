@@ -1,0 +1,70 @@
+# 【部署積木】合併到 main → 測試 → clasp push → 更新原本的部署（網址不變）→ 驗證新版生效
+# 複製到產品 repo 的 .github/workflows/gas-deploy.yml
+# 需要的 GitHub secrets（Settings → Secrets and variables → Actions）：
+#   CLASPRC_JSON    Mac 上 `clasp login` 產生的 ~/.clasprc.json 全文
+#   GAS_SCRIPT_ID   Apps Script 專案 ID（不要寫進 repo）
+#   GAS_DEPLOY_ID   現有 Web App 部署 ID（AKfy… 開頭）
+#   GAS_WEBAPP_URL  Web App 的 /exec 網址
+name: gas-deploy
+on:
+  push:
+    branches: [main]
+    paths: ['gas/**']
+  workflow_dispatch:
+concurrency:
+  group: gas-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 測試（沒過就不部署）
+        run: |
+          for t in tests/*.test.js; do
+            case "$t" in *ui.test.js) echo "略過 UI 測試 $t";; *) node "$t";; esac
+          done
+
+      - name: 安裝 clasp
+        run: npm i -g @google/clasp@2.4.2
+
+      - name: 寫入授權與專案設定
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+        run: |
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          printf '{"scriptId":"%s","rootDir":"gas"}' "$GAS_SCRIPT_ID" > .clasp.json
+
+      - name: 沒有 appsscript.json 就先從線上拿一份（只拿設定檔，不覆蓋程式）
+        env:
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+        run: |
+          if [ ! -f gas/appsscript.json ]; then
+            mkdir -p /tmp/pull && cd /tmp/pull
+            printf '{"scriptId":"%s","rootDir":"."}' "$GAS_SCRIPT_ID" > .clasp.json
+            clasp pull
+            cp appsscript.json "$GITHUB_WORKSPACE/gas/appsscript.json"
+            echo "::warning::gas/appsscript.json 是從線上拿的，請之後 commit 進 repo"
+          fi
+
+      - name: 上傳程式（clasp push）
+        run: clasp push -f
+
+      - name: 建新版本並更新原本的部署（網址不變）
+        env:
+          GAS_DEPLOY_ID: ${{ secrets.GAS_DEPLOY_ID }}
+        run: clasp deploy -i "$GAS_DEPLOY_ID" -d "${GITHUB_SHA::7} $(date -u +%F)"
+
+      - name: 驗證線上真的活著（/deploy-check 自動版）
+        env:
+          GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
+        run: |
+          sleep 5
+          body=$(curl -sL "$GAS_WEBAPP_URL")
+          echo "$body" | head -c 200
+          echo "$body" | grep -q '"health":true' || { echo "::error::健康檢查失敗，新版可能沒生效"; exit 1; }
