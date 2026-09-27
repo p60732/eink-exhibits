@@ -249,4 +249,12 @@ t('換人登入:S 裡每一個篩選狀態都要被 clearWork() 清掉', () => {
   const fMiss = [...fDecl.matchAll(/(\w+):/g)].map(m => m[1]).filter(k => !fClear.includes(k + ':'));
   assert.strictEqual(fMiss.join('、'), '', '★ clearWork() 的 filters 少了:' + fMiss.join('、'));
 });
+t('總覽展開的明細要接在被點到的磚塊後面(手機上不能掉到八塊磚以下)', () => {
+  const ui = read('js/ui.js');
+  assert.ok(/brick\.after\(box\)/.test(ui), '★ 展開的明細必須插到被點到的磚塊後面');
+  assert.ok(/const slot = siteBreakBox/.test(ui), 'drawSiteBreak 必須透過 siteBreakBox 取得容器(await 之後要重新定位)');
+  const css = read('css/style.css');
+  assert.ok(/\.kpis>#sitebreak\{grid-column:1\/-1\}/.test(css), '★ 明細進了格線就要橫跨一整列,不然會被擠成一格寬');
+  assert.ok(/#sitebreak:empty\{display:none\}/.test(css), '收起的時候空容器不能佔位');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

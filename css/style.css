@@ -145,6 +145,9 @@ tr.groupe td{font-size:13px;color:var(--muted);padding:8px 12px}
 .pill.unit{background:var(--info-soft);color:var(--info)}
 /* ---------- KPI ---------- */
 .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+/* 廠區明細會被搬到「被點到的那塊磚」後面,所以它是格線裡的一整列;空的時候不要佔位 */
+.kpis>#sitebreak{grid-column:1/-1}
+#sitebreak:empty{display:none}
 .kpi{padding:16px 18px;display:flex;gap:13px;align-items:center}
 /* 可以展開各廠區數字的磚塊:看得出來點得下去 */
 .kpi.sitekpi{cursor:pointer;position:relative}

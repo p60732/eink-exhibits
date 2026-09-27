@@ -59,11 +59,27 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
  * **展開時才要**,所以總覽第一次開還是一趟。前端只做加總,不重算任何庫存規則。
  * ⚠️ 要跟磚塊上的數字對得起來,就得跟後端 dashboard 一樣**排除已下架的展品**。
  */
+/**
+ * 展開的內容要接在**被點到的那塊磚**後面。
+ * 手機上一排只放得下一塊磚,展開的表格如果固定放在八塊磚之後,
+ * 使用者點了箭頭還得往下捲很久才看得到(2026-09-27 回報)。
+ * 收起的時候把空的容器移回格線外面,不然它會在格線裡佔一格、多出一段空白。
+ */
+function siteBreakBox() {
+  const box = $('#sitebreak');
+  if (!box) return null;
+  const brick = S.dashSite ? $('.kpi.sitekpi.open') : null;
+  const grid = $('.kpis');
+  if (brick) { if (brick.nextElementSibling !== box) brick.after(box); }
+  else if (grid && box.parentElement === grid) grid.after(box);
+  return box;
+}
+
 async function drawSiteBreak() {
   const want = S.dashSite;
   // 哪一塊磚被展開了,要看得出來(箭頭轉向)
   $$('.kpi.sitekpi').forEach(el => el.classList.toggle('open', !!want && el.dataset.f === want));
-  const slot = () => $('#sitebreak');
+  const slot = siteBreakBox;
   if (!slot()) return;
   if (!want) { slot().innerHTML = ''; return; }
   slot().innerHTML = '<div class="card"><div class="meta">載入各廠區數字…</div></div>';
@@ -90,7 +106,7 @@ async function drawSiteBreak() {
   // 合計的「品項」要算不重複的展品數(同一項放兩區會被數兩次)
   sum.items = live.filter(i => (i.sites || []).length).length;
   const HEAD = { items: '展品品項', total: '總件數', inStock: '倉庫在庫' };
-  box.innerHTML = `<div class="card sitebreak" style="margin-top:14px">
+  box.innerHTML = `<div class="card sitebreak">
     <div class="row"><b>各廠區的${esc(HEAD[want] || '數字')}</b>
       <span class="meta">點廠區可以跳到展品目錄,那邊已經幫你篩好</span>
       <span class="spacer"></span><button class="btn sm ghost" data-act="site-break" data-f="">收起</button></div>

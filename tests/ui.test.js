@@ -755,6 +755,31 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     }
   }
 
+  // ---- 手機上「總覽磚塊展開」要接在被點到的那塊磚後面(2026-09-27 回報)----
+  // 手機一排只放得下一塊磚。展開的明細原本固定放在八塊磚之後,
+  // 使用者點了箭頭,數字跑到畫面外,看起來像「點了沒反應」。
+  {
+    await p.click('[data-v=dash]'); await wait(1500);
+    await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+    const brickSel = '.kpi.sitekpi[data-f=items]';
+    if (!await p.$(brickSel)) throw new Error('總覽:找不到可展開的「展品品項」磚塊');
+    await p.click(brickSel); await p.waitForSelector('.sitebreak table', { timeout: 15000 });
+    const m = await p.evaluate(sel => {
+      const b = document.querySelector(sel).getBoundingClientRect();
+      const s = document.querySelector('#sitebreak').getBoundingClientRect();
+      const bricks = [...document.querySelectorAll('.kpi')].map(e => e.getBoundingClientRect().bottom);
+      return { brickBottom: b.bottom, panelTop: s.y, lastBrickBottom: Math.max(...bricks), bricks: bricks.length };
+    }, brickSel);
+    if (m.bricks < 6) throw new Error('總覽的磚塊數不對:' + m.bricks);
+    const gap = m.panelTop - m.brickBottom;
+    if (gap < -2 || gap > 40) throw new Error('★ 總覽:展開的明細要緊接在被點到的磚塊下面,現在差 ' + Math.round(gap) + 'px');
+    if (m.panelTop >= m.lastBrickBottom) throw new Error('★ 總覽:展開的明細掉到所有磚塊的下面了,手機上要捲很久才看得到');
+    // 收起來之後不可以留一段空白(空的容器要移回格線外面)
+    await p.click('.sitebreak [data-act=site-break]'); await wait(600);
+    const h = await p.$eval('#sitebreak', el => el.getBoundingClientRect().height);
+    if (h > 1) throw new Error('★ 總覽:收起之後空容器還佔了 ' + Math.round(h) + 'px');
+  }
+
   // ---- 四種請求的按鈕要講自己的話(v2.6)----
   // 以前寫死成「簽收 / 歸還」,延期與轉借都長出「撤回歸還」;
   // 而且「請管理者當面確認」是用卡片文字 regex 猜型別的,延期會被猜成歸還、跳出錯的對話框。
