@@ -249,6 +249,21 @@ t('換人登入:S 裡每一個篩選狀態都要被 clearWork() 清掉', () => {
   const fMiss = [...fDecl.matchAll(/(\w+):/g)].map(m => m[1]).filter(k => !fClear.includes(k + ':'));
   assert.strictEqual(fMiss.join('、'), '', '★ clearWork() 的 filters 少了:' + fMiss.join('、'));
 });
+t('部署印記:repo 裡必須是 dev,doGet 要吐出來,CI 要蓋章也要驗', () => {
+  // 以前確認「線上是不是我剛推的那一份」得開編輯器逐檔比 sha256(十幾分鐘,而且靠眼睛)。
+  // 現在靠這一行:CI 在 clasp push 前蓋上 commit 短雜湊,部署完 curl /exec 對答案。
+  // 這三件事任何一件斷掉,驗證就會變成「永遠通過」的假綠燈,所以綁在一起檢查。
+  const stamp = read('gas/99_stamp.gs');
+  assert.ok(/^var CODE_STAMP = 'dev';$/m.test(stamp),
+    "★ gas/99_stamp.gs 在 repo 裡必須剛好是 var CODE_STAMP = 'dev'; (CI 的 sed 認這一行)");
+  assert.ok(/code:\s*CODE_STAMP/.test(read('gas/00_gateway.gs')), '★ doGet 必須帶 code: CODE_STAMP');
+  assert.ok(/health:\s*true/.test(read('gas/00_gateway.gs')), 'doGet 仍然必須帶 health: true');
+  const wf = read('.github/workflows/gas-deploy.yml');
+  assert.ok(/sed -i .*CODE_STAMP/.test(wf), '★ gas-deploy 少了蓋印記那一步');
+  // 比的是真正執行的那一行,不是檔頭註解裡的「clasp push」
+  assert.ok(wf.indexOf('CODE_STAMP') < wf.indexOf('run: clasp push -f'), '★ 印記必須蓋在 clasp push 之前');
+  assert.ok(/\\"code\\":\\"\$sha\\"/.test(wf), '★ gas-deploy 部署後必須驗 code 等於這次的 commit,只驗 health 等於沒驗');
+});
 t('總覽展開的明細要接在被點到的磚塊後面(手機上不能掉到八塊磚以下)', () => {
   const ui = read('js/ui.js');
   assert.ok(/brick\.after\(box\)/.test(ui), '★ 展開的明細必須插到被點到的磚塊後面');

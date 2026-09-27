@@ -81,7 +81,8 @@ const ASSETS = ['css/style.css', 'js/connect.js', 'js/ui.js'];
 }
 fs.writeFileSync(path.join(dist, 'site/.nojekyll'), '');
 // 後端:原樣複製(.gs 與 appsscript.json;後者由 clasp 自動部署使用,缺了一致性檢查會失敗)
-fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs') || f === 'appsscript.json').forEach(f => copy(path.join(root, 'gas', f), path.join(dist, 'gas', f)));
+const GAS_FILES = fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs') || f === 'appsscript.json');
+GAS_FILES.forEach(f => copy(path.join(root, 'gas', f), path.join(dist, 'gas', f)));
 
 // 單一來源檢查
 const diff = [];
@@ -93,7 +94,8 @@ const diff = [];
   if (f === 'index.html') b = b.replace(/\?v=[0-9a-f]{8}/g, '').replace(/name="build" content="[0-9a-f]{8}"/, 'name="build" content="__BUILD__"');
   if (a !== b) diff.push(f);
 });
-fs.readdirSync(path.join(root, 'gas')).forEach(f => { if (fs.readFileSync(path.join(root, 'gas', f), 'utf8') !== fs.readFileSync(path.join(dist, 'gas', f), 'utf8')) diff.push('gas/' + f); });
+// 只比對「有被複製」的那些(過濾條件要跟上面複製那一行一致,不然 gas/ 多放一個檔就會噴 ENOENT)
+GAS_FILES.forEach(f => { if (fs.readFileSync(path.join(root, 'gas', f), 'utf8') !== fs.readFileSync(path.join(dist, 'gas', f), 'utf8')) diff.push('gas/' + f); });
 const c1 = fs.readFileSync(path.join(root, 'js/connect.js'), 'utf8').split('\n'), c2 = fs.readFileSync(path.join(dist, 'site/js/connect.js'), 'utf8').split('\n');
 if (c1.filter((l, i) => l !== c2[i]).length !== 1) diff.push('js/connect.js(應只差 GAS_URL 一行)');
 if (diff.length) { console.error('✘ 產物與原始碼不一致:' + diff.join('、')); process.exit(1); }

@@ -160,9 +160,11 @@ function userError_(msg) { var e = new Error(msg); e.userFacing = true; return e
  * Apps Script 的 /exec 會先回 302 再轉址,偶爾(特別是剛換版本那幾秒)POST 會被當成 GET 重送,
  * 於是前端拿到的是這一頁而不是它要的資料。沒有這個記號的話,前端會把這串字當成正常答案存進快取,
  * 畫面就會變成「資料全都不見了」。前端看到 health 就當成連線失敗處理(讀取類會自動重試)。
+ *
+ * 另外帶 code:線上跑的是哪一版程式(見 99_stamp.gs)。部署完 curl 一下對雜湊就知道推上去了沒有。
  */
 function doGet() {
-  return json_({ success: false, health: true, data: null, error: '這是後端的健康檢查頁,前端請用 POST 呼叫。' + new Date().toISOString() });
+  return json_({ success: false, health: true, code: CODE_STAMP, data: null, error: '這是後端的健康檢查頁,前端請用 POST 呼叫。' + new Date().toISOString() });
 }
 
 function doPost(e) {
