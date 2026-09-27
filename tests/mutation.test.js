@@ -20,6 +20,9 @@ const M = [
   ['20_logic.gs', 'if (ret || lost) touched++;', '', '數量型歸還不算進「有沒有真的動到」'],
   ['20_logic.gs', "if (r.result === 'lost') { touched++;", "if (r.result === 'lost') {", '單台回報遺失不算進「有沒有真的動到」'],
   ['20_logic.gs', 'leftBehind: leftBehindLoans(c.db, today).map(en),', '', '總覽不再提醒「已停用還沒還」'],
+  ['20_logic.gs', "o.cat = logCat(r.action); o.catLabel = LOG_CAT_LABEL[o.cat];", '', '操作紀錄不再帶動作大類'],
+  ['20_logic.gs', "['show', ['展覽', '封存借用單到歷史表']],", "['show', ['展覽']],", '封存借用單被歸到借用流程'],
+  ['20_logic.gs', "['item', ['展品', '單台', '盤點', '上架']],", "['item', ['展品', '單台', '盤點']],", '「重新上架」歸不到展品庫存'],
   ['20_logic.gs', 'return !!LIVE_ST[L.status] && s(L.applicantId) && off[s(L.applicantId)];',
    'return s(L.applicantId) && off[s(L.applicantId)];', '離職未還把已結束的單也算進來'],
   // 效能重構的守門:欄位少讀 / 表少讀 / 快取沒失效,都必須被 e2e 抓到

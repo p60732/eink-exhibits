@@ -9,7 +9,7 @@
 const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
   cart: [], multi: new Set(), plan: { start: '', end: '' },
-  filters: { q: '', cat: '', start: '', end: '', onlyAvail: false },
+  filters: { q: '', cat: '', loc: '', start: '', end: '', onlyAvail: false },
   loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, loanHist: false,
   showId: null, showFilter: 'open', showLines: null, showPick: null
 };
@@ -467,6 +467,8 @@ function go(v) {
 /* ===================== 共用元件 ===================== */
 /** 四種請求的中文字。按鈕標籤、當面確認對話框共用一份,免得哪天又有人只改一邊 */
 const REQ_WORD = { pickup: '領取', 'return': '歸還', extend: '延期', transfer: '轉借' };
+/** 操作紀錄大類的顯示順序。名稱與歸類規則都在後端(Logic.logCat),這裡只決定籤條排列 */
+const LOG_CAT_ORDER = ['loan', 'item', 'show', 'cat', 'user', 'other'];
 
 /* 列印視窗頂端的工具列。三種列印(借用單 / 備料清單 / QR 標籤)都是 window.open 開新視窗,
    以前印完就停在那一頁,沒有任何回得來的入口 —— 手機上尤其明顯(那是一個分頁,不是視窗)。
@@ -632,7 +634,7 @@ VIEWS.catalog = async main => {
       <label class="chk"><input type="checkbox" id="cav" ${f.onlyAvail ? 'checked' : ''}>只看可借</label>
       ${pick ? '' : `<button class="btn" data-act="export" title="把目前的庫存表匯出成 CSV" aria-label="匯出庫存 CSV">${ICON.dl}<span class="lbl-hide">匯出</span></button>`}
     </div>
-    <div id="cbar" class="catbar-stick"></div>
+    <div class="catbar-stick" id="cbars"><div class="catbar" id="csite"></div><div id="cbar"></div></div>
     <div id="mbar"></div>
     ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到借用申請</a></div>` : ''}
     <div id="cgrid"></div>`;
@@ -640,30 +642,53 @@ VIEWS.catalog = async main => {
     const inCart = pick
       ? (S.showLines || []).filter(l => l.itemId === i.id).reduce((a, l) => a + l.qty, 0)
       : S.cart.filter(c => c.itemId === i.id).reduce((a, c) => a + c.qty, 0);
-    const av = range ? i.available : null;
-    const gs = i.sites || [];
+    // 選了地點就整張卡只講那個地點:數字、可借量、加入申請的來源通通鎖在那一區。
+    // 每個地點的數字後端本來就分開算好了(itemView 的 sites[]),前端不重算。
+    const gsAll = i.sites || [];
+    const here = f.loc ? gsAll.find(g => nloc(g.location) === f.loc) : null;
+    const n = here || i;                       // 沒選地點就用整個品項的合計
+    const av = range ? (here ? (here.available || 0) : i.available) : null;
+    const gs = f.loc ? (here ? [here] : []) : gsAll;
     const picker = gs.length > 1
       ? `<select id="loc-${i.id}" aria-label="從哪個地點借">${gs.map(g => `<option value="${esc(g.location)}">${esc(g.location)}(${range ? '可借 ' + (g.available || 0) : '在庫 ' + g.inStock})</option>`).join('')}</select>`
       : `<input type="hidden" id="loc-${i.id}" value="${esc(gs[0] ? gs[0].location : '')}">`;
-    const distHtml = distLine(i, range ? 'total' : 'inStock');
+    const distHtml = f.loc
+      ? `<div class="dist"><span class="${n.inStock ? '' : 'z'}">${esc(f.loc)} <b>${Number(range ? n.total : n.inStock) || 0}</b></span></div>`
+      : distLine(i, range ? 'total' : 'inStock');
     return `<div class="card item-card">
       ${i.image ? `<div class="img" style="background-image:url('${esc(i.image)}')"></div>` : ''}
       <div class="row" style="gap:6px"><label class="chk"><input type="checkbox" data-mpick="${esc(i.id)}" ${S.multi.has(i.id) ? 'checked' : ''}>選</label><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
       <h3>${esc(i.name)}</h3>
       ${i.spec ? `<div class="meta">${esc(i.spec)}</div>` : ''}
       <div class="meta">存放:</div>${distHtml}
-      <div class="nums"><div class="${i.inStock ? '' : 'zero'}"><b>${i.inStock}</b>倉庫在庫</div><div><b>${i.out}</b>出借中</div><div><b>${i.reserved}</b>已預約</div><div><b>${i.total}</b>總數</div></div>
+      <div class="nums"><div class="${n.inStock ? '' : 'zero'}"><b>${n.inStock}</b>倉庫在庫</div><div><b>${n.out}</b>出借中</div><div><b>${n.reserved}</b>已預約</div><div><b>${n.total}</b>總數</div></div>
       ${range ? `<div class="avail ${av ? '' : 'none'}">期間可借 <b>${av}</b></div>` : ''}
       <div class="addrow">${picker}<input type="number" min="1" value="1" id="q-${i.id}" aria-label="數量"><button class="btn sm pri" style="flex:1" data-act="${pick ? 'show-add-cat' : 'add-cart'}" data-id="${i.id}">${inCart ? (pick ? `加入展覽(已選 ${inCart})` : `加入申請(已選 ${inCart})`) : (pick ? '加入展覽' : '加入申請')}</button></div>
     </div>`;
   };
+  // 這批展品實際出現過的地點(排除只出現在別區的),選了不存在的地點就當作沒選
+  const SITES = [...new Set(S.items.flatMap(i => (i.sites || []).map(g => nloc(g.location))))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  if (f.loc && !SITES.includes(f.loc)) f.loc = '';
+  const atLoc = i => !f.loc || (i.sites || []).some(g => nloc(g.location) === f.loc);
+  /** 只看得到這個地點時,「有沒有貨」要用那個地點的數字判斷,不是全部廠區加總 */
+  const stockAt = i => { const g = f.loc ? (i.sites || []).find(x => nloc(x.location) === f.loc) : null;
+    const src = g || i; return range ? (src.available || 0) : (src.inStock || 0); };
   let draw = () => {
     const q = f.q.toLowerCase();
-    const match = i => (!q || [i.name, i.spec, i.location, i.category, i.id, itemSites(i).join(' ')].join(' ').toLowerCase().includes(q)) && (!f.onlyAvail || (range ? i.available : i.inStock) > 0);
+    const match = i => atLoc(i)
+      && (!q || [i.name, i.spec, i.location, i.category, i.id, itemSites(i).join(' ')].join(' ').toLowerCase().includes(q))
+      && (!f.onlyAvail || stockAt(i) > 0);
     const shown = S.items.filter(match);
     const counts = {};
     shown.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
     $('#cbar').innerHTML = catBar(S.cats, f.cat, counts);
+    // 地點籤條的數字:已經套上搜尋與分類之後,那一區還剩幾項
+    const inCat = i => !f.cat || i.category === f.cat;
+    const qOnly = S.items.filter(i => !q || [i.name, i.spec, i.location, i.category, i.id, itemSites(i).join(' ')].join(' ').toLowerCase().includes(q));
+    const siteChip = (key, label, n2) => `<button class="catchip ${f.loc === key ? 'on' : ''}" data-cloc="${esc(key)}">${esc(label)}<span class="n">${n2}</span></button>`;
+    $('#csite').innerHTML = siteChip('', '全部廠區', qOnly.filter(inCat).length)
+      + SITES.map(L => siteChip(L, L, qOnly.filter(i => inCat(i) && (i.sites || []).some(g => nloc(g.location) === L)).length)).join('');
+    $$('[data-cloc]').forEach(el => el.onclick = () => { f.loc = el.dataset.cloc; draw(); });
     const block = arr => arr.length ? `<div class="cards">${arr.map(card).join('')}</div>` : '<div class="catempty">這個分類還沒有展品</div>';
     $('#cgrid').innerHTML = f.cat
       ? (shown.filter(i => i.category === f.cat).length ? block(shown.filter(i => i.category === f.cat)) : '<div class="card empty">這個分類還沒有展品</div>')
@@ -1558,16 +1583,55 @@ VIEWS.users = main => withData(main, 'users', 'users', {}, list => {
 });
 
 VIEWS.logs = main => withData(main, 'logs', 'logs', { limit: 500 }, list => {
-  main.innerHTML = `<div class="eyebrow">Audit log</div><h1>操作紀錄</h1><p class="sub">誰在什麼時候做了什麼。最近 500 筆,完整紀錄在試算表「操作紀錄」工作表。</p>
-    <div class="toolbar"><input class="grow" type="search" id="gq" placeholder="搜尋人名、單號、動作…"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>動作</th><th>對象</th><th>內容</th></tr></thead><tbody id="gbody"></tbody></table></div>`;
-  const draw = q => {
-    q = (q || '').toLowerCase();
-    $('#gbody').innerHTML = list.filter(l => !q || [l.user, l.action, l.ref, l.detail].join(' ').toLowerCase().includes(q)).map(l =>
-      `<tr><td class="mono">${esc(l.ts)}</td><td>${esc(l.user)}</td><td>${esc(l.action)}</td><td class="mono">${esc(l.ref)}</td><td class="wrap">${esc(l.detail)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">無紀錄</td></tr>';
+  // 動作大類由後端算好帶過來(cat / catLabel),前端不重寫那張對照表
+  const CATS = [];
+  list.forEach(l => { if (l.cat && !CATS.some(c => c[0] === l.cat)) CATS.push([l.cat, l.catLabel || l.cat]); });
+  CATS.sort((a, b) => LOG_CAT_ORDER.indexOf(a[0]) - LOG_CAT_ORDER.indexOf(b[0]));
+  const PEOPLE = [...new Set(list.map(l => l.user).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  main.innerHTML = `<div class="eyebrow">Audit log</div><h1>操作紀錄</h1>
+    <p class="sub">誰在什麼時候做了什麼。最近 500 筆,完整紀錄在試算表「操作紀錄」工作表。</p>
+    <div class="toolbar"><input class="grow" type="search" id="gq" placeholder="搜尋人名、單號、動作…" value="${esc(S.logQ || '')}">
+      <button class="btn" data-act="logs-csv" title="把目前篩選出來的紀錄匯出成 CSV" aria-label="匯出操作紀錄 CSV">${ICON.dl}<span class="lbl-hide">匯出</span></button></div>
+    <div class="catbar-stick" id="gbars"><div class="catbar" id="gcat"></div><div class="catbar" id="gwho"></div></div>
+    <div class="meta" id="gsum" style="margin:8px 0"></div>
+    <div class="tbl-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>分類</th><th>動作</th><th>對象</th><th>內容</th></tr></thead><tbody id="gbody"></tbody></table></div>`;
+  // 籤條上的數字要反映「另一個篩選器已經篩過之後」還剩幾筆,不然點下去會是空的
+  const byQ = () => { const q = (S.logQ || '').toLowerCase();
+    return list.filter(l => !q || [l.user, l.action, l.ref, l.detail, l.catLabel].join(' ').toLowerCase().includes(q)); };
+  const shown = () => byQ().filter(l => (!S.logCat || l.cat === S.logCat) && (!S.logWho || l.user === S.logWho));
+  const chip = (on, key, label, n, attr) => `<button class="catchip ${on ? 'on' : ''}" ${attr}="${esc(key)}">${esc(label)}<span class="n">${n}</span></button>`;
+  const bars = () => {
+    const base = byQ();
+    const inWho = l => !S.logWho || l.user === S.logWho;
+    const inCat = l => !S.logCat || l.cat === S.logCat;
+    $('#gcat').innerHTML = chip(!S.logCat, '', '全部', base.filter(inWho).length, 'data-lcat')
+      + CATS.map(([k, t]) => chip(S.logCat === k, k, t, base.filter(l => l.cat === k && inWho(l)).length, 'data-lcat')).join('');
+    $('#gwho').innerHTML = chip(!S.logWho, '', '所有人', base.filter(inCat).length, 'data-lwho')
+      + PEOPLE.map(u => chip(S.logWho === u, u, u, base.filter(l => l.user === u && inCat(l)).length, 'data-lwho')).join('');
+    $$('[data-lcat]').forEach(el => el.onclick = () => { S.logCat = el.dataset.lcat; draw(); });
+    $$('[data-lwho]').forEach(el => el.onclick = () => { S.logWho = el.dataset.lwho; draw(); });
   };
-  draw(); $('#gq').oninput = e => draw(e.target.value);
+  const draw = () => {
+    bars();
+    const rows = shown();
+    S._logRows = rows;
+    $('#gsum').textContent = rows.length === list.length ? `共 ${list.length} 筆`
+      : `符合 ${rows.length} 筆 / 共 ${list.length} 筆`;
+    $('#gbody').innerHTML = rows.map(l =>
+      `<tr><td class="mono">${esc(l.ts)}</td><td>${esc(l.user)}</td><td><span class="pill">${esc(l.catLabel || '—')}</span></td>
+       <td>${esc(l.action)}</td><td class="mono">${esc(l.ref)}</td><td class="wrap">${esc(l.detail)}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="empty">沒有符合的紀錄</td></tr>';
+  };
+  draw();
+  $('#gq').oninput = e => { S.logQ = e.target.value; draw(); };
 });
+/** 匯出目前篩出來的操作紀錄 */
+function exportLogs() {
+  const rows = S._logRows || [];
+  if (!rows.length) return toast('目前沒有可以匯出的紀錄', true);
+  downloadCSV(`操作紀錄_${todayStr()}.csv`,
+    [['時間', '人員', '分類', '動作', '對象', '內容']].concat(rows.map(l => [l.ts, l.user, l.catLabel || '', l.action, l.ref, l.detail])));
+}
 
 /* ===================== 借用單動作 ===================== */
 async function getLoan(id) { const all = await api('loans', { filter: 'all' }); return all.find(l => l.id === id); }
@@ -2182,6 +2246,7 @@ const ACT = {
   'close': () => closeModal(),
   'close-render': () => { closeModal(); render(); },
   'export': () => run(exportStock),
+  'logs-csv': () => exportLogs(),
   'add-cart': el => {
     const id = el.dataset.id, q = $('#q-' + id).value, where = ($('#loc-' + id) || {}).value || '';
     addToCart(id, q, where);

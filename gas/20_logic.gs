@@ -650,6 +650,31 @@ var Logic = (function () {
    * 停用帳號本身不擋 —— 人事那邊當天就會停,擋下來只會讓人卡住;
    * 真正需要的是「這個人走了、東西還在他手上」這件事要被看見,所以放進總覽的待辦。
    */
+  /**
+   * 操作紀錄的動作大類。動作名是自由文字(而且有兩個是動態組出來的:
+   * 「當面確認…」「展覽改為…」),所以用**有順序的關鍵字**比對,第一個中的就算。
+   *
+   * ⚠️ 順序不能亂改:「展覽批次申請歸還」「由展覽產生借用單」「封存借用單到歷史表」
+   * 都含有「歸還 / 借用」,必須先被展覽那一條抓走,否則會被歸到借用流程。
+   * 結構測試會把 .gs 裡每一個動作字串都跑一遍,掉到「其他」就紅。
+   */
+  var LOG_CAT_LABEL = { show: '展覽', cat: '分類', item: '展品庫存', loan: '借用流程', user: '人員系統', other: '其他' };
+  var LOG_CAT_ORDER = ['loan', 'item', 'show', 'cat', 'user', 'other'];
+  var LOG_CAT_RULES = [
+    ['show', ['展覽', '封存借用單到歷史表']],
+    ['cat', ['分類']],
+    ['item', ['展品', '單台', '盤點', '上架']],
+    ['loan', ['借用', '歸還', '領取', '簽收', '轉借', '延期', '延長', '點交', '當面確認']],
+    ['user', ['帳號', '使用者', '人員', 'PIN']]
+  ];
+  function logCat(action) {
+    var a = s(action);
+    for (var i = 0; i < LOG_CAT_RULES.length; i++) {
+      var key = LOG_CAT_RULES[i][0], words = LOG_CAT_RULES[i][1];
+      for (var j = 0; j < words.length; j++) if (a.indexOf(words[j]) >= 0) return key;
+    }
+    return 'other';
+  }
   function leftBehindLoans(db, today) {
     var off = {};
     (db.Users || []).forEach(function (u) { if (!bool(u.active)) off[u.id] = u.name || u.empNo; });
@@ -1578,7 +1603,13 @@ var Logic = (function () {
       });
       return { created: made };
     },
-    logs: function (c) { return c.readLogs(int(c.p.limit) || 300); }
+    logs: function (c) {
+      return c.readLogs(int(c.p.limit) || 300).map(function (r) {
+        var o = {}; for (var k in r) o[k] = r[k];
+        o.cat = logCat(r.action); o.catLabel = LOG_CAT_LABEL[o.cat];
+        return o;
+      });
+    }
   };
   function addUnits(c, it, k, location, serials) {
     var made = [], now = c.now;
@@ -1622,6 +1653,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, saneDate: saneDate, saneRange: saneRange, leftBehindLoans: leftBehindLoans, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, saneDate: saneDate, saneRange: saneRange, leftBehindLoans: leftBehindLoans, logCat: logCat, LOG_CAT_LABEL: LOG_CAT_LABEL, LOG_CAT_ORDER: LOG_CAT_ORDER, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules };
 })();

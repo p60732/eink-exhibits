@@ -164,4 +164,42 @@ t('列印視窗:每一個開新視窗的列印頁都要放得回得來的工具�
   assert.ok(/@media print\{\.pbar\{display:none\}\}/.test(ui), '工具列必須在列印時藏起來');
   assert.ok(/window\.close\(\)/.test(ui), '工具列的「關閉」要真的關掉視窗');
 });
+t('操作紀錄:每一個動作字串都要歸得到大類,不可以掉進「其他」', () => {
+  // 動作名是自由文字,而且有兩個是動態組出來的(「當面確認…」「展覽改為…」)。
+  // 這條測試把 .gs 裡每一個 log() 的動作字串抓出來跑一遍 logCat() ——
+  // 以後有人改了動作名或加了新動作,忘記更新對照表就會在這裡紅,而不是在畫面上默默變成「其他」。
+  const { makeEnv } = require('./fake-gas');
+  const R = makeEnv().ctx.Logic.rules;
+  // 取出 log(c, <第 2 個參數>) 與 log_(db, u, <第 3 個參數>) 裡的字面字串
+  const argAt = (src, open, idx) => {
+    let d = 0, args = [], cur = '', q = null;
+    for (let i = open + 1; i < src.length; i++) {
+      const ch = src[i];
+      if (q) { if (ch === '\\') { cur += ch + src[++i]; continue; } cur += ch; if (ch === q) q = null; continue; }
+      if (ch === "'" || ch === '"' || ch === '`') { q = ch; cur += ch; continue; }
+      if ('([{'.includes(ch)) d++;
+      if (')]}'.includes(ch)) { if (d === 0) { args.push(cur); break; } d--; }
+      if (ch === ',' && d === 0) { args.push(cur); cur = ''; continue; }
+      cur += ch;
+    }
+    return (args[idx] || '').trim();
+  };
+  const found = new Set();
+  gasFiles.forEach(f => {
+    const src = read('gas/' + f), re = /\blog(_?)\(/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const a2 = argAt(src, m.index + m[0].length - 1, m[1] === '_' ? 2 : 1);
+      if (!a2 || /^function/.test(a2)) continue;
+      [...a2.matchAll(/'([^']*)'/g)].map(x => x[1]).filter(Boolean).forEach(L => found.add(L));
+    }
+  });
+  assert.ok(found.size >= 30, '抓到的動作字串太少(' + found.size + '),解析可能壞了');
+  const other = [...found].filter(a2 => a2 !== 'extend' && R.logCat(a2) === 'other');
+  assert.strictEqual(other.join('、'), '', '這些動作沒有大類,會掉進「其他」:' + other.join('、'));
+  // 大類的顯示順序:前端那份要涵蓋後端全部的 key
+  const ui = read('js/ui.js');
+  const order = JSON.parse((ui.match(/const LOG_CAT_ORDER = (\[[^\]]*\])/) || [])[1].replace(/'/g, '"'));
+  Object.keys(R.LOG_CAT_LABEL).forEach(k => assert.ok(order.includes(k), '前端的 LOG_CAT_ORDER 少了「' + k + '」'));
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

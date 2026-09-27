@@ -336,6 +336,28 @@ t('離職未還:只抓「已停用的人」×「還沒結束的單」', () => {
   assert.strictEqual(R.leftBehindLoans(db, '2026-09-27').map(L => L.id).join(), 'A1,A2,A3');
 });
 
+t('操作紀錄大類:會互相搶的那幾個要歸對邊', () => {
+  // 關鍵字比對是有順序的,含「借用 / 歸還」的展覽動作最容易被搶走。
+  const want = {
+    // 這三個都含「借用」或「歸還」,但屬於展覽
+    '封存借用單到歷史表': 'show', '由展覽產生借用單': 'show', '展覽批次申請歸還': 'show',
+    '新增展覽': 'show', '展覽改為已結案': 'show', '確認展覽(有缺口)': 'show', '刪除展覽': 'show',
+    // 動態組出來的
+    '當面確認歸還完成': 'loan', '當面確認部分歸還': 'loan', '當面確認領取': 'loan',
+    '提出借用申請': 'loan', '代為登記借用': 'loan', '點交出借': 'loan', '部分歸還': 'loan',
+    '不同意延期': 'loan', '不同意轉借': 'loan', '取消簽收 / 歸還申請': 'loan',
+    '新增展品': 'item', '下架展品': 'item', '重新上架': 'item', '新增單台編號': 'item',
+    '變更單台狀態': 'item', '盤點': 'item',
+    '新增分類': 'cat', '分類改名': 'cat', '調整分類順序': 'cat',
+    '建立帳號': 'user', '修改使用者': 'user', '匯入人員清單': 'user', '變更 PIN': 'user',
+    '不認得的動作': 'other'
+  };
+  const bad = Object.keys(want).filter(a2 => R.logCat(a2) !== want[a2])
+    .map(a2 => a2 + '→' + R.logCat(a2) + '(應為' + want[a2] + ')');
+  assert.strictEqual(bad.join('、'), '', '歸錯類:' + bad.join('、'));
+  Object.keys(R.LOG_CAT_LABEL).forEach(k => assert.ok(R.LOG_CAT_ORDER.indexOf(k) >= 0, k + ' 少了排序'));
+});
+
 t('規則層不可以改到傳入的資料', () => {
   const d = cdb(), before = JSON.stringify(d);
   R.cleanLines(d, [{ itemId: 'P1', qty: 2 }]);

@@ -874,6 +874,38 @@ const itemCountBefore = ok('items', {}, A).length;
   ok('receive', { id: E3, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, A);
 }
 
+/* ===== v2.7:操作紀錄要帶大類 ===== */
+{
+  // 先補一個「下架 → 重新上架」的來回,操作紀錄才驗得到這兩個動作
+  const AR = ok('saveItem', { item: { name: '上下架測試機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 1 }] } }, A);
+  ok('archiveItem', { id: AR.id, archived: true }, A);
+  ok('archiveItem', { id: AR.id, archived: false }, A);
+  assert.strictEqual(ok('items', {}, A).find(x => x.id === AR.id).archived, false, '重新上架之後不該還是下架狀態');
+
+  const rows = ok('logs', { limit: 500 }, A);
+  assert.ok(rows.length > 20, '這時候應該已經累積不少紀錄了:' + rows.length);
+  rows.forEach(r => {
+    assert.ok(r.cat, '每一筆都要有大類:' + JSON.stringify(r).slice(0, 120));
+    assert.ok(r.catLabel, '每一筆都要有大類名稱:' + r.action);
+  });
+  const other = rows.filter(r => r.cat === 'other').map(r => r.action);
+  assert.strictEqual([...new Set(other)].join('、'), '', '★ 實際跑出來的動作掉進「其他」:' + [...new Set(other)].join('、'));
+  const kinds = [...new Set(rows.map(r => r.cat))];
+  ['loan', 'item', 'show', 'cat'].forEach(k => assert.ok(kinds.includes(k), '跑了這麼多流程,應該要有 ' + k + ' 類的紀錄'));
+  // 人員欄要填得出來(籤條是靠它分的)
+  assert.ok(rows.every(r => r.user), '每一筆都要記得住是誰做的');
+  // 會互相搶的那幾個要歸對邊 —— 只檢查「有跑到」的動作,沒跑到就不管
+  const WANT = { '封存借用單到歷史表': 'show', '由展覽產生借用單': 'show', '展覽批次申請歸還': 'show',
+    '重新上架': 'item', '下架展品': 'item', '當面確認歸還完成': 'loan', '取消簽收 / 歸還申請': 'loan' };
+  let checked = 0;
+  Object.keys(WANT).forEach(act => {
+    const hit = rows.filter(r => r.action === act);
+    hit.forEach(r => { checked++;
+      assert.strictEqual(r.cat, WANT[act], '★「' + act + '」應該歸到 ' + WANT[act] + ',實際是 ' + r.cat); });
+  });
+  assert.ok(checked >= 3, '★ 這幾個最容易歸錯的動作至少要驗到 3 筆,只驗到 ' + checked + ' 筆');
+}
+
 const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [
