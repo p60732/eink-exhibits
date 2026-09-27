@@ -874,6 +874,70 @@ const itemCountBefore = ok('items', {}, A).length;
   ok('receive', { id: E3, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, A);
 }
 
+/* ===== 跨廠區歸還:總數不變,兩邊各加減 =====
+ * 盤點只看兩件事:總數對不對、各區加起來對不對。
+ * 「新竹借出、還到林口」是唯一會讓庫存在廠區之間移動的路徑,
+ * 少了這條測試,只減不加 / 加錯區都會全綠,然後在盤點當天才炸開。
+ */
+{
+  const MV = ok('saveItem', { item: { name: '跨廠歸還測試機', mode: 'qty', category: '體驗區',
+    sites: [{ location: '新竹', qty: 4 }, { location: '林口', qty: 1 }] } }, A);
+  const look = () => {
+    const v = ok('items', {}, A).find(x => x.id === MV.id);
+    const at = L => (v.sites.find(g => g.location === L) || { total: 0 }).total;
+    return { total: v.total, hc: at('新竹'), lk: at('林口') };
+  };
+  const b4 = look();
+  assert.deepStrictEqual([b4.total, b4.hc, b4.lk], [5, 4, 1], '前置:新竹 4、林口 1、共 5');
+
+  const LM = ok('createLoan', { event: '跨廠歸還測試', start: '2026-10-01', end: '2026-10-05',
+    lines: [{ itemId: MV.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A);
+  ok('checkout', { id: LM.id }, A);   // 管理者代開的單本來就是已核准
+  const out = look();
+  assert.strictEqual(out.total, 5, '借出期間總數不變(東西只是在外面)');
+  assert.strictEqual(out.hc, 4, '借出不會把展品從原廠區搬走');
+
+  // 新竹借出的 2 台,還到林口
+  ok('receive', { id: LM.id, lines: [{ itemId: MV.id, location: '新竹', returned: 2, to: '林口' }] }, A);
+  const af = look();
+  assert.strictEqual(af.total, 5, '★ 還到別區:總數不可以變 —— 盤點對不上就是從這裡開始');
+  assert.strictEqual(af.hc, 2, '★ 還到別區:原本那一區要少掉 2');
+  assert.strictEqual(af.lk, 3, '★ 還到別區:還過去那一區要多 2');
+
+  // 還回原區:誰都不該動
+  const LN = ok('createLoan', { event: '還回原區測試', start: '2026-10-01', end: '2026-10-05',
+    lines: [{ itemId: MV.id, location: '林口', qty: 1 }], onBehalf: true, applicant: '10231' }, A);
+  ok('checkout', { id: LN.id }, A);
+  ok('receive', { id: LN.id, lines: [{ itemId: MV.id, location: '林口', returned: 1, to: '林口' }] }, A);
+  assert.deepStrictEqual([look().total, look().hc, look().lk], [5, 2, 3], '還回原區不該搬動任何庫存');
+
+  // 短少是唯一該讓總數變少的路徑
+  const LL = ok('createLoan', { event: '短少不搬廠測試', start: '2026-10-01', end: '2026-10-05',
+    lines: [{ itemId: MV.id, location: '林口', qty: 1 }], onBehalf: true, applicant: '10231' }, A);
+  ok('checkout', { id: LL.id }, A);
+  ok('receive', { id: LL.id, lines: [{ itemId: MV.id, location: '林口', returned: 0, lost: 1, to: '新竹' }] }, A);
+  const lost = look();
+  assert.strictEqual(lost.total, 4, '★ 短少要讓總數少 1');
+  assert.strictEqual(lost.lk, 2, '★ 短少要算在「借出的那一區」,不可以算到 to 指的那一區');
+  assert.strictEqual(lost.hc, 2, '★ 短少不可以順便把庫存搬到 to 指的那一區');
+
+  // 逐台型:那一台的所在地要跟著改,而且可以逐台指定
+  const MU = ok('saveItem', { item: { name: '跨廠單台機', mode: 'unit', category: '體驗區', location: '新竹' } }, A);
+  ok('addUnits', { itemId: MU.id, count: 2, location: '新竹' }, A);
+  const mun = ok('units', { itemId: MU.id }, A).map(u => u.id);
+  const LU = ok('createLoan', { event: '單台跨廠歸還', start: '2026-10-01', end: '2026-10-05',
+    lines: [{ itemId: MU.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A);
+  ok('checkout', { id: LU.id, units: { [MU.id + '@新竹']: mun } }, A);
+  ok('receive', { id: LU.id, lines: [{ itemId: MU.id, location: '新竹', to: '林口',
+    unitResults: [{ id: mun[0], result: 'in' }, { id: mun[1], result: 'in', to: '新竹' }] }] }, A);
+  const uv = ok('units', { itemId: MU.id }, A);
+  assert.strictEqual(uv.find(u => u.id === mun[0]).location, '林口', '★ 逐台還到別區:那一台的所在地要跟著改');
+  assert.strictEqual(uv.find(u => u.id === mun[1]).location, '新竹', '★ 逐台可以各自指定還到哪一區');
+  const muv = ok('items', {}, A).find(x => x.id === MU.id);
+  assert.strictEqual(muv.total, 2, '★ 逐台搬廠之後總數不變');
+  assert.deepStrictEqual(muv.sites.map(g => g.location + g.total).sort(), ['新竹1', '林口1'], '★ 逐台搬廠之後各區總和要對');
+}
+
 /* ===== v2.7:操作紀錄要帶大類 ===== */
 {
   // 先補一個「下架 → 重新上架」的來回,操作紀錄才驗得到這兩個動作

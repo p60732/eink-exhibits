@@ -37,6 +37,14 @@ const M = [
   ['20_logic.gs', "c.db.Items.forEach(function (it) { if (it.category === old) { it.category = name; dirty(c.db, 'Items'); } });", '', '分類改名後展品沒跟著換'],
   ['20_logic.gs', "if (used) throw E('還有 ' + used + ' 項展品屬於「' + cat.name + '」,請先改到其他分類');", '', '停用分類時沒檢查底下還有展品'],
   ['20_logic.gs', "if (same && !bool(same.archived)) throw E('分類「' + same.name + '」已存在');", '', '允許建立重複的分類'],
+  // 跨廠區歸還:盤點只看「總數」與「各區總和」,這四條就是守它們的
+  ['20_logic.gs', 'adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);',
+   'adjustStock(c, it, from, -ret);', '還到別區只減不加(總數會憑空變少)'],
+  ['20_logic.gs', 'adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);',
+   'adjustStock(c, it, back, -ret); adjustStock(c, it, from, ret);', '還到別區加減的廠區反了'],
+  ['20_logic.gs', 'if (lost && it) { adjustStock(c, it, from, -lost);',
+   'if (lost && it) { adjustStock(c, it, back, -lost);', '短少算到「還到」的那一區,不是借出的那一區'],
+  ['20_logic.gs', "var dest = s(r.to) || back;", 'var dest = back;', '逐台歸還忽略「這一台要還到哪」'],
   // 借用單流程的守門
   ['20_logic.gs', "if (L.status !== 'pending') throw E('只有「待審核」的申請可以修改');", '', '已核准的單也能被改掉'],
   ['20_logic.gs', "if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');", '', '延期可以往前縮'],
