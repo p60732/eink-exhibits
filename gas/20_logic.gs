@@ -555,7 +555,7 @@ var Logic = (function () {
     // 一律用「品項@地點」對位。沒有對到的行就不動它 ——
     // 退回去抓「同品項的另一行」會把 A 廠區的歸還數量套到 B 廠區,東西還在外面卻記成已還。
     (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; });
-    var notes = [];
+    var notes = [], touched = 0;      // 真的動到幾項。一項都沒動到就不算一次歸還(見下面的守門)
     L.lines.forEach(function (ln) {
       var x = input[lineKey(ln)]; if (!x) return;
       var it = byId(c.db.Items, ln.itemId);
@@ -568,8 +568,9 @@ var Logic = (function () {
           pending.splice(at, 1);        // 處理過就從待還清單移除:同一台送兩次只能算一次,
                                         // 否則 returned 會多加,單子提早結案,另一台永遠卡在「借出中」
           var u = byId(c.db.Units, uid);
-          if (r.result === 'lost') { ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; if (u) u.status = 'lost'; notes.push(uid + ' 遺失'); }
+          if (r.result === 'lost') { touched++; ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; if (u) u.status = 'lost'; notes.push(uid + ' 遺失'); }
           else if (r.result === 'in' || r.result === 'repair') {
+            touched++;
             ln.returnedUnits.push(uid); ln.returned = int(ln.returned) + 1;
             if (u) {
               u.status = r.result;
@@ -582,6 +583,7 @@ var Logic = (function () {
         });
       } else {
         var left = outstanding(ln), ret = Math.min(left, Math.max(0, int(x.returned))), lost = Math.min(left - ret, Math.max(0, int(x.lost)));
+        if (ret || lost) touched++;
         ln.returned = int(ln.returned) + ret; ln.lost = int(ln.lost) + lost;
         if (lost && it) { adjustStock(c, it, from, -lost); notes.push(it.name + '(' + from + ') 短少 ' + lost); }
         if (ret && it && back !== from) {                            // 還到別的廠區 = 庫存跟著搬過去
@@ -590,6 +592,11 @@ var Logic = (function () {
         }
       }
     });
+    // 一項都沒登記到就停在這裡。以前這種情況會「回報成功 + 寫一筆歸還紀錄 + 把同仁的歸還申請清掉」,
+    // 東西其實還在外面,申請卻從後台消失了 —— 雙方都以為處理過了,這是最難發現的那種掉東西。
+    // 在這裡丟錯誤,這次請求整個不存檔,L.request 自然保留著。
+    if (!touched) throw E('這次沒有登記到任何一項。數量型請至少填「歸還」或「短少」的數量,逐台型請選「歸還 / 送修 / 遺失」。'
+      + (L.request && L.request.type === 'return' ? '原本的歸還申請仍然保留著。' : ''));
     var done = L.lines.every(function (ln) { return outstanding(ln) === 0; });
     if (done) { L.status = 'returned'; L.returnedAt = now; }
     L.request = null;
@@ -637,6 +644,18 @@ var Logic = (function () {
   }
   function liveLoansOfShow(db, showId) {
     return loansOfShow(db, showId).filter(function (L) { return !!LIVE_ST[L.status]; });
+  }
+  /**
+   * 已經停用(離職 / 調職)的人手上還沒結束的借用單。
+   * 停用帳號本身不擋 —— 人事那邊當天就會停,擋下來只會讓人卡住;
+   * 真正需要的是「這個人走了、東西還在他手上」這件事要被看見,所以放進總覽的待辦。
+   */
+  function leftBehindLoans(db, today) {
+    var off = {};
+    (db.Users || []).forEach(function (u) { if (!bool(u.active)) off[u.id] = u.name || u.empNo; });
+    return (db.Loans || []).filter(function (L) {
+      return !!LIVE_ST[L.status] && s(L.applicantId) && off[s(L.applicantId)];
+    });
   }
   /**
    * 一行規劃的缺口。
@@ -1020,6 +1039,7 @@ var Logic = (function () {
         requests: L.filter(function (x) { return x.request && x.request.type && (x.status === 'approved' || x.status === 'out'); }).map(en),
         pickups: L.filter(function (x) { return x.status === 'approved' && x.start <= soon; }).sort(function (a, b) { return a.start < b.start ? -1 : 1; }).map(en),
         outCount: L.filter(function (x) { return x.status === 'out'; }).length,
+        leftBehind: leftBehindLoans(c.db, today).map(en),
         lowStock: items.map(function (it) { return itemView(c.db, it, st, null, today); }).filter(function (v) { return v.total > 0 && v.inStock === 0; })
       };
     },
@@ -1602,6 +1622,6 @@ var Logic = (function () {
   }
 
   // rules:純函式,供規則層單元測試使用
-  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, saneDate: saneDate, saneRange: saneRange, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
+  var rules = { isDate: isDate, addDays: addDays, stats: stats, loanWindow: loanWindow, reservedInRange: reservedInRange, availableInRange: availableInRange, checkLines: checkLines, isOverdue: isOverdue, sitesOf: sitesOf, capacity: capacity, cleanLines: cleanLines, showHold: showHold, showIssued: showIssued, cleanShowLines: cleanShowLines, saneDate: saneDate, saneRange: saneRange, leftBehindLoans: leftBehindLoans, settleShow: settleShow, archivable: archivable, archiveGroups: archiveGroups, holdersOf: holdersOf, showSheet: showSheet };
   return { USER: USER, ADMIN: ADMIN, confirmOnSite: confirmOnSite, reminders: reminders, rules: rules };
 })();

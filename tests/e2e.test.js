@@ -814,6 +814,66 @@ const itemCountBefore = ok('items', {}, A).length;
   ok('extendLoan', { id: DL.id, end: '2026-11-05' }, A);
 }
 
+/* ===== v2.6:迴圈缺口 =====
+   ① 一項都沒登記到的歸還,不可以回報成功、更不可以把同仁的歸還申請清掉
+   ② 已停用的人手上還沒還的單,要在總覽看得到 */
+{
+  const DZ = ok('saveItem', { item: { name: '迴圈檢查機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 6 }] } }, A);
+  const ln = [{ itemId: DZ.id, location: '新竹', qty: 2 }];
+  const mkOut = (ev) => { const L = ok('createLoan', { event: ev, start: '2026-10-01', end: '2026-10-05', lines: ln }, U);
+    ok('approve', { id: L.id }, A); ok('checkout', { id: L.id }, A); return L.id; };
+  const find = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id);
+
+  // ① 同仁申請歸還 → 管理者送出一個什麼都沒對到的歸還
+  const E1 = mkOut('空歸還測試');
+  ok('requestReturn', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, U);
+  bad('receive', { id: E1, lines: [{ itemId: DZ.id, location: '林口', returned: 2, to: '林口' }] }, A, /沒有登記到任何一項/);
+  bad('receive', { id: E1, lines: [] }, A, /沒有登記到任何一項/);
+  bad('receive', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 0, lost: 0, to: '新竹' }] }, A, /沒有登記到任何一項/);
+  const still = find(E1);
+  assert.strictEqual(still.status, 'out', '★ 沒登記到任何一項,單子不可以動');
+  assert.ok(still.request && still.request.type === 'return', '★ 沒登記到任何一項,同仁的歸還申請必須留著');
+  // 正常的部分歸還照樣過
+  const half = ok('receive', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 1, to: '新竹' }] }, A);
+  assert.strictEqual(half.status, 'out', '還一半應該還是出借中');
+  assert.strictEqual(half.lines[0].returned, 1);
+  ok('receive', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 1, to: '新竹' }] }, A);
+  assert.strictEqual(find(E1).status, 'returned', '還完應該結案');
+  // 只回報短少也算有動到
+  const E2 = mkOut('只短少測試');
+  ok('receive', { id: E2, lines: [{ itemId: DZ.id, location: '新竹', returned: 0, lost: 2, to: '新竹' }] }, A);
+  assert.strictEqual(find(E2).status, 'returned', '全部回報短少也要結案');
+
+  // 逐台型:只回報「遺失」也算有動到(不然整批遺失的單會被當成空歸還擋下來)
+  const DU = ok('saveItem', { item: { name: '迴圈單台機', mode: 'unit', category: '體驗區', location: '新竹' } }, A);
+  ok('addUnits', { itemId: DU.id, count: 2, location: '新竹' }, A);
+  const dun = ok('units', { itemId: DU.id }, A).map(x => x.id);
+  const DL = ok('createLoan', { event: '單台空歸還測試', start: '2026-10-01', end: '2026-10-05',
+    lines: [{ itemId: DU.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10477' }, A);
+  ok('checkout', { id: DL.id, units: { [DU.id + '@新竹']: dun } }, A);
+  const uline = { itemId: DU.id, location: '新竹', to: '新竹' };
+  // 每一台都選「未還」(result 空字串會被前端濾掉,這裡直接送空陣列)
+  bad('receive', { id: DL.id, lines: [Object.assign({ unitResults: [] }, uline)] }, A, /沒有登記到任何一項/);
+  // 對不到的編號也不算
+  bad('receive', { id: DL.id, lines: [Object.assign({ unitResults: [{ id: 'E9999', result: 'in' }] }, uline)] }, A, /沒有登記到任何一項/);
+  assert.strictEqual(find(DL.id).status, 'out', '★ 單台一台都沒處理,單子不可以動');
+  // 兩台都遺失 → 要過,而且單子要結案
+  ok('receive', { id: DL.id, lines: [Object.assign({ unitResults: dun.map(x => ({ id: x, result: 'lost' })) }, uline)] }, A);
+  assert.strictEqual(find(DL.id).status, 'returned', '★ 全部回報遺失也要結得了案');
+
+  // ② 已停用的人手上還有沒還的單 → 總覽要看得到
+  const E3 = mkOut('離職未還測試');
+  const uu = ok('users', {}, A).find(x => x.empNo === '10231');
+  assert.strictEqual(ok('dashboard', {}, A).leftBehind.length, 0, '停用之前不該有人上榜');
+  ok('saveUser', { user: { id: uu.id, empNo: uu.empNo, name: uu.name, active: false } }, A);
+  const lb = ok('dashboard', {}, A).leftBehind;
+  assert.ok(lb.some(x => x.id === E3), '★ 停用的人手上還沒還的單要出現在總覽');
+  assert.ok(!lb.some(x => x.status === 'returned' || x.status === 'cancelled'), '已結束的單不該上榜');
+  ok('saveUser', { user: { id: uu.id, empNo: uu.empNo, name: uu.name, active: true } }, A);
+  assert.strictEqual(ok('dashboard', {}, A).leftBehind.length, 0, '重新啟用之後就不該再上榜');
+  ok('receive', { id: E3, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, A);
+}
+
 const origLoad = G.ctx.Memory.load;
 const run = (act, p2, tok) => { const r = G.call(act, p2, tok); return JSON.stringify([r.success, r.data, r.error]); };
 const readActions = [

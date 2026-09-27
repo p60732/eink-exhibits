@@ -319,6 +319,23 @@ t('封存預覽:依展覽分組,一般單另外一堆', () => {
   assert.strictEqual(g.shows[0].name, '結案的');
 });
 
+t('離職未還:只抓「已停用的人」×「還沒結束的單」', () => {
+  const db = {
+    Users: [{ id: 'U1', name: '離職的', active: false }, { id: 'U2', name: '在職的', active: true }],
+    Loans: [
+      { id: 'A1', applicantId: 'U1', status: 'out' },        // 停用 + 出借中 → 要抓
+      { id: 'A2', applicantId: 'U1', status: 'approved' },   // 停用 + 已核准 → 要抓
+      { id: 'A3', applicantId: 'U1', status: 'pending' },    // 停用 + 待審核 → 要抓
+      { id: 'A4', applicantId: 'U1', status: 'returned' },   // 已還 → 不抓
+      { id: 'A5', applicantId: 'U1', status: 'cancelled' },  // 已取消 → 不抓
+      { id: 'B1', applicantId: 'U2', status: 'out' },        // 人還在 → 不抓
+      { id: 'C1', applicantId: '', status: 'out' },          // 代為登記沒對到人 → 不抓
+      { id: 'D1', applicantId: 'U9', status: 'out' }         // 查無此人 → 不抓
+    ]
+  };
+  assert.strictEqual(R.leftBehindLoans(db, '2026-09-27').map(L => L.id).join(), 'A1,A2,A3');
+});
+
 t('規則層不可以改到傳入的資料', () => {
   const d = cdb(), before = JSON.stringify(d);
   R.cleanLines(d, [{ itemId: 'P1', qty: 2 }]);

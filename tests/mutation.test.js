@@ -16,6 +16,12 @@ const M = [
   ['20_logic.gs', 'if (d > DATE_FWD_DAYS) throw', 'if (false) throw', '拿掉「日期太遠」的檢查'],
   ['20_logic.gs', 'if (span > MAX_SPAN_DAYS) throw', 'if (false) throw', '拿掉單一期間長度上限'],
   ['20_logic.gs', "if (x > y) throw E(lb + '不可早於' + la);", '', '歸還日早於借出日照樣放行'],
+  ['20_logic.gs', 'if (!touched) throw', 'if (false) throw', '一項都沒登記到的歸還照樣回報成功'],
+  ['20_logic.gs', 'if (ret || lost) touched++;', '', '數量型歸還不算進「有沒有真的動到」'],
+  ['20_logic.gs', "if (r.result === 'lost') { touched++;", "if (r.result === 'lost') {", '單台回報遺失不算進「有沒有真的動到」'],
+  ['20_logic.gs', 'leftBehind: leftBehindLoans(c.db, today).map(en),', '', '總覽不再提醒「已停用還沒還」'],
+  ['20_logic.gs', 'return !!LIVE_ST[L.status] && s(L.applicantId) && off[s(L.applicantId)];',
+   'return s(L.applicantId) && off[s(L.applicantId)];', '離職未還把已結束的單也算進來'],
   // 效能重構的守門:欄位少讀 / 表少讀 / 快取沒失效,都必須被 e2e 抓到
   ['00_gateway.gs', "LOAN_CALC: ['id', 'status', 'start', 'end', 'lines']", "LOAN_CALC: ['id', 'status', 'start', 'end']", '可借量計算少讀 lines 欄'],
   ['00_gateway.gs', "ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'archived']", "ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'archived']", '展品少讀各地點庫存(stock)欄'],

@@ -146,4 +146,22 @@ t('日期上下界:前端與規則層必須是同一組數字', () => {
   assert.ok((u.match(/\$\{DLIM\(\)\}/g) || []).length >= 6, '每個日期欄位都要掛上 min/max');
   assert.ok(/rangeProblem\(/.test(u), '前端要有送出前的日期檢查');
 });
+t('列印視窗:每一個開新視窗的列印頁都要放得回得來的工具列', () => {
+  // QR 標籤那一頁要連 CDN 才畫得出來,UI 測試在沙箱裡跑不到,所以靠這裡守著。
+  const ui = read('js/ui.js');
+  const fns = ['printLoan', 'printShowSheet', 'printLabels'];
+  fns.forEach(fn => {
+    const at = ui.indexOf('function ' + fn);
+    assert.ok(at > 0, '找不到 ' + fn);
+    // 取這個函式到下一個頂層 function 為止
+    const rest = ui.slice(at + 10);
+    const end = rest.search(/\nfunction |\nasync function |\nconst VIEWS/);
+    const body = end > 0 ? rest.slice(0, end) : rest;
+    assert.ok(/window\.open\(/.test(body), fn + ' 應該是開新視窗的列印頁');
+    assert.ok(body.includes('PRINT_BAR_CSS'), fn + ' 少了列印工具列的樣式');
+    assert.ok(/PRINT_BAR\b/.test(body.replace(/PRINT_BAR_CSS/g, '')), fn + ' 少了列印工具列本身 —— 印完回不到系統');
+  });
+  assert.ok(/@media print\{\.pbar\{display:none\}\}/.test(ui), '工具列必須在列印時藏起來');
+  assert.ok(/window\.close\(\)/.test(ui), '工具列的「關閉」要真的關掉視窗');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

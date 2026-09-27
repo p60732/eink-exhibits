@@ -734,6 +734,68 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     }
   }
 
+  // ---- 四種請求的按鈕要講自己的話(v2.6)----
+  // 以前寫死成「簽收 / 歸還」,延期與轉借都長出「撤回歸還」;
+  // 而且「請管理者當面確認」是用卡片文字 regex 猜型別的,延期會被猜成歸還、跳出錯的對話框。
+  {
+    const out = await p.evaluate(() => {
+      const mk = type => ({
+        id: 'L2609-999', event: '標籤測試', applicant: '員工A', dept: '業務部',
+        status: type === 'pickup' ? 'approved' : 'out',
+        statusLabel: type === 'pickup' ? '已核准' : '出借中',
+        start: '2026-10-01', end: '2026-10-05',
+        lines: [{ itemId: 'P0001', name: '測試機', qty: 1, location: '新竹', mode: 'qty', returned: 0, lost: 0, outstanding: 1, units: [], returnedUnits: [], lostUnits: [] }],
+        request: { type, at: '2026-09-27 10:00', by: '員工A', end: '2026-10-09' },
+        stage: '待確認', overdue: false, archived: false
+      });
+      const r = {};
+      ['pickup', 'return', 'extend', 'transfer'].forEach(t => {
+        const d = document.createElement('div');
+        d.innerHTML = loanCard(mk(t), { mine: true });
+        const cancel = [...d.querySelectorAll('[data-act=u-cancel-req]')][0];
+        const onsite = [...d.querySelectorAll('[data-act=u-onsite]')][0];
+        r[t] = { label: cancel && cancel.textContent.trim(), type: onsite && onsite.dataset.t };
+      });
+      return r;
+    });
+    const want = { pickup: '撤回領取', 'return': '撤回歸還', extend: '撤回延期', transfer: '撤回轉借' };
+    Object.keys(want).forEach(t => {
+      if (out[t].label !== want[t]) throw new Error(`★ ${t} 的撤回鈕寫成「${out[t].label}」,應該是「${want[t]}」`);
+      if (out[t].type !== t) throw new Error(`★ ${t} 的當面確認鈕帶的型別是「${out[t].type}」—— 不可以用卡片文字去猜`);
+    });
+  }
+
+  // ---- 列印視窗要回得來(v2.6)----
+  // 三種列印都是 window.open 開新視窗,以前印完就停在那一頁,沒有任何回得來的入口
+  //(手機上尤其明顯 —— 那是一個分頁,不是視窗)。
+  // 註:前面的測試已經把 window.open 換成攔截用的假物件,所以這裡直接檢查它寫出去的 HTML。
+  {
+    const grab = async (fn) => {
+      await p.evaluate(() => { window.__printed = ''; window.open = () => ({ document: { write: h => { window.__printed += h; }, close() { } }, print() { } }); });
+      await fn();
+      return p.evaluate(() => window.__printed || '');
+    };
+    const checkBar = async (html, label) => {
+      if (!/class="pbar"/.test(html)) throw new Error('★ ' + label + ':列印頁沒有工具列 —— 印完回不到系統');
+      if (!/關閉/.test(html)) throw new Error('★ ' + label + ':列印頁少了「關閉」鈕');
+      if (!/window\.close\(\)/.test(html)) throw new Error('★ ' + label + ':「關閉」鈕沒有真的關視窗');
+      if (!/window\.print\(\)/.test(html)) throw new Error('★ ' + label + ':列印頁少了「列印」鈕');
+      // 光有 @media print 規則不算數,實際套用之後要真的看不見
+      const t = await b.newPage();
+      await t.setContent(html);
+      await t.emulateMedia({ media: 'print' });
+      const d = await t.$eval('.pbar', el => getComputedStyle(el).display);
+      await t.close();
+      if (d !== 'none') throw new Error('★ ' + label + ':列印時工具列要藏起來,現在是 display:' + d);
+    };
+    await p.click('[data-v=loans]'); await wait(1200);
+    await p.click('[data-act=lf][data-f=all]'); await wait(1800);   // 待審核的單沒有列印鈕
+    const lb = await p.$('[data-act=print-loan]');
+    if (!lb) throw new Error('找不到可以列印的借用單');
+    await checkBar(await grab(() => lb.click().then(() => p.waitForTimeout(700))), '借用單');
+
+  }
+
   // ---- 離譜的借出 / 歸還日期不可以送出(v2.5.3)----
   // 手打 type=date 很容易打成 0025 或 9999,以前一路送進工作表,統計就從那張單開始歪掉。
   {

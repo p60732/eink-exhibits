@@ -465,6 +465,20 @@ function go(v) {
   S.view = v; window.scrollTo(0, 0); render();
 }
 /* ===================== 共用元件 ===================== */
+/** 四種請求的中文字。按鈕標籤、當面確認對話框共用一份,免得哪天又有人只改一邊 */
+const REQ_WORD = { pickup: '領取', 'return': '歸還', extend: '延期', transfer: '轉借' };
+
+/* 列印視窗頂端的工具列。三種列印(借用單 / 備料清單 / QR 標籤)都是 window.open 開新視窗,
+   以前印完就停在那一頁,沒有任何回得來的入口 —— 手機上尤其明顯(那是一個分頁,不是視窗)。
+   @media print 會把它整條藏掉,所以不會印出來。 */
+const PRINT_BAR_CSS = '.pbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#333F48;color:#fff;'
+  + 'padding:10px 14px;border-radius:8px;margin:0 0 18px;font:13px/1.5 system-ui,"Noto Sans TC",sans-serif}'
+  + '.pbar button{font:inherit;border:0;border-radius:7px;padding:7px 15px;cursor:pointer}'
+  + '.pbar .go{background:#C8102E;color:#fff}.pbar .cl{background:#fff;color:#333F48}'
+  + '.pbar .tip{opacity:.8}@media print{.pbar{display:none}}';
+const PRINT_BAR = '<div class="pbar"><button class="go" onclick="window.print()">列印</button>'
+  + '<button class="cl" onclick="window.close()">關閉,回到系統</button>'
+  + '<span class="tip">印完按「關閉」就會回到展品管理系統。這一條不會被印出來。</span></div>';
 function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
 function statusPill(L) {
   return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.stage ? ` <span class="pill pending">${esc(L.stage)}</span>` : '') + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
@@ -517,7 +531,10 @@ function loanCard(L, opts = {}) {
     if ((L.status === 'approved' || L.status === 'out') && !req) A.push(btn('u-extend', '申請延期'), btn('u-transfer', '轉借'));
     if (L.status === 'approved' && !req) A.push(btn('u-pickup', '簽收領取', 'pri'));
     if (L.status === 'out' && !req) A.push(btn('u-return', '歸還', 'pri'));
-    if (req) A.push(`<button class="btn sm ghost" data-act="u-cancel-req" data-id="${L.id}">撤回${req.type === 'pickup' ? '簽收' : '歸還'}</button>`, `<button class="btn sm pri" data-act="u-onsite" data-id="${L.id}">請管理者當面確認</button>`);
+    // 四種請求各自用自己的字。以前這裡寫死成「簽收 / 歸還」,延期與轉借都會長出「撤回歸還」,
+    // 而且 u-onsite 是用卡片上的文字去 regex 猜型別的 —— 延期會被猜成歸還,跳出錯的對話框。
+    if (req) A.push(`<button class="btn sm ghost" data-act="u-cancel-req" data-id="${L.id}">撤回${REQ_WORD[req.type] || '申請'}</button>`,
+      `<button class="btn sm pri" data-act="u-onsite" data-id="${L.id}" data-t="${esc(req.type)}">請管理者當面確認</button>`);
   }
   const who = admin ? `<span>借用人 <b>${esc(L.applicant)}</b>${L.dept ? '・' + esc(L.dept) : ''}</span>${L.contact ? `<span>聯絡 ${esc(L.contact)}</span>` : ''}` : '';
   const notes = [L.purpose && '用途:' + L.purpose, L.reviewNote && '審核:' + L.reviewNote + (L.reviewer ? '(' + L.reviewer + ')' : ''), L.note && '備註:' + L.note].filter(Boolean);
@@ -812,7 +829,9 @@ function todoList(d) {
     ['等待確認', d.requests, 'pending', 'request', '去確認'],
     ['待審核', d.pending, 'pending', 'pending', '去審核'],
     ['今天要點交', d.pickups.filter(l => l.start <= d.today), 'approved', 'approved', '去點交'],
-    ['今天到期', d.dueSoon.filter(l => l.end === d.today), 'out', 'out', '去登記歸還']
+    ['今天到期', d.dueSoon.filter(l => l.end === d.today), 'out', 'out', '去登記歸還'],
+    // 離職交接最容易掉東西的地方:帳號停用了,東西還在他手上。停用本身不擋,但這件事要被看見。
+    ['已停用還沒還', d.leftBehind || [], 'bad', 'active', '去追回來']
   ].filter(g => g[1].length);
   if (!G.length) return '<div class="card ok-empty">今天沒有待辦事項 👍</div>';
   const rows = G.map(([label, arr, pill, filter, cta]) =>
@@ -1449,7 +1468,9 @@ function printShowSheet(d) {
     + '.sign{display:flex;gap:36px;margin:14px 0 26px}'
     + '.sign div{flex:1;border-top:1px solid #333F48;padding-top:6px;font-size:11px;color:#6b7280}'
     + 'section.pb{page-break-before:always}@media print{body{margin:10mm}}'
+    + PRINT_BAR_CSS
     + '</style></head><body>'
+    + PRINT_BAR
     + '<h1>' + esc2(d.name) + ' 備料清單</h1>'
     + '<div class="hd">' + esc2(d.from) + ' ~ ' + esc2(d.to)
     + (d.venue ? '・' + esc2(d.venue) : '') + '・' + esc2(d.statusLabel)
@@ -1661,7 +1682,8 @@ function printLoan(id) {
     + 'th{background:#f4f5f7;width:96px;font-weight:600}td.n{text-align:right;width:56px}'
     + '.items th{width:auto;background:#f4f5f7}.sign{margin-top:36px;display:flex;gap:40px}'
     + '.sign div{flex:1;border-top:1px solid #333F48;padding-top:7px;font-size:12px;color:#6b7280}'
-    + '@media print{body{margin:0}}</style></head><body>'
+    + '@media print{body{margin:0}}' + PRINT_BAR_CSS + '</style></head><body>'
+    + PRINT_BAR
     + '<h1>展品借用單 ' + esc(L.id) + '</h1><div class="sub">' + esc(L.statusLabel) + '・列印於 ' + esc(todayStr()) + '</div>'
     + '<table>' + row('活動', L.event) + row('借用人', L.applicant + (L.dept ? '・' + L.dept : '')) + row('聯絡', L.contact)
     + row('地點', L.venue) + row('用途', L.purpose) + row('期間', L.start + ' → ' + L.end)
@@ -1999,7 +2021,7 @@ async function printLabels(list) {
     body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;margin:10mm}
     .g{display:grid;grid-template-columns:repeat(4,1fr);gap:4mm}.l{border:1px dashed #999;padding:3mm;text-align:center;break-inside:avoid}
     .l img{width:32mm;height:32mm}.id{font:700 14px ui-monospace,Menlo,monospace}.n{font-size:10px;color:#333}
-    @media print{.tip{display:none}}</style></head><body><p class="tip">建議用 A4 貼紙列印,或印出後裁切、以透明膠帶貼在展品不顯眼處。</p>
+    @media print{.tip{display:none}}${PRINT_BAR_CSS}</style></head><body>${PRINT_BAR}<p class="tip">建議用 A4 貼紙列印,或印出後裁切、以透明膠帶貼在展品不顯眼處。</p>
     <div class="g">${list.map((x, i) => `<div class="l"><img src="${imgs[i]}"><div class="id">${esc(x.id)}</div><div class="n">${esc(x.name)}${x.serial ? '<br>' + esc(x.serial) : ''}</div></div>`).join('')}</div>
     <script>setTimeout(function(){window.print()},400)<\/script></body></html>`);
   w.document.close();
@@ -2107,7 +2129,7 @@ async function userReturnModal(id) {
   };
 }
 function onsiteModal(id, type) {
-  const word = { pickup: '領取', 'return': '歸還', extend: '延期', transfer: '轉借' }[type] || '確認';
+  const word = REQ_WORD[type] || '確認';
   const m = openModal(`<h2>請管理者當面確認${word}</h2>
     <p class="sub">把畫面交給展品管理者,輸入管理者工號與 PIN 即完成${word}。<br>管理者不在場也沒關係,已送出的申請會出現在管理者後台等待確認。</p>
     <form id="osf" autocomplete="off"><div class="grid2"><label class="f"><span>管理者工號</span><input type="text" name="emp" required></label><label class="f"><span>PIN</span><input type="password" name="pin" inputmode="numeric" required></label></div>
@@ -2448,7 +2470,7 @@ const ACT = {
   'import-users': () => importUsersModal(),
   'u-pickup': el => userPickupModal(el.dataset.id),
   'u-return': el => userReturnModal(el.dataset.id),
-  'u-onsite': el => { const L = el.closest('.card'); onsiteModal(el.dataset.id, /簽收/.test(L.textContent.match(/撤回(簽收|歸還)/)[0]) ? 'pickup' : 'return'); },
+  'u-onsite': el => onsiteModal(el.dataset.id, el.dataset.t),
   'u-cancel-req': el => run(() => api('cancelRequest', { id: el.dataset.id }), '已撤回').then(render).catch(() => { }),
   'lookup-code': el => lookupModal(el.dataset.code),
   'multi-clear': () => { S.multi.clear(); S._catDraw(); },
