@@ -8,19 +8,38 @@ VIEWS.items = async main => {
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Items</div><h1>展品管理</h1><p class="sub">貴重品用「逐台編號」(每台一張 QR 標籤);道具、線材用「數量」。</p></div><span class="spacer"></span>
     <button class="btn" data-act="cats">分類管理</button><button class="btn" data-act="import">批次匯入</button><button class="btn" data-act="export">${ICON.dl}匯出</button><button class="btn brand" data-act="edit-item">${ICON.plus}新增展品</button></div>
     <div class="toolbar"><input class="grow" type="search" id="iq" placeholder="搜尋…" value="${esc(S.itemQ)}"><label class="chk"><input type="checkbox" id="iarc" ${S.showArchived ? 'checked' : ''}>顯示已下架</label></div>
-    <div id="ibar" class="catbar-stick"></div>
+    <div class="catbar-stick" id="ibars"><div class="catbar" id="isite"></div><div id="ibar"></div></div>
     <div class="tbl-wrap"><table><thead><tr><th>編號</th><th>品名</th><th>方式</th><th class="num">總數</th><th class="num">在庫</th><th class="num">借出</th><th class="num">預約</th><th>存放位置</th><th>最後盤點</th><th></th></tr></thead><tbody id="ibody"></tbody></table></div>`;
-  const row = i => { const dist = distLine(i, 'total'); return `
+  // 選了地點就整列只講那個地點:數字、存放、最後盤點都換成那一區的。
+  // 每個地點的數字後端本來就分開算好了(itemView 的 sites[]),這裡只是挑那一份,不重算。
+  const row = i => {
+    const here = S.itemSite ? (i.sites || []).find(g => nloc(g.location) === S.itemSite) : null;
+    const n = here || i;
+    const dist = here
+      ? `<div class="dist"><span class="${here.total ? '' : 'z'}">${esc(S.itemSite)} <b>${Number(here.total) || 0}</b></span></div>`
+      : distLine(i, 'total');
+    const counted = here ? here.countedAt : i.countedAt;
+    return `
     <tr class="${i.archived ? 'dim' : ''}"><td class="mono">${esc(i.id)}</td><td>${esc(i.name)}</td><td>${i.mode === 'unit' ? '<span class="pill unit">逐台</span>' : '<span class="pill">數量</span>'}</td>
-    <td class="num">${i.total}</td><td class="num"><span class="chipnum ${i.inStock ? '' : 'zero'}">${i.inStock}</span></td><td class="num">${i.out}</td><td class="num">${i.reserved}</td><td>${dist}</td><td>${esc(i.countedAt || '—')}</td>
+    <td class="num">${n.total}</td><td class="num"><span class="chipnum ${n.inStock ? '' : 'zero'}">${n.inStock}</span></td><td class="num">${n.out}</td><td class="num">${n.reserved}</td><td>${dist}</td><td>${esc(counted || '—')}</td>
     <td><div class="row" style="gap:4px;flex-wrap:nowrap">${i.mode === 'unit' ? `<button class="btn sm" data-act="units" data-id="${i.id}">單台 / QR</button>` : ''}<button class="btn sm" data-act="edit-item" data-id="${i.id}">編輯</button>
     <button class="btn sm ghost" data-act="archive" data-id="${i.id}" data-on="${i.archived ? '0' : '1'}">${i.archived ? '上架' : '下架'}</button></div></td></tr>`; };
+  const SITES = [...new Set(list.flatMap(i => (i.sites || []).map(g => nloc(g.location))))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  if (S.itemSite && !SITES.includes(S.itemSite)) S.itemSite = '';
+  const atSite = i => !S.itemSite || (i.sites || []).some(g => nloc(g.location) === S.itemSite);
   const draw = () => {
     const q = S.itemQ.toLowerCase();
-    const shown = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec, (i.sites || []).map(g => g.location).join(' ')].join(' ').toLowerCase().includes(q)));
+    const base = list.filter(i => (S.showArchived || !i.archived) && (!q || [i.id, i.name, i.category, i.location, i.spec, (i.sites || []).map(g => g.location).join(' ')].join(' ').toLowerCase().includes(q)));
+    const shown = base.filter(atSite);
     const counts = {};
     shown.forEach(i => counts[i.category] = (counts[i.category] || 0) + 1);
     $('#ibar').innerHTML = catBar(S.cats, S.cat, counts);
+    // 地點籤條的數字:搜尋與分類都套過之後,那一區還剩幾項
+    const inCat = i => !S.cat || i.category === S.cat;
+    const chip = (key, label, n2) => `<button class="catchip ${S.itemSite === key ? 'on' : ''}" data-isite="${esc(key)}">${esc(label)}<span class="n">${n2}</span></button>`;
+    $('#isite').innerHTML = chip('', '全部廠區', base.filter(inCat).length)
+      + SITES.map(L => chip(L, L, base.filter(i => inCat(i) && (i.sites || []).some(g => nloc(g.location) === L)).length)).join('');
+    $$('[data-isite]').forEach(el => el.onclick = () => { S.itemSite = el.dataset.isite; draw(); });
     const sect = (name, arr) => `<tr class="grouph"><th colspan="10">${esc(name)}<span class="chipnum">${arr.length}</span>
       <button class="btn sm ghost" data-act="edit-item" data-cat="${esc(name)}">${ICON.plus}加到這一類</button></th></tr>` +
       (arr.length ? arr.map(row).join('') : '<tr class="groupe"><td colspan="10">這個分類還沒有展品</td></tr>');

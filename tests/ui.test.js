@@ -18,7 +18,8 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.fill('#iut', '10231\t測試員工A\t業務部\n10477\t測試員工B\t產品部'); await p.click('#iugo'); await wait(400);
   await p.click('[data-v=items]'); await wait(500);
   // 預設七個分類要在籤條上,且順序正確
-  const catChips = await p.$$eval('.catbar .catchip', els => els.map(e => e.dataset.cat));
+  // 展品管理現在有兩排籤條(#isite 地點 / #ibar 分類),要指名分類那一排
+  const catChips = await p.$$eval('#ibar .catchip', els => els.map(e => e.dataset.cat));
   const want7 = ['', 'eReader', 'eNote', 'Logistics & Factory', 'Prism', 'Signage', 'Lifestyle', 'Mobile & Wearables'];
   if (catChips.slice(0, 8).join('|') !== want7.join('|')) throw new Error('分類籤條不正確:' + catChips.join("|"));
   // 自己新增一個分類,並調順序
@@ -41,10 +42,10 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   const heads = await p.$$eval('#ibody tr.grouph th', els => els.map(e => e.textContent.replace(/加到這一類|\+/g, '').trim()));
   if (!heads.some(h => /^Signage/.test(h)) || !heads.some(h => /^Prism/.test(h))) throw new Error('分段標題不正確:' + heads.join('|'));
   // 點分類籤條只看那一類
-  await p.click('.catbar .catchip[data-cat="Signage"]'); await wait(400);
+  await p.click('#ibar .catchip[data-cat="Signage"]'); await wait(400);
   const rows = await p.$$eval('#ibody tr:not(.grouph)', els => els.length);
   if (rows !== 1) throw new Error('籤條篩選後應只剩 1 筆,實際 ' + rows);
-  await p.click('.catbar .catchip[data-cat=""]'); await wait(400);
+  await p.click('#ibar .catchip[data-cat=""]'); await wait(400);
   // 展品編輯:上傳照片 + 刪除
   await p.click('[data-act=edit-item][data-id]'); await p.waitForSelector('#fphoto');
   if (!await p.isVisible('#fdrop')) throw new Error('編輯視窗少了刪除按鈕');
@@ -716,7 +717,7 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
       await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
     };
     await stickyOk('catalog', '#cbars', '展品目錄');
-    await stickyOk('items', '#ibar', '展品管理');
+    await stickyOk('items', '#ibars', '展品管理');
     await stickyOk('count', '#kbars', '盤點');
     // 展品目錄釘的也是兩排(廠區 + 分類)
     {
@@ -726,6 +727,16 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
         .map(sel => { const r = document.querySelector(sel).getBoundingClientRect(); return { y: r.y, b: r.bottom }; }));
       if (site.y < wrap.y - 1 || cat.b > wrap.b + 1) throw new Error('★ 展品目錄:廠區與分類兩排都要在釘住的那一塊裡面');
       if (cat.y - site.b > 12) throw new Error('★ 展品目錄:兩排之間離太開(' + Math.round(cat.y - site.b) + 'px)');
+      await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+    }
+    // 展品管理釘的也是兩排
+    {
+      await p.click('[data-v=items]'); await wait(1200);
+      await p.evaluate(() => window.scrollTo(0, 2000)); await wait(300);
+      const [site, cat, wrap] = await p.evaluate(() => ['#isite', '#ibar', '#ibars']
+        .map(sel => { const r = document.querySelector(sel).getBoundingClientRect(); return { y: r.y, b: r.bottom }; }));
+      if (site.y < wrap.y - 1 || cat.b > wrap.b + 1) throw new Error('★ 展品管理:廠區與分類兩排都要在釘住的那一塊裡面');
+      if (cat.y - site.b > 12) throw new Error('★ 展品管理:兩排之間離太開(' + Math.round(cat.y - site.b) + 'px)');
       await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
     }
     // 盤點釘的是兩排(廠區 + 分類),兩排都要在釘住的那一塊裡面,而且要黏在一起
@@ -822,6 +833,43 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     }, multi.id);
     const backTotal = Number((back[3] || '').replace(/[^0-9]/g, ''));
     if (backTotal !== multi.total) throw new Error('★ 切回全部廠區,總數要回到 ' + multi.total + ',卻是 ' + backTotal);
+  }
+
+  // ---- 展品管理:依地點篩選,表格數字也只算那個地點(v2.7.2)----
+  {
+    await p.click('[data-v=items]'); await wait(1500);
+    await p.evaluate(() => { S.itemQ = ''; S.cat = ''; S.itemSite = ''; S._itemDraw(); }); await wait(500);
+    const sites = await p.$$eval('#isite .catchip', els => els.map(e => e.dataset.isite));
+    if (sites.length < 2) throw new Error('★ 展品管理少了地點籤條:' + sites.join(','));
+    if (sites[0] !== '') throw new Error('★ 第一個應該是「全部廠區」:' + sites.join(','));
+    // 找一個分散在多個地點的展品
+    const multi = await p.evaluate(() => {
+      const i2 = (S.items || []).find(x => (x.sites || []).length > 1);
+      return i2 ? { id: i2.id, total: i2.total, sites: i2.sites.map(g => ({ loc: g.location, total: g.total, inStock: g.inStock })) } : null;
+    });
+    if (!multi) throw new Error('測試資料裡沒有分散在多個地點的展品,驗不到');
+    const one = multi.sites[0];
+    if (multi.total === one.total) throw new Error('測試資料不夠分辨:那一區的數量剛好等於總數');
+    const rowOf = id => p.evaluate(x => {
+      const tr = [...document.querySelectorAll('#ibody tr')].find(e => e.textContent.includes(x));
+      if (!tr) return null;
+      const td = [...tr.querySelectorAll('td')].map(c => c.textContent.trim());
+      return { total: td[3], inStock: td[4], dist: td[7] };
+    }, id);
+    await p.click(`#isite .catchip[data-isite="${one.loc}"]`); await wait(700);
+    const r = await rowOf(multi.id);
+    if (!r) throw new Error('★ 選了 ' + one.loc + ' 之後那一列不見了(它在那一區有貨)');
+    if (Number(r.total) !== one.total)
+      throw new Error('★ 選了 ' + one.loc + ',總數要是 ' + one.total + ',卻顯示 ' + r.total + '(看起來是全部廠區加總)');
+    if (Number(r.inStock) !== one.inStock)
+      throw new Error('★ 選了 ' + one.loc + ',在庫要是 ' + one.inStock + ',卻顯示 ' + r.inStock);
+    if (!r.dist.includes(one.loc) || multi.sites.slice(1).some(g => r.dist.includes(g.loc)))
+      throw new Error('★ 存放那一欄應該只剩 ' + one.loc + ':' + r.dist);
+    // 切回全部廠區要回到合計
+    await p.click('#isite .catchip[data-isite=""]'); await wait(700);
+    const back = await rowOf(multi.id);
+    if (Number(back.total) !== multi.total)
+      throw new Error('★ 切回全部廠區,總數要回到 ' + multi.total + ',卻是 ' + back.total);
   }
 
   // ---- 操作紀錄:動作大類 + 人員兩排籤條(v2.7)----

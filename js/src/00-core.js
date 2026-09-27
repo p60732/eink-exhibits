@@ -10,7 +10,8 @@ const S = {
   token: null, user: null, asUser: false, view: 'catalog', items: [], cats: [], editing: null,
   cart: [], multi: new Set(), plan: { start: '', end: '' },
   filters: { q: '', cat: '', loc: '', start: '', end: '', onlyAvail: false },
-  loanFilter: 'pending', itemQ: '', cat: '', site: '', showArchived: false, loanHist: false,
+  loanFilter: 'pending', itemQ: '', cat: '', site: '', itemSite: '', showArchived: false, loanHist: false,
+  logQ: '', logCat: '', logWho: '',              // 操作紀錄的搜尋與兩排籤條
   showId: null, showFilter: 'open', showLines: null, showPick: null
 };
 const $ = (s, el = document) => el.querySelector(s);
@@ -383,8 +384,11 @@ function loadWork() {
 function clearWork() {
   S.cart = []; S.plan = { start: '', end: '' }; S.editing = null;
   S.showPick = null; S.showLines = null; S.showId = null;
-  S.multi = new Set(); S.loanFilter = 'pending'; S.itemQ = ''; S.cat = ''; S.site = '';
-  S.filters = { q: '', cat: '', start: '', end: '', onlyAvail: false };
+  S.multi = new Set(); S.loanFilter = 'pending'; S.itemQ = ''; S.cat = ''; S.site = ''; S.itemSite = '';
+  S.logQ = ''; S.logCat = ''; S.logWho = ''; S.loanHist = false;
+  // ⚠️ 新增任何篩選狀態都要加進這裡。v2.2 修過「換人登入會接手前一個人的狀態」,
+  //    v2.7 加 filters.loc 時又漏了一次 —— 結構測試現在會擋。
+  S.filters = { q: '', cat: '', loc: '', start: '', end: '', onlyAvail: false };
 }
 function enterApp() {
   loadWork();

@@ -231,4 +231,22 @@ t('前端原始碼拆檔:串接順序就是行為,而且不可以留下手改的
     assert.ok(n2 <= 600, 'js/src/' + f + ' 有 ' + n2 + ' 行,超過 600 就失去拆檔的意義了');
   });
 });
+t('換人登入:S 裡每一個篩選狀態都要被 clearWork() 清掉', () => {
+  // v2.2 修過「換人登入會接手前一個人的購物車與篩選」,v2.7 加 filters.loc 時又漏了一次。
+  // 靠記憶會再漏,所以把「S 宣告了什麼」與「clearWork 清了什麼」對起來。
+  const ui = concatUI();
+  const decl = (ui.match(/const S = \{[\s\S]*?\n\};/) || [])[0];
+  assert.ok(decl, '找不到 S 的宣告');
+  const clear = (ui.match(/function clearWork\(\)[\s\S]*?\n\}/) || [])[0];
+  assert.ok(clear, '找不到 clearWork()');
+  // 這些是「跟人無關、換人就該歸零」的篩選/暫存狀態
+  const WORK = ['itemQ', 'cat', 'site', 'itemSite', 'logQ', 'logCat', 'logWho', 'loanFilter', 'loanHist', 'filters', 'cart', 'multi', 'editing'];
+  const missing = WORK.filter(k => decl.includes(k + ':') && !new RegExp('S\\.' + k + '\\s*=').test(clear));
+  assert.strictEqual(missing.join('、'), '', '★ clearWork() 沒清掉:' + missing.join('、'));
+  // filters 物件裡的每個欄位也要被重設到
+  const fDecl = (decl.match(/filters:\s*\{([^}]*)\}/) || [])[1] || '';
+  const fClear = (clear.match(/S\.filters\s*=\s*\{([^}]*)\}/) || [])[1] || '';
+  const fMiss = [...fDecl.matchAll(/(\w+):/g)].map(m => m[1]).filter(k => !fClear.includes(k + ':'));
+  assert.strictEqual(fMiss.join('、'), '', '★ clearWork() 的 filters 少了:' + fMiss.join('、'));
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');
