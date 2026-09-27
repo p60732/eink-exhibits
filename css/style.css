@@ -146,6 +146,13 @@ tr.groupe td{font-size:13px;color:var(--muted);padding:8px 12px}
 /* ---------- KPI ---------- */
 .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .kpi{padding:16px 18px;display:flex;gap:13px;align-items:center}
+/* 可以展開各廠區數字的磚塊:看得出來點得下去 */
+.kpi.sitekpi{cursor:pointer;position:relative}
+.kpi.sitekpi:hover{border-color:var(--gray)}
+.kpi.sitekpi::after{content:'';position:absolute;right:12px;bottom:9px;width:6px;height:6px;
+  border-right:1.6px solid var(--muted-2);border-bottom:1.6px solid var(--muted-2);transform:rotate(45deg)}
+.kpi.sitekpi.open::after{transform:rotate(-135deg);border-color:var(--red)}
+.sitebreak tfoot .sumrow th{background:var(--surface-2);font-weight:700}
 .kpi .box{width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center;color:var(--muted);flex:none}
 .kpi .l{font-size:12.5px;color:var(--muted)}
 .kpi .v{font-size:26px;font-weight:680;font-variant-numeric:tabular-nums;line-height:1.15;letter-spacing:-.02em}

@@ -6,6 +6,9 @@ const ACT = {
   'lf': el => { S.loanFilter = el.dataset.f; render(); },
   'close': () => closeModal(),
   'close-render': () => { closeModal(); render(); },
+  // 總覽:展開 / 收起各廠區的數字。再點同一塊磚就收起來
+  'site-break': el => { const f = el.dataset.f; S.dashSite = (f && S.dashSite === f) ? '' : f; drawSiteBreak(); },
+  'site-go': el => { S.filters.loc = el.dataset.loc; S.filters.cat = ''; go('catalog'); },
   'export': () => run(exportStock),
   'logs-csv': () => exportLogs(),
   'add-cart': el => {

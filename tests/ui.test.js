@@ -835,6 +835,50 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     if (backTotal !== multi.total) throw new Error('★ 切回全部廠區,總數要回到 ' + multi.total + ',卻是 ' + backTotal);
   }
 
+  // ---- 總覽:磚塊點下去展開各廠區數字(v2.7.3)----
+  // 最重要的一條:展開後的「合計」要等於磚塊上的數字。
+  // 不相等就代表前端的加總跟後端的 stats() 算法漂開了 —— 那種數字沒人會發現是錯的。
+  {
+    // 先下架一項,合計才驗得到「有沒有排除已下架」——
+    // 沒有下架的東西時,排不排除結果一樣,那條斷言等於沒在守。
+    await p.click('[data-v=items]'); await wait(1500);
+    await p.click('#ibody [data-act=archive][data-on="1"]'); await wait(1800);
+    await p.click('[data-v=dash]'); await wait(1500);
+    const tile = lab => p.evaluate(l => {
+      const el = [...document.querySelectorAll('.kpi')].find(e => (e.querySelector('.l') || {}).textContent === l);
+      return el ? Number((el.querySelector('.v') || {}).textContent.replace(/[^0-9]/g, '')) : null;
+    }, lab);
+    const items0 = await tile('展品品項'), total0 = await tile('總件數'), inStock0 = await tile('倉庫在庫');
+    if (items0 == null || total0 == null) throw new Error('★ 找不到總覽的磚塊');
+    if (await p.$('#sitebreak .sitebreak')) throw new Error('★ 一開始不該是展開的');
+    // 展開
+    await p.click('.kpi.sitekpi[data-f=total]'); await wait(1800);
+    const foot = await p.$$eval('#sitebreak tfoot th', els => els.map(e => e.textContent.trim()));
+    if (!foot.length) throw new Error('★ 點了磚塊沒有展開各廠區數字');
+    const [, fItems, fTotal, fIn, fOut] = foot.map(x => /^\d+$/.test(x) ? Number(x) : x);
+    if (fTotal !== total0) throw new Error('★ 合計件數 ' + fTotal + ' 跟磚塊上的 ' + total0 + ' 對不起來');
+    if (fItems !== items0) throw new Error('★ 合計品項 ' + fItems + ' 跟磚塊上的 ' + items0 + ' 對不起來');
+    if (fIn !== inStock0) throw new Error('★ 合計在庫 ' + fIn + ' 跟磚塊上的 ' + inStock0 + ' 對不起來');
+    // 每一區的數字加起來也要等於合計
+    const rows = await p.$$eval('#sitebreak tbody tr', els => els.map(e => [...e.querySelectorAll('td')].map(t => t.textContent.trim())));
+    if (rows.length < 2) throw new Error('★ 至少要列得出兩個廠區:' + JSON.stringify(rows));
+    const colSum = k => rows.reduce((a, r) => a + Number(r[k].replace(/[^0-9]/g, '') || 0), 0);
+    if (colSum(2) !== fTotal) throw new Error('★ 各區件數加起來 ' + colSum(2) + ' ≠ 合計 ' + fTotal);
+    if (colSum(3) !== fIn) throw new Error('★ 各區在庫加起來 ' + colSum(3) + ' ≠ 合計 ' + fIn);
+    if (colSum(4) !== fOut) throw new Error('★ 各區出借加起來 ' + colSum(4) + ' ≠ 合計 ' + fOut);
+    // 展開的那一塊要看得出來
+    if (!await p.$('.kpi.sitekpi.open[data-f=total]')) throw new Error('★ 展開的磚塊要標示出來');
+    // 點同一塊收起來
+    await p.click('.kpi.sitekpi[data-f=total]'); await wait(700);
+    if (await p.$('#sitebreak .sitebreak')) throw new Error('★ 再點同一塊磚應該收起來');
+    // 點廠區要跳到展品目錄而且已經篩好
+    await p.click('.kpi.sitekpi[data-f=inStock]'); await wait(1500);
+    const firstLoc = await p.$eval('#sitebreak tbody [data-act=site-go]', el => el.dataset.loc);
+    await p.click('#sitebreak tbody [data-act=site-go]'); await wait(1800);
+    const on = await p.$eval('#csite .catchip.on', el => el.dataset.cloc).catch(() => null);
+    if (on !== firstLoc) throw new Error('★ 點廠區要跳到展品目錄並篩好 ' + firstLoc + ',實際是 ' + on);
+  }
+
   // ---- 展品管理:依地點篩選,表格數字也只算那個地點(v2.7.2)----
   {
     await p.click('[data-v=items]'); await wait(1500);

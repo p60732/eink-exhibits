@@ -31,15 +31,16 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
   const s = d.sum;
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Inventory &amp; Loans</div><h1>展品借用與庫存追蹤</h1><p class="sub">${esc(d.today)}・主管問「還有幾個」,看這裡或匯出庫存表。</p></div><span class="spacer"></span><button class="btn" data-act="export">${ICON.dl}匯出庫存表</button></div>
     <div class="kpis">
-      ${kpi(ICON.layers, '展品品項', s.items)}
-      ${kpi(ICON.cube, '總件數', s.total)}
-      ${kpi(ICON.home, '倉庫在庫', s.inStock)}
+      ${kpi(ICON.layers, '展品品項', s.items, 'sitekpi', 'site-break', 'items')}
+      ${kpi(ICON.cube, '總件數', s.total, 'sitekpi', 'site-break', 'total')}
+      ${kpi(ICON.home, '倉庫在庫', s.inStock, 'sitekpi', 'site-break', 'inStock')}
       ${kpi(ICON.out, '出借中', s.out)}
       ${kpi(ICON.clock, '待審核', d.pending.length, d.pending.length ? 'warn' : '', 'go-loans', 'pending')}
       ${kpi(ICON.alert, '逾期未還', d.overdue.length, d.overdue.length ? 'bad' : '', 'go-loans', 'overdue')}
       ${kpi(ICON.check, '待確認簽收/歸還', d.requests.length, d.requests.length ? 'warn' : '', 'go-loans', 'request')}
       ${kpi(ICON.wrench, '維修 / 遺失', s.repair + ' / ' + s.lost)}
     </div>
+    <div id="sitebreak"></div>
     <div id="todo"></div>
     <div class="cols" style="margin-top:14px">
       <div class="card"><h2 style="margin-top:0">逾期未還</h2>${d.overdue.map(l => miniRow(l, `<span class="pill bad">逾期 ${l.overdueDays} 天</span>`)).join('') || '<div class="empty">沒有逾期,很好</div>'}</div>
@@ -49,7 +50,50 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
     </div>
     ${d.lowStock.length ? `<div class="card" style="margin-top:14px"><h2 style="margin-top:0">倉庫已無在庫</h2><div class="chips">${d.lowStock.map(i => `<span class="pill bad">${esc(i.name)}(${i.out}/${i.total} 借出)</span>`).join('')}</div></div>` : ''}`;
   $('#todo').innerHTML = todoList(d);
+  drawSiteBreak();
 });
+
+/**
+ * 總覽的「展品品項 / 總件數 / 倉庫在庫」點下去,展開各廠區的數字。
+ * 資料用現成的 `items` 路由(它每一項都帶 sites[],各廠區的數字後端已經算好),
+ * **展開時才要**,所以總覽第一次開還是一趟。前端只做加總,不重算任何庫存規則。
+ * ⚠️ 要跟磚塊上的數字對得起來,就得跟後端 dashboard 一樣**排除已下架的展品**。
+ */
+async function drawSiteBreak() {
+  const box = $('#sitebreak');
+  if (!box) return;
+  // 哪一塊磚被展開了,要看得出來(箭頭轉向)
+  $$('.kpi.sitekpi').forEach(el => el.classList.toggle('open', !!S.dashSite && el.dataset.f === S.dashSite));
+  if (!S.dashSite) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="card"><div class="meta">載入各廠區數字…</div></div>';
+  const list = await cachedGet('items', 'items').catch(() => null);
+  if (!box.isConnected) return;
+  if (!list) { box.innerHTML = '<div class="card"><div class="banner bad">讀不到展品資料,請重新整理</div></div>'; return; }
+  const live = list.filter(i => !i.archived);
+  const rows = {};
+  live.forEach(i => (i.sites || []).forEach(g => {
+    const L = nloc(g.location);
+    const r = rows[L] || (rows[L] = { items: 0, total: 0, inStock: 0, out: 0 });
+    r.items++; r.total += Number(g.total) || 0; r.inStock += Number(g.inStock) || 0; r.out += Number(g.out) || 0;
+  }));
+  const names = Object.keys(rows).sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  const sum = names.reduce((a, L) => ({ items: a.items + rows[L].items, total: a.total + rows[L].total,
+    inStock: a.inStock + rows[L].inStock, out: a.out + rows[L].out }), { items: 0, total: 0, inStock: 0, out: 0 });
+  // 合計的「品項」要算不重複的展品數(同一項放兩區會被數兩次)
+  sum.items = live.filter(i => (i.sites || []).length).length;
+  const HEAD = { items: '展品品項', total: '總件數', inStock: '倉庫在庫' };
+  box.innerHTML = `<div class="card sitebreak" style="margin-top:14px">
+    <div class="row"><b>各廠區的${esc(HEAD[S.dashSite] || '數字')}</b>
+      <span class="meta">點廠區可以跳到展品目錄,那邊已經幫你篩好</span>
+      <span class="spacer"></span><button class="btn sm ghost" data-act="site-break" data-f="">收起</button></div>
+    <div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>廠區</th><th class="num">品項</th><th class="num">件數</th><th class="num">在庫</th><th class="num">出借中</th></tr></thead><tbody>
+      ${names.map(L => `<tr><td><button class="btn sm ghost" data-act="site-go" data-loc="${esc(L)}">${esc(L)}</button></td>
+        <td class="num">${rows[L].items}</td><td class="num">${rows[L].total}</td>
+        <td class="num"><span class="chipnum ${rows[L].inStock ? '' : 'zero'}">${rows[L].inStock}</span></td>
+        <td class="num">${rows[L].out}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有展品</td></tr>'}
+    </tbody><tfoot><tr class="sumrow"><th>合計</th><th class="num">${sum.items}</th><th class="num">${sum.total}</th><th class="num">${sum.inStock}</th><th class="num">${sum.out}</th></tr></tfoot></table></div>
+  </div>`;
+}
 
 /* 進行中的五個分頁都是同一批資料的子集合:向後端要一次「active」,分頁在前端切,點分頁不再等後端 */
 const LOAN_HIST = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
