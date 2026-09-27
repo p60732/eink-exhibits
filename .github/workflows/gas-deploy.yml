@@ -52,6 +52,13 @@ jobs:
             echo "::warning::gas/appsscript.json 是從線上拿的，請之後 commit 進 repo"
           fi
 
+      - name: 蓋上版本印記（只改 99_stamp.gs 那一行，不 commit 回 repo）
+        run: |
+          sha="${GITHUB_SHA::7}"
+          sed -i "s/^var CODE_STAMP = 'dev';$/var CODE_STAMP = '$sha';/" gas/99_stamp.gs
+          grep -q "var CODE_STAMP = '$sha';" gas/99_stamp.gs \
+            || { echo "::error::99_stamp.gs 蓋章失敗（那一行被改過？）"; exit 1; }
+
       - name: 上傳程式（clasp push）
         run: clasp push -f
 
@@ -60,11 +67,17 @@ jobs:
           GAS_DEPLOY_ID: ${{ secrets.GAS_DEPLOY_ID }}
         run: clasp deploy -i "$GAS_DEPLOY_ID" -d "${GITHUB_SHA::7} $(date -u +%F)"
 
-      - name: 驗證線上真的活著（/deploy-check 自動版）
+      - name: 驗證線上跑的就是這個 commit（不只是「活著」）
         env:
           GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
         run: |
-          sleep 5
-          body=$(curl -sL "$GAS_WEBAPP_URL")
-          echo "$body" | head -c 200
-          echo "$body" | grep -q '"health":true' || { echo "::error::健康檢查失敗，新版可能沒生效"; exit 1; }
+          sha="${GITHUB_SHA::7}"
+          for i in 1 2 3 4 5 6; do
+            body=$(curl -sL "$GAS_WEBAPP_URL")
+            echo "第 $i 次：$(echo "$body" | head -c 200)"
+            echo "$body" | grep -q '"health":true' || { echo "健康檢查還沒過，等一下再試"; sleep 10; continue; }
+            echo "$body" | grep -q "\"code\":\"$sha\"" && { echo "✔ 線上就是 $sha"; exit 0; }
+            echo "還是舊版（要的是 $sha），等一下再試"; sleep 10
+          done
+          echo "::error::線上回的 code 不是 $sha —— clasp push 成功但部署沒換版，網址可能指到舊版本"
+          exit 1
