@@ -868,6 +868,7 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     if (colSum(4) !== fOut) throw new Error('★ 各區出借加起來 ' + colSum(4) + ' ≠ 合計 ' + fOut);
     // 展開的那一塊要看得出來
     if (!await p.$('.kpi.sitekpi.open[data-f=total]')) throw new Error('★ 展開的磚塊要標示出來');
+
     // 點同一塊收起來
     await p.click('.kpi.sitekpi[data-f=total]'); await wait(700);
     if (await p.$('#sitebreak .sitebreak')) throw new Error('★ 再點同一塊磚應該收起來');

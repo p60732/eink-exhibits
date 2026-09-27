@@ -60,14 +60,22 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
  * ⚠️ 要跟磚塊上的數字對得起來,就得跟後端 dashboard 一樣**排除已下架的展品**。
  */
 async function drawSiteBreak() {
-  const box = $('#sitebreak');
-  if (!box) return;
+  const want = S.dashSite;
   // 哪一塊磚被展開了,要看得出來(箭頭轉向)
-  $$('.kpi.sitekpi').forEach(el => el.classList.toggle('open', !!S.dashSite && el.dataset.f === S.dashSite));
-  if (!S.dashSite) { box.innerHTML = ''; return; }
-  box.innerHTML = '<div class="card"><div class="meta">載入各廠區數字…</div></div>';
+  $$('.kpi.sitekpi').forEach(el => el.classList.toggle('open', !!want && el.dataset.f === want));
+  const slot = () => $('#sitebreak');
+  if (!slot()) return;
+  if (!want) { slot().innerHTML = ''; return; }
+  slot().innerHTML = '<div class="card"><div class="meta">載入各廠區數字…</div></div>';
   const list = await cachedGet('items', 'items').catch(() => null);
-  if (!box.isConnected) return;
+  /**
+   * ⚠️ 等待期間總覽可能已經背景重畫過(withData 是「先畫快取、再更新」),
+   * 原本那個 #sitebreak 節點早就不在畫面上了。抓著舊參照寫 innerHTML =
+   * 寫進一個沒人看得到的節點 → 使用者按了箭頭什麼都沒發生,而且完全沒有錯誤訊息。
+   * 所以這裡**重新抓一次**,不要沿用 await 之前的節點。
+   */
+  const box = slot();
+  if (!box || S.dashSite !== want) return;      // 已經離開總覽,或使用者又點了別塊磚
   if (!list) { box.innerHTML = '<div class="card"><div class="banner bad">讀不到展品資料,請重新整理</div></div>'; return; }
   const live = list.filter(i => !i.archived);
   const rows = {};
@@ -83,7 +91,7 @@ async function drawSiteBreak() {
   sum.items = live.filter(i => (i.sites || []).length).length;
   const HEAD = { items: '展品品項', total: '總件數', inStock: '倉庫在庫' };
   box.innerHTML = `<div class="card sitebreak" style="margin-top:14px">
-    <div class="row"><b>各廠區的${esc(HEAD[S.dashSite] || '數字')}</b>
+    <div class="row"><b>各廠區的${esc(HEAD[want] || '數字')}</b>
       <span class="meta">點廠區可以跳到展品目錄,那邊已經幫你篩好</span>
       <span class="spacer"></span><button class="btn sm ghost" data-act="site-break" data-f="">收起</button></div>
     <div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>廠區</th><th class="num">品項</th><th class="num">件數</th><th class="num">在庫</th><th class="num">出借中</th></tr></thead><tbody>
