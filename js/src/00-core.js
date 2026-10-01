@@ -342,7 +342,7 @@ function showLogin(mode) {
     <form id="login-f" autocomplete="off">
       ${setup ? '<label class="f"><span>姓名 <b>*</b></span><input type="text" name="name" required></label>' : ''}
       <label class="f"><span>工號 <b>*</b></span><input type="text" name="emp" id="l-emp" required autocapitalize="characters" value="${esc(setup ? '' : store.get('lastEmp', ''))}" style="font-size:20px;letter-spacing:.08em;text-align:center"></label>
-      ${setup ? '<div class="grid2"><label class="f"><span>部門</span><input type="text" name="dept"></label><label class="f"><span>Email(接收通知)</span><input type="email" name="email"></label></div>' : ''}
+      ${setup ? '<label class="f"><span>Email(接收通知)<b>*</b></span><input type="email" name="email" required></label>' : ''}
       <label class="f ${setup ? '' : 'hidden'}" id="l-pinf"><span>${setup ? '管理者 PIN <b>*</b>' : '<span id="l-hi"></span>管理者請輸入 PIN'}</span><input type="password" name="pin" id="l-pin" inputmode="numeric" placeholder="4–12 碼" ${setup ? 'required' : ''}></label>
       <button class="btn pri" style="width:100%;min-height:46px;font-size:16px">${setup ? '建立並登入' : '進入'}</button>
     </form>
@@ -353,7 +353,7 @@ function showLogin(mode) {
   $('#login-f').onsubmit = async e => {
     e.preventDefault();
     const p = Object.fromEntries(new FormData(e.target));
-    const r = await run(() => setup ? api('setup', { name: p.name, empNo: p.emp, dept: p.dept, email: p.email, pin: p.pin }) : api('login', { emp: p.emp, pin: p.pin })).catch(() => null);
+    const r = await run(() => setup ? api('setup', { name: p.name, empNo: p.emp, email: p.email, pin: p.pin }) : api('login', { emp: p.emp, pin: p.pin })).catch(() => null);
     if (!r) return;
     if (r.needPin) {
       $('#l-pinf').classList.remove('hidden'); $('#l-hi').textContent = r.name + ' 您好,';

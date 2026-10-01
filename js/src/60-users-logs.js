@@ -1,12 +1,12 @@
 VIEWS.users = main => withData(main, 'users', 'users', {}, list => {
   main.innerHTML = `<div class="row"><div><div class="eyebrow">People</div><h1>使用者</h1><p class="sub">同仁以工號登入(不需密碼);管理者需另設 PIN。人員異動時重新匯入即可更新。</p></div><span class="spacer"></span><button class="btn" data-act="import-users">匯入人員清單</button><button class="btn brand" data-act="edit-user">${ICON.plus}新增</button></div>
     <div class="toolbar"><input class="grow" type="search" id="uq" placeholder="搜尋工號、姓名、部門…"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>工號</th><th>姓名</th><th>部門</th><th>Email</th><th>角色</th><th>狀態</th><th></th></tr></thead><tbody id="ubody"></tbody></table></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>工號</th><th>姓名</th><th>Email</th><th>角色</th><th>狀態</th><th></th></tr></thead><tbody id="ubody"></tbody></table></div>`;
   S._users = list;
   const draw = q => {
     q = (q || '').toLowerCase();
-    $('#ubody').innerHTML = list.filter(u => !q || [u.empNo, u.name, u.dept, u.email].join(' ').toLowerCase().includes(q)).map(u => `<tr class="${u.active ? '' : 'dim'}"><td class="mono">${esc(u.empNo)}</td><td>${esc(u.name)}</td><td>${esc(u.dept)}</td><td>${esc(u.email)}</td><td>${u.role === 'admin' ? '<span class="pill approved">管理者</span>' : '<span class="pill">使用者</span>'}</td><td>${u.active ? '啟用' : '停用'}</td>
-    <td><button class="btn sm" data-act="edit-user" data-id="${u.id}">編輯</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">無資料</td></tr>';
+    $('#ubody').innerHTML = list.filter(u => !q || [u.empNo, u.name, u.dept, u.email].join(' ').toLowerCase().includes(q)).map(u => `<tr class="${u.active ? '' : 'dim'}"><td class="mono">${esc(u.empNo)}</td><td>${esc(u.name)}</td><td>${esc(u.email) || '<span class="pill bad">沒有 Email</span>'}</td><td>${u.role === 'admin' ? '<span class="pill approved">管理者</span>' : '<span class="pill">使用者</span>'}</td><td>${u.active ? '啟用' : '停用'}</td>
+    <td><button class="btn sm" data-act="edit-user" data-id="${u.id}">編輯</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">無資料</td></tr>';
   };
   draw(); $('#uq').oninput = e => draw(e.target.value);
 });

@@ -155,7 +155,15 @@ var Identity = (function () {
       if (s(p.pin) && !/^\w{4,12}$/.test(s(p.pin))) throw E('PIN 需為 4–12 碼英數字');
       if (role === 'admin' && !s(u.pinHash) && !s(p.pin)) throw E('設為管理者需同時設定 PIN');
       var before = u.name + '/' + (u.role === 'admin' ? '管理者' : '使用者') + '/' + (bool(u.active) ? '啟用' : '停用');
-      u.empNo = emp; u.name = name; u.dept = s(p.dept); u.email = s(p.email); u.role = role; u.active = active;
+      /**
+       * ⚠️ 沒帶到的欄位要保留原值,不可以整列覆蓋。
+       * 2026-10-01 踩到:停用 / 啟用某個人時只送了 id / 工號 / 姓名 / active,
+       * email 就被清成空的 —— 而空的 Email 代表他從此收不到任何通知,沒有人會發現。
+       * 表單有送(即使是空字串)才算「要改成這樣」。
+       */
+      u.empNo = emp; u.name = name; u.role = role; u.active = active;
+      if (p.dept !== undefined) u.dept = s(p.dept);
+      if (p.email !== undefined) u.email = s(p.email);
       if (s(p.pin)) { u.pinHash = pinHash(u.id, s(p.pin)); u.mustChange = u.id !== c.user.id; u.sessionVer = (+u.sessionVer || 0) + 1; }
       if (!active) u.sessionVer = (+u.sessionVer || 0) + 1;
       var after = u.name + '/' + (u.role === 'admin' ? '管理者' : '使用者') + '/' + (bool(u.active) ? '啟用' : '停用');

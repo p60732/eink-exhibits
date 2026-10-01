@@ -51,6 +51,8 @@ const M = [
   ['10_identity.gs', "if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(mail)) throw E('請填寫正確的 Email');", '',
    '補 Email 不檢查格式'],
   ['20_logic.gs', 'if (!s(applyUser.email)) {', 'if (false) {', '帳號沒有 Email 照樣收單(核准了卻沒人收到通知)'],
+  ['10_identity.gs', 'if (p.email !== undefined) u.email = s(p.email);', 'u.email = s(p.email);',
+   'saveUser 整列覆蓋,沒帶到的 Email 被清掉'],
   // 跨廠區歸還:盤點只看「總數」與「各區總和」,這四條就是守它們的
   ['20_logic.gs', 'adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);',
    'adjustStock(c, it, from, -ret);', '還到別區只減不加(總數會憑空變少)'],

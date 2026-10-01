@@ -874,6 +874,30 @@ const itemCountBefore = ok('items', {}, A).length;
   ok('receive', { id: E3, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, A);
 }
 
+/* ===== 人員管理:部門不再收;沒帶到的欄位不可以被清掉(2026-10-01) ===== */
+{
+  const mk = r => ok('importUsers', { rows: [r] }, A);
+  mk({ empNo: '30001', name: '不收部門', email: 'd1@x.com' });
+  const u1 = ok('users', {}, A).find(x => x.empNo === '30001');
+  assert.strictEqual(u1.email, 'd1@x.com');
+
+  // ★ 停用 / 啟用時只送了 id / 工號 / 姓名 / active —— email 不可以被清掉
+  ok('saveUser', { user: { id: u1.id, empNo: '30001', name: '不收部門', active: false } }, A);
+  assert.strictEqual(ok('users', {}, A).find(x => x.id === u1.id).email, 'd1@x.com',
+    '★ saveUser 沒帶到的欄位要保留原值(以前會整列覆蓋,把 Email 清掉)');
+  ok('saveUser', { user: { id: u1.id, empNo: '30001', name: '不收部門', active: true } }, A);
+
+  // 有送就是要改成那樣,包括清空
+  ok('saveUser', { user: { id: u1.id, empNo: '30001', name: '不收部門', email: '', active: true } }, A);
+  assert.strictEqual(ok('users', {}, A).find(x => x.id === u1.id).email, '', '有送空字串才是真的要清掉');
+  ok('saveUser', { user: { id: u1.id, empNo: '30001', name: '不收部門', email: 'd1@x.com', active: true } }, A);
+
+  // 舊的四欄名單(工號/姓名/部門/Email)照樣匯得進來
+  mk({ empNo: '30002', name: '舊格式', dept: '業務部', email: 'd2@x.com' });
+  const u2 = ok('users', {}, A).find(x => x.empNo === '30002');
+  assert.deepStrictEqual([u2.dept, u2.email], ['業務部', 'd2@x.com'], '舊名單的部門欄還是收得下來(只是不再要求填)');
+}
+
 /* ===== 借用申請精簡:聯絡方式自動帶、核准通知兩邊都收得到(2026-10-01) =====
  * 表單只剩「借用目的 + 期間」是必要的,聯絡方式改成從帳號帶。
  * 這裡守的是「帶對人」——帶錯人的話,要聯絡借用人時會打到管理者自己。

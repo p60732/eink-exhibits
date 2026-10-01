@@ -298,4 +298,12 @@ t('沒有 Email 就收不到任何通知:代填要對到帳號、登入要補 Em
   // 前端那道擋板擋不住舊瀏覽器,也擋不住代為登記 —— 後端要再擋一次
   assert.ok(/if \(!s\(applyUser\.email\)\)/.test(g), '★ 後端也要擋:帳號沒有 Email 就不收單');
 });
+t('人員管理不再收部門,而且 Email 要看得出有沒有', () => {
+  const ui = read('js/ui.js');
+  assert.ok(!/<span>部門<\/span>/.test(ui), '★ 表單不應該再有「部門」輸入欄(使用者、代為登記、初始設定)');
+  assert.ok(/沒有 Email/.test(ui), '使用者清單要標出沒有 Email 的人 —— 他們送不出申請單');
+  const i = read('gas/10_identity.gs');
+  assert.ok(/if \(p\.email !== undefined\) u\.email = s\(p\.email\);/.test(i),
+    '★ saveUser 沒帶到的欄位要保留原值,不可以整列覆蓋');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

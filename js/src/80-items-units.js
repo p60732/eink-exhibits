@@ -239,7 +239,7 @@ function userModal(id) {
   const u = id ? S._users.find(x => x.id === id) : { role: 'user', active: true };
   const m = openModal(`<h2>${id ? '編輯使用者' : '新增使用者'}</h2><form id="uf">
     <div class="grid2"><label class="f"><span>工號 <b>*</b></span><input type="text" name="empNo" required value="${esc(u.empNo || '')}"></label><label class="f"><span>姓名 <b>*</b></span><input type="text" name="name" required value="${esc(u.name || '')}"></label></div>
-    <div class="grid2"><label class="f"><span>部門</span><input type="text" name="dept" value="${esc(u.dept || '')}"></label><label class="f"><span>Email(接收通知)</span><input type="email" name="email" value="${esc(u.email || '')}"></label></div>
+    <label class="f"><span>Email(接收通知)<b>*</b></span><input type="email" name="email" value="${esc(u.email || '')}" placeholder="沒有 Email 的話,他送不出借用申請"></label>
     <div class="grid2"><label class="f"><span>角色</span><select name="role" id="ur"><option value="user">使用者(只輸工號)</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者(工號+PIN)</option></select></label>
     <label class="f" id="upf"><span>${u.hasPin ? '重設 PIN(留空不變)' : '管理者 PIN <b>*</b>'}</span><input type="text" name="pin" placeholder="4–12 碼"></label></div>
     ${id ? `<label class="chk"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}>啟用(離職可取消勾選)</label>` : ''}
@@ -254,11 +254,17 @@ function userModal(id) {
   };
 }
 function importUsersModal() {
-  const m = openModal(`<h2>匯入人員清單</h2><p class="sub">從 Excel / HR 名單直接複製貼上。欄位順序:<br><b>工號、姓名、部門、Email、在職(選填,填「離職」會停用)</b><br>已存在的工號會更新姓名 / 部門 / Email,不會動到角色。</p>
-    <textarea id="iut" rows="10" placeholder="A001	員工001	業務部	a001@example.com&#10;A002	員工002	產品部"></textarea><div class="meta" id="iup"></div>
+  const m = openModal(`<h2>匯入人員清單</h2><p class="sub">從 Excel / HR 名單直接複製貼上。欄位順序:<br><b>工號、姓名、Email、在職(選填,填「離職」會停用)</b><br>已存在的工號會更新姓名與 Email,不會動到角色。<br>⚠️ <b>Email 一定要有</b> —— 沒有的話那個人送不出借用申請,核准通知也寄不到。</p>
+    <textarea id="iut" rows="10" placeholder="A001	員工001	a001@example.com&#10;A002	員工002	a002@example.com"></textarea><div class="meta" id="iup"></div>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="iugo">匯入</button></div>`, { wide: true });
   const parse = () => $('#iut', m).value.split(/\r?\n/).map(r => r.split(r.includes('\t') ? '\t' : ',').map(x => x.trim())).filter(r => r[0] && r[1] && r[0] !== '工號')
-    .map(r => ({ empNo: r[0], name: r[1], dept: r[2], email: r[3], active: r[4] }));
+    // 第 3 欄看內容決定是 Email 還是部門:舊名單是「工號/姓名/部門/Email」,
+    // 新的只要「工號/姓名/Email」。含 @ 就是 Email,照位置猜會把信箱填進部門欄。
+    .map(r => { const a = r[2] || '', b = r[3] || '';
+      const email = /@/.test(a) ? a : (/@/.test(b) ? b : '');
+      const dept = /@/.test(a) ? '' : a;
+      const act = [b, r[4]].find(x => x && !/@/.test(x)) || '';
+      return { empNo: r[0], name: r[1], dept, email, active: act }; });
   $('#iut', m).oninput = () => { const r = parse(); const have = new Set((S._users || []).map(u => String(u.empNo).toUpperCase())); $('#iup', m).textContent = r.length ? `共 ${r.length} 人:新增 ${r.filter(x => !have.has(x.empNo.toUpperCase())).length}、更新 ${r.filter(x => have.has(x.empNo.toUpperCase())).length}` : ''; };
   $('#iugo', m).onclick = () => { const rows = parse(); if (!rows.length) return toast('沒有可匯入的資料', true); run(() => api('importUsers', { rows })).then(r => { toast(`新增 ${r.created} 人、更新 ${r.updated} 人`); closeModal(); render(); }).catch(() => { }); };
 }

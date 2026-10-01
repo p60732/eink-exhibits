@@ -174,7 +174,7 @@ VIEWS.plan = async main => {
       <div class="meta" style="margin:-4px 0 10px">聯絡方式自動帶:<b>${esc([S.user.empNo, S.user.email].filter(Boolean).join(' / '))}</b>(來自你的帳號,不用填)</div>
       ${admin ? `<div class="card" style="background:var(--surface-2);box-shadow:none;margin-bottom:12px">
         <label class="chk"><input type="checkbox" name="onBehalf" id="ob">代為登記(口頭借用 / 臨時借出)</label>
-        <div id="obf" class="hidden" style="margin-top:10px"><div class="grid2"><label class="f"><span>借用人工號或姓名 <b>*</b></span><input type="text" name="applicant" list="ulist"></label><label class="f"><span>部門</span><input type="text" name="dept"></label></div>
+        <div id="obf" class="hidden" style="margin-top:10px"><label class="f"><span>借用人工號或姓名 <b>*</b></span><input type="text" name="applicant" list="ulist"></label>
         <div class="meta">代為登記會直接成為「已核准」,可立即到借用單點交。<b>借用人要對得到真實帳號</b>(從上面的清單選),通知才寄得到他。</div>
         <label class="chk" style="margin-top:8px"><input type="checkbox" name="force">數量不足仍建立</label></div>
         <datalist id="ulist"></datalist></div>` : ''}
