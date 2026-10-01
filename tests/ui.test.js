@@ -807,6 +807,20 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     if (h > 1) throw new Error('★ 總覽:收起之後空容器還佔了 ' + Math.round(h) + 'px');
   }
 
+  // ---- 我的借用:歷史紀錄整段預設收起來(2026-10-01)----
+  {
+    await p.click('[data-v=mine]'); await wait(1500);
+    if (await p.$('[data-act=hist-toggle]')) {
+      const before = await p.$$eval('[id^=loan-]', els => els.length);
+      await p.click('[data-act=hist-toggle]'); await wait(900);
+      const after = await p.$$eval('[id^=loan-]', els => els.length);
+      if (after <= before) throw new Error('★ 展開歷史紀錄之後單子要變多(' + before + ' → ' + after + ')');
+      await p.click('[data-act=hist-toggle]'); await wait(900);
+      if (await p.$$eval('[id^=loan-]', els => els.length) !== before)
+        throw new Error('★ 收起來要回到原本的數量');
+    }
+  }
+
   // ---- 每張借用單自己收合:預設只露出標題與狀態,按鈕不收(2026-10-01)----
   {
     await p.click('[data-v=loans]'); await wait(1200);

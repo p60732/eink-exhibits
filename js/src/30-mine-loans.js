@@ -5,7 +5,12 @@ VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
     ${act.some(l => l.overdue) ? '<div class="banner bad">你有逾期未歸還的展品,請儘速歸還。</div>' : ''}
     <div class="row"><span class="spacer"></span><button class="btn sm ghost" data-act="loan-foldall">全部展開</button></div>
     <h2>進行中(${act.length})</h2><div class="loans">${act.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">目前沒有進行中的借用</div>'}</div>
-    <h2>歷史紀錄</h2><div class="loans">${past.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">尚無紀錄</div>'}</div>`;
+    <h2>歷史紀錄</h2>
+    ${!past.length ? '<div class="card empty">尚無紀錄</div>' : `
+      <div class="card histfold ${S.histOpen ? 'open' : ''}">
+        <button class="histbtn" data-act="hist-toggle">${S.histOpen ? '收起' : '展開'}歷史紀錄<span class="chipnum">${past.length}</span>
+          <span class="meta">已歸還 / 已取消 / 已駁回的單</span></button></div>
+      ${S.histOpen ? `<div class="loans">${past.map(l => loanCard(l, { mine: true })).join('')}</div>` : ''}`}`;
 });
 
 /** 今天要做的事:把散在各頁的待辦收成一張清單 */

@@ -375,6 +375,10 @@ t('借用單一張一張收合:預設只露出標題與狀態,但按鈕不收', 
     '★ 操作按鈕不可以放進 .loan-body(收起來就按不到了)');
   assert.ok(ui.slice(i1, i1 + 400).includes('class="actions"'), '操作按鈕要緊接在收合區塊之後');
   assert.ok(/'loan-fold':/.test(ui) && /'loan-foldall':/.test(ui), '要有單張與整批的收合動作');
+  // 「我的借用」的歷史紀錄整段也要收得起來(久了也會變幾十張)
+  assert.strictEqual((ui.match(/class="card histfold /g) || []).length, 2,
+    '★ 借用單與我的借用兩邊都要有「整段歷史」的收合');
+  assert.ok(/歷史紀錄<span class="chipnum">/.test(ui), '我的借用的那一條要標出有幾張');
   assert.ok(/S\.openLoans = new Set\(\);/.test(ui), '★ 換人登入要清掉展開狀態');
 });
 Promise.all(PENDING).then(() => console.log('✔ 結構檢查 ' + n + ' 項通過'))
