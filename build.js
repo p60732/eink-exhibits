@@ -6,8 +6,16 @@
  * 輸出:dist/site/(GitHub Pages)、dist/gas/(Apps Script)
  * 禁止:測試沒過不產生產物;不手改 dist/
  *
- * 用法:node build.js            → 測試 + 建置
- *       node build.js --no-test  → 只建置(僅限本機預覽,CI 一律跑測試)
+ * 用法:node build.js             → 後端四層測試 + 建置
+ *       node build.js --no-test   → 只建置(僅限本機預覽,CI 一律跑測試)
+ *       node build.js --ui        → 再加跑全部 UI 場景(約 4 分鐘)
+ *       node build.js --ui=05     → 只跑 05 這個 UI 場景(會自動帶上它的前置)
+ *       node build.js --ui=05,08  → 跑兩個場景
+ *
+ * ⚠️ `--ui` 會自己挑一個沒人用的埠、起一個**全新的**假後端、跑完再關掉。
+ *    手動跑的話那一步很容易出錯:假後端的資料在記憶體,沒重開就跑第二次會卡在
+ *    「建立管理者」等 30 秒逾時(錯誤訊息看起來像第一步就壞了);
+ *    而且不能用 `pkill -f tests/serve.js` 關它,會連自己的 shell 一起殺掉。
  */
 const fs = require('fs'), path = require('path'), { spawnSync } = require('child_process');
 const root = __dirname, dist = path.join(root, 'dist');
@@ -40,6 +48,37 @@ function run(file) {
 }
 
 if (!args.includes('--no-test')) ['rules.test.js', 'e2e.test.js', 'structure.test.js', 'mutation.test.js'].forEach(run);
+
+/**
+ * UI 場景測試。跟後端四層不一樣,它需要一個跑起來的假後端,而且**必須是全新的** ——
+ * 所以這裡自己起、自己關,不要求人先手動開一個。
+ */
+const uiArg = args.find(a => a === '--ui' || a.startsWith('--ui='));
+if (uiArg) {
+  const ids = uiArg.includes('=') ? uiArg.slice(5).split(',').map(x => x.trim()).filter(Boolean) : [];
+  const port = 8700 + Math.floor(Math.random() * 200);
+  const srv = require('child_process').spawn(process.execPath, [path.join(root, 'tests', 'serve.js'), String(port)],
+    { stdio: 'ignore', detached: true });
+  const stop = () => { try { process.kill(-srv.pid); } catch (e) { try { srv.kill(); } catch (e2) { } } };
+  process.on('exit', stop);
+  const http = require('http');
+  const alive = () => new Promise(res => {
+    const q = http.get({ host: '127.0.0.1', port: port, path: '/' }, r => { r.resume(); res(r.statusCode === 200); });
+    q.on('error', () => res(false)); q.setTimeout(900, () => { q.destroy(); res(false); });
+  });
+  (async () => {
+    let up = false;
+    for (let i = 0; i < 40 && !up; i++) { up = await alive(); if (!up) await new Promise(r => setTimeout(r, 250)); }
+    if (!up) { console.error('✘ 假後端起不來(埠 ' + port + ')'); stop(); process.exit(1); }
+    const r = spawnSync(process.execPath, [path.join(root, 'tests', 'ui.test.js'), ...ids],
+      { stdio: 'inherit', env: { ...process.env, PORT: String(port) } });
+    stop();
+    if (r.status !== 0) { console.error('✘ UI 場景測試失敗,停止建置'); process.exit(1); }
+    rest();
+  })();
+} else rest();
+
+function rest() {
 
 const cfg = JSON.parse(fs.readFileSync(path.join(root, 'deploy.config.json'), 'utf8'));
 if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(cfg.gasUrl || '')) {
@@ -122,3 +161,4 @@ const c1 = fs.readFileSync(path.join(root, 'js/connect.js'), 'utf8').split('\n')
 if (c1.filter((l, i) => l !== c2[i]).length !== 1) diff.push('js/connect.js(應只差 GAS_URL 一行)');
 if (diff.length) { console.error('✘ 產物與原始碼不一致:' + diff.join('、')); process.exit(1); }
 console.log('✔ 建置完成 → dist/site(前端)、dist/gas(後端)');
+}

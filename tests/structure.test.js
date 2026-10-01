@@ -307,6 +307,31 @@ t('沒有 Email 就收不到任何通知:代填要對到帳號、登入要補 Em
   // 前端那道擋板擋不住舊瀏覽器,也擋不住代為登記 —— 後端要再擋一次
   assert.ok(/if \(!s\(applyUser\.email\)\)/.test(g), '★ 後端也要擋:帳號沒有 Email 就不收單');
 });
+t('UI 場景檔:編號 / 前置 / 斷言住在哪裡', () => {
+  /**
+   * tests/ui.test.js 只是跑者,斷言全部住在 tests/ui/<編號>-<名字>.js。
+   * 這一條守三件事,少了任何一件,「只跑一個場景」就會變成不可靠的功能:
+   *   ① 檔名前兩碼就是 id —— 跑者是用 id 排順序與解前置的
+   *   ② 前置只能往前指(編號比自己小),否則會繞圈或白跑
+   *   ③ 跑者裡不可以有斷言(★),不然拆場景就只拆了一半
+   */
+  const dir = path.join(root, 'tests', 'ui');
+  const files = fs.readdirSync(dir).filter(f => /^\d\d-.*\.js$/.test(f)).sort();
+  assert.ok(files.length >= 5, 'tests/ui/ 應該有多個場景檔,實際 ' + files.length);
+  const ids = files.map(f => f.slice(0, 2));
+  files.forEach((f, i) => {
+    const m = require(path.join(dir, f));
+    assert.strictEqual(m.id, ids[i], '★ ' + f + ' 的 id 要等於檔名前兩碼');
+    assert.ok(m.title && typeof m.run === 'function', '★ ' + f + ' 要有 title 與 run()');
+    assert.ok(Array.isArray(m.needs), '★ ' + f + ' 要宣告 needs(沒有前置就寫 [])');
+    (m.needs || []).forEach(nd => {
+      assert.ok(ids.includes(nd), '★ ' + f + ' 的前置 ' + nd + ' 不存在');
+      assert.ok(nd < m.id, '★ ' + f + ' 的前置 ' + nd + ' 編號不小於自己 —— 前置只能往前指');
+    });
+  });
+  assert.ok(!/★/.test(read('tests/ui.test.js')),
+    '★ 斷言要住在場景檔裡,跑者 tests/ui.test.js 只負責調度');
+});
 t('gas/20_logic.gs 是建置產物:內容必須等於 gas-src/20_logic 串接的結果', () => {
   /**
    * 跟 js/ui.js 不同,這個產物**必須 commit** —— 部署是 clasp push 整個 gas/ 目錄,推的就是它。
