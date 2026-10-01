@@ -64,7 +64,7 @@ function routes_() {
   add('public', false, I, { status: [], login: ['emp', 'pin'] }, { Users: '*' });
   add('public', true, I, { setup: ['name', 'empNo', 'dept', 'email', 'pin'] }, FULL_);
   add('user', false, I, { me: [] }, { Users: '*' });
-  add('user', true, I, { logout: [], changePin: ['oldPin', 'newPin'] }, FULL_);
+  add('user', true, I, { logout: [], changePin: ['oldPin', 'newPin'], setMyEmail: ['email'] }, FULL_);
   add('admin', false, I, { users: [] }, { Users: '*' });
   add('admin', true, I, { saveUser: ['user'], importUsers: ['rows'] }, FULL_);
   // 邏輯積木:同仁

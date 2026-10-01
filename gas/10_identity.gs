@@ -128,6 +128,18 @@ var Identity = (function () {
       log_(c.db, u, '變更 PIN', u.empNo, '');
       return true;
     },
+    /**
+     * 自己補 Email。帳號是管理者匯入的,Email 欄常常是空的,
+     * 而空的 Email = 核准通知寄不到,偏偏當事人完全不會知道。
+     * 所以登入時發現沒有就請本人補一次,只能改自己的,也只能改這一個欄位。
+     */
+    setMyEmail: function (c) {
+      var mail = s(c.p.email);
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) throw E('請填寫正確的 Email');
+      c.user.email = mail; c.db._dirty.Users = true;
+      log_(c.db, c.user, '補填 Email', c.user.empNo, mail);
+      return pub(c.user);
+    },
     users: function (c) { return c.db.Users.map(pub); },
     saveUser: function (c) {
       var p = c.p.user || {};

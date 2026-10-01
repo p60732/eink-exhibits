@@ -272,4 +272,28 @@ t('總覽展開的明細要接在被點到的磚塊後面(手機上不能掉到�
   assert.ok(/\.kpis>#sitebreak\{grid-column:1\/-1\}/.test(css), '★ 明細進了格線就要橫跨一整列,不然會被擠成一格寬');
   assert.ok(/#sitebreak:empty\{display:none\}/.test(css), '收起的時候空容器不能佔位');
 });
+t('借用申請表單:聯絡方式只能從帳號帶,不可以再長出自由輸入欄', () => {
+  // 2026-10-01 精簡表單:只剩「借用目的 + 期間」必填,地點與備註選填。
+  // 聯絡方式改成後端從帳號帶(工號 / Email)—— 前端若又冒出 contact 欄,
+  // 使用者填的東西會被默默丟掉,比沒有那一欄更糟。
+  const ui = read('js/ui.js');
+  assert.ok(!/name="contact"/.test(ui), '★ 借用申請表單不可以有 contact 輸入欄(聯絡方式由後端從帳號帶)');
+  assert.ok(!/name="purpose"/.test(ui), '★ 用途已併進「借用目的」,不可以再有 purpose 輸入欄');
+  assert.ok(/借用目的/.test(ui), '表單要有「借用目的」這一欄');
+  const g = read('gas/20_logic.gs');
+  assert.ok(!/contact:\s*s\(c\.p\.contact\)/.test(g), '★ 後端不可以吃前端送的 contact');
+  assert.ok(/contact:\s*onBehalf \? contactOf\(who\) : contactOf\(c\.user\)/.test(g),
+    '★ 聯絡方式要從帳號帶,代為登記時帶被登記者的');
+  assert.ok(/mailList\(\[applicantEmail\(c\.db, L\), c\.user\.email\]\)/.test(g),
+    '★ 核准通知的收件者要包含按下核准的那位管理者');
+});
+t('沒有 Email 就收不到任何通知:代填要對到帳號、登入要補 Email', () => {
+  const g = read('gas/20_logic.gs'), i = read('gas/10_identity.gs'), ui = read('js/ui.js');
+  assert.ok(/if \(!who\) throw E\('找不到「'/.test(g), '★ 代為登記對不到帳號必須擋下來(放行的話那張單沒有主人)');
+  assert.ok(/setMyEmail: function/.test(i), '★ 要有讓本人補 Email 的路由');
+  assert.ok(/add\('user', true, I, \{ logout: \[\], changePin:.*setMyEmail: \['email'\]/.test(read('gas/00_gateway.gs')),
+    'setMyEmail 要掛在「登入後才能用」的路由上');
+  assert.ok(/if \(!S\.user\.email\) \{[^}]*emailModal\(\)/.test(ui), '★ 登入後帳號沒有 Email 就要跳出補填');
+  assert.ok(/openModal\(`<h2>請先補一下你的 Email/.test(ui) && /locked: true/.test(ui), '補 Email 的視窗要擋住畫面,不能略過');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

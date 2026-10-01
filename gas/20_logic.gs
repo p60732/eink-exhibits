@@ -458,6 +458,22 @@ var Logic = (function () {
   function emailsOfAdmins(db) {
     return db.Users.filter(function (u) { return u.role === 'admin' && bool(u.active) && s(u.email); }).map(function (u) { return u.email; });
   }
+  /**
+   * 聯絡方式一律從帳號帶:工號 / Email。
+   * 以前這是表單上的自由輸入欄,十個人十種寫法、常常留空,而帳號裡本來就有這兩樣,
+   * 叫人再抄一次只會多出錯字。**前端不再送 contact,送了也不算數。**
+   */
+  function contactOf(u) {
+    if (!u) return '';
+    var emp = s(u.empNo), mail = s(u.email);
+    return emp && mail ? emp + ' / ' + mail : (emp || mail);
+  }
+  /** 收件者清單:去掉空的、去掉重複(自己核准自己代開的單時,兩邊會是同一個人) */
+  function mailList(list) {
+    var seen = {}, out = [];
+    (list || []).forEach(function (x) { var v = s(x); if (v && !seen[v]) { seen[v] = 1; out.push(v); } });
+    return out;
+  }
   function applicantEmail(db, L) {
     var u = byId(db.Users, L.applicantId);
     if (u && s(u.email)) return u.email;
@@ -665,7 +681,7 @@ var Logic = (function () {
     ['cat', ['分類']],
     ['item', ['展品', '單台', '盤點', '上架']],
     ['loan', ['借用', '歸還', '領取', '簽收', '轉借', '延期', '延長', '點交', '當面確認']],
-    ['user', ['帳號', '使用者', '人員', 'PIN']]
+    ['user', ['帳號', '使用者', '人員', 'PIN', 'Email']]
   ];
   function logCat(action) {
     var a = s(action);
@@ -871,7 +887,7 @@ var Logic = (function () {
     createLoan: function (c) {
       var today = c.today, r = validRange(c.p, today), isAdmin = c.user.role === 'admin';
       if (!isAdmin && r[0] < today) throw E('借出日不可早於今天');
-      if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
+      if (!s(c.p.event)) throw E('請填寫借用目的');
       var showId = s(c.p.showId);
       if (showId) {
         if (!isAdmin) throw E('只有管理者可以把借用單掛到展覽底下');
@@ -891,13 +907,19 @@ var Logic = (function () {
       if (onBehalf) {
         who = findByEmp(c.db, c.p.applicant);
         if (!who) { var byName = c.db.Users.filter(function (u) { return s(u.name) === s(c.p.applicant); }); if (byName.length === 1) who = byName[0]; }
+        /**
+         * 對不到帳號就擋下來。以前這裡會放行,單子的 applicantId 是空的 ——
+         * 那張單從此沒有主人:「我的借用」找不到、離職未還抓不到、通知永遠寄不出去,
+         * 而且當下看起來完全正常,是最難發現的那一種。
+         */
+        if (!who) throw E('找不到「' + s(c.p.applicant) + '」的帳號。代為登記要對得到真實帳號,請先在「使用者」建立(或用匯入),再回來登記。');
       }
       var L = {
         id: nextId(c.db.Loans, 'L' + today.slice(2, 4) + today.slice(5, 7) + '-', 3),
         applicant: onBehalf ? (who ? who.name : s(c.p.applicant)) : c.user.name,
         applicantId: onBehalf ? (who ? who.id : '') : c.user.id,
         dept: onBehalf ? (s(c.p.dept) || (who ? s(who.dept) : '')) : (s(c.p.dept) || s(c.user.dept)),
-        contact: s(c.p.contact) || s(c.user.email),
+        contact: onBehalf ? contactOf(who) : contactOf(c.user),   // 不吃前端送的值
         event: s(c.p.event), venue: s(c.p.venue), purpose: s(c.p.purpose),
         start: r[0], end: r[1], status: onBehalf ? 'approved' : 'pending', lines: lines,
         createdBy: c.user.name, createdAt: c.now,
@@ -921,7 +943,7 @@ var Logic = (function () {
       if (L.status !== 'pending') throw E('只有「待審核」的申請可以修改');
       var r = validRange(c.p, c.today);
       if (!isAdmin && r[0] < c.today) throw E('借出日不可早於今天');
-      if (!s(c.p.event)) throw E('請填寫活動 / 展覽名稱');
+      if (!s(c.p.event)) throw E('請填寫借用目的');
       var lines = cleanLines(c.db, c.p.lines);
       var short = checkLines(c.db, lines, r[0], r[1], L.id, c.today, s(L.showId)).filter(function (x) { return x.short > 0; });
       if (short.length && !(isAdmin && c.p.force)) {
@@ -1096,8 +1118,11 @@ var Logic = (function () {
       if (short.length && !c.p.force) throw E('數量不足:' + short.map(function (x) { return x.name + ' 缺 ' + x.short; }).join('、') + '。若仍要核准請勾選「強制核准」');
       L.status = 'approved'; L.reviewer = c.user.name; L.reviewedAt = c.now; L.reviewNote = s(c.p.note);
       dirty(c.db, 'Loans'); log(c, '核准借用', L.id, s(c.p.note));
-      notify(c, applicantEmail(c.db, L), '[展品管理] 借用已核准 ' + L.id + ' — ' + L.event,
-        '您的借用申請已核准,請於 ' + L.start + ' 前往點交領取。\n歸還日:' + L.end + '\n\n' + linesText(c.db, L) + (L.reviewNote ? '\n\n備註:' + L.reviewNote : ''));
+      // 申請人與核准的人各收到一份:核准的人自己也留一份存檔,不用另外記自己核了什麼
+      notify(c, mailList([applicantEmail(c.db, L), c.user.email]), '[展品管理] 借用已核准 ' + L.id + ' — ' + L.event,
+        L.applicant + ' 的借用申請已核准,請於 ' + L.start + ' 前往點交領取。\n歸還日:' + L.end
+        + '\n核准人:' + L.reviewer + '\n聯絡方式:' + (s(L.contact) || '(帳號沒有填 Email)')
+        + '\n\n' + linesText(c.db, L) + (L.reviewNote ? '\n\n備註:' + L.reviewNote : ''));
       return enrichLoan(c.db, L, today);
     },
     reject: function (c) {

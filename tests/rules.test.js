@@ -349,7 +349,7 @@ t('操作紀錄大類:會互相搶的那幾個要歸對邊', () => {
     '新增展品': 'item', '下架展品': 'item', '重新上架': 'item', '新增單台編號': 'item',
     '變更單台狀態': 'item', '盤點': 'item',
     '新增分類': 'cat', '分類改名': 'cat', '調整分類順序': 'cat',
-    '建立帳號': 'user', '修改使用者': 'user', '匯入人員清單': 'user', '變更 PIN': 'user',
+    '建立帳號': 'user', '修改使用者': 'user', '匯入人員清單': 'user', '變更 PIN': 'user', '補填 Email': 'user',
     '不認得的動作': 'other'
   };
   const bad = Object.keys(want).filter(a2 => R.logCat(a2) !== want[a2])

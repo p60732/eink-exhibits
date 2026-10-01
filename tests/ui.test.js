@@ -11,11 +11,16 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   // 1×1 透明 PNG,給照片上傳測試用
   const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   await p.goto(URL); await p.waitForSelector('#login-f');
-  await p.fill('[name=name]', '測試管理者'); await p.fill('#l-emp', '90001'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
+  // 第一位管理者的 Email 要填:核准通知會寄一份給按下核准的人,
+  // 而且沒填的話一登入就會被「請先補 Email」的擋板擋住(這是刻意的)
+  await p.fill('[name=name]', '測試管理者'); await p.fill('[name=email]', 'admin@x.com');
+  await p.fill('#l-emp', '90001'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
   await p.waitForSelector('.kpis'); await shot('dash0');
   // 匯入人員、新增展品
   await p.click('[data-v=users]'); await wait(300); await p.click('[data-act=import-users]');
-  await p.fill('#iut', '10231\t測試員工A\t業務部\n10477\t測試員工B\t產品部'); await p.click('#iugo'); await wait(400);
+  // 第 4 欄是 Email。沒有 Email 的帳號登入時會被擋住要求補填(見下面「補 Email」那一段),
+  // 所以這兩個一路用到底的測試帳號要先給信箱,10999 留著專門驗那個擋板。
+  await p.fill('#iut', '10231\t測試員工A\t業務部\tming@x.com\n10477\t測試員工B\t產品部\tbee@x.com\n10999\t沒信箱的人\t倉管'); await p.click('#iugo'); await wait(400);
   await p.click('[data-v=items]'); await wait(500);
   // 預設七個分類要在籤條上,且順序正確
   // 展品管理現在有兩排籤條(#isite 地點 / #ibar 分類),要指名分類那一排
@@ -191,6 +196,9 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   }
   await p.fill('#ps', d(1)); await p.dispatchEvent('#ps', 'change'); await p.fill('#pe', d(3)); await p.dispatchEvent('#pe', 'change'); await wait(500);
   await p.fill('[name=event]', '台北展'); await wait(200); await shot('plan');
+  // 2026-10-01 精簡:表單只剩「借用目的 + 期間」必填,聯絡方式改由後端從帳號帶
+  if (await p.$('[name=contact]')) throw new Error('★ 借用申請表單不該再有「聯絡方式」欄');
+  if (await p.$('[name=purpose]')) throw new Error('★ 借用申請表單不該再有「用途」欄(已併進借用目的)');
   await p.click('#psubmit'); await wait(500); await p.click('.modal [data-v=mine]'); await wait(600); await shot('mine');
   // 改單:待審核時可以自己改,不用取消重來
   await p.click('[data-act=edit-loan]'); await wait(800);
@@ -778,6 +786,42 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     await p.click('.sitebreak [data-act=site-break]'); await wait(600);
     const h = await p.$eval('#sitebreak', el => el.getBoundingClientRect().height);
     if (h > 1) throw new Error('★ 總覽:收起之後空容器還佔了 ' + Math.round(h) + 'px');
+  }
+
+  // ---- 帳號沒有 Email:登入時擋下來要他補(2026-10-01)----
+  // 空的 Email = 核准通知寄不到,而且當事人完全不會知道,
+  // 他只會覺得「我申請了都沒下文」。所以在進系統之前擋一次。
+  {
+    await p.click('#menu-btn'); await p.click('#m-out'); await p.waitForSelector('#login-f');
+    await p.fill('#l-emp', '10999'); await p.click('#login-f button');
+    await p.waitForSelector('#myml', { timeout: 15000 });
+    if (!/Email/.test(await p.textContent('.modal h2'))) throw new Error('★ 沒有 Email 的帳號登入後要跳出補填視窗');
+    // 擋板不可以略過:點背景、按 Esc 都要還在
+    await p.click('#modal-bg', { position: { x: 5, y: 5 } }).catch(() => { });
+    await p.keyboard.press('Escape'); await wait(300);
+    if (!await p.$('#myml')) throw new Error('★ 補 Email 的視窗不可以被點掉或按 Esc 關掉');
+    // 格式不對要擋
+    await p.fill('#myml', '不是信箱'); await p.click('#mlgo'); await wait(600);
+    if (!await p.$('#myml')) throw new Error('★ Email 格式不對不可以放行');
+    // 填對了就進得去,而且不會再問第二次
+    await p.fill('#myml', 'nomail@x.com'); await p.click('#mlgo');
+    // ⚠️ 不能等 #tabs .tab —— 擋板是蓋在已經畫好的分頁列上面的,那個選擇器一開始就中了。
+    //    要等的是「擋板消失」。
+    await p.waitForSelector('#myml', { state: 'detached', timeout: 15000 });
+    await p.waitForSelector('#tabs .tab', { timeout: 15000 });
+    const mail = await p.evaluate(() => S.user.email);
+    if (mail !== 'nomail@x.com') throw new Error('★ 補完的 Email 要存回帳號:' + mail);
+    // 借用申請表單上要看得到帶進去的聯絡方式(購物車空的話那一頁只有空狀態,所以先加一項)
+    await p.click('[data-v=catalog]'); await wait(1500);
+    const pick = await p.$$('[data-mpick]');
+    if (pick.length) { await pick[0].check(); await wait(300); await p.click('[data-act=multi-go]'); await wait(900); }
+    else { await p.click('[data-v=plan]'); await wait(900); }
+    const hint = await p.textContent('#pform').catch(() => '');
+    if (!/10999 \/ nomail@x\.com/.test(hint)) throw new Error('★ 申請表單要顯示自動帶入的聯絡方式:' + hint.slice(0, 150));
+    // 換回管理者,後面的段落都是管理者視角
+    await p.click('#menu-btn'); await p.click('#m-out'); await p.waitForSelector('#login-f');
+    await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible');
+    await p.fill('#l-pin', '1234'); await p.click('#login-f button'); await p.waitForSelector('[data-v=items]');
   }
 
   // ---- 四種請求的按鈕要講自己的話(v2.6)----

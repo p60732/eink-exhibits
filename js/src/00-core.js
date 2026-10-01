@@ -403,6 +403,8 @@ function enterApp() {
   S.view = saved && tabsFor().some(t => t[0] === saved) ? saved : (isAdmin() ? 'dash' : 'catalog');
   if (S.showPick) S.view = 'catalog';                    // 挑選到一半重新整理,回到原地繼續
   if (S.user.mustChangePin) { $('#main').innerHTML = ''; renderTabs(); return pinModal(true); }
+  // 沒有 Email 就收不到任何通知,而且當事人不會知道 —— 在這裡補,不要讓他一路用下去
+  if (!S.user.email) { $('#main').innerHTML = ''; renderTabs(); return emailModal(); }
   render();
   prefetch();
 }

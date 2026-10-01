@@ -31,7 +31,7 @@ function editLoan(id) {
   S.cart = L.lines.map(ln => ({ itemId: ln.itemId, location: ln.location || '', qty: ln.qty }));
   S.plan = { start: L.start, end: L.end };
   saveCart();
-  store.set(uk('draft'), { event: L.event, venue: L.venue, contact: L.contact, purpose: L.purpose, note: L.note });
+  store.set(uk('draft'), { event: L.event, venue: L.venue, note: L.note });
   go('plan');
 }
 function cancelEdit() { S.editing = null; S.cart = []; store.del(uk('draft')); saveCart(); go('mine'); }

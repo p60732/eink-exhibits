@@ -874,6 +874,74 @@ const itemCountBefore = ok('items', {}, A).length;
   ok('receive', { id: E3, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, A);
 }
 
+/* ===== 借用申請精簡:聯絡方式自動帶、核准通知兩邊都收得到(2026-10-01) =====
+ * 表單只剩「借用目的 + 期間」是必要的,聯絡方式改成從帳號帶。
+ * 這裡守的是「帶對人」——帶錯人的話,要聯絡借用人時會打到管理者自己。
+ */
+{
+  // ⚠️ 前面「離職未還」那一段用 saveUser 停用又啟用 10231,卻沒帶 email ——
+  //    saveUser 是「整列覆蓋」,沒帶的欄位會被清掉,所以這裡先把 email 補回來。
+  //    (同時 sessionVer 被 bump 過,舊 token 失效,要重新登入)
+  const u231 = ok('users', {}, A).find(x => x.empNo === '10231');
+  ok('saveUser', { user: { id: u231.id, empNo: '10231', name: u231.name, email: 'ming@x.com', active: true } }, A);
+  const UA = ok('login', { emp: '10231' }).token, UB = ok('login', { emp: '10477' }).token;
+  const CT = ok('saveItem', { item: { name: '精簡表單測試機', mode: 'qty', category: '體驗區',
+    sites: [{ location: '新竹', qty: 8 }] } }, A);
+  const cln = [{ itemId: CT.id, location: '新竹', qty: 1 }];
+  const mk = (p, t) => ok('createLoan', Object.assign({ start: '2026-10-01', end: '2026-10-05', lines: cln }, p), t);
+
+  // 目的沒填就不給送 —— 它現在是整張單子的標題
+  bad('createLoan', { event: '', start: '2026-10-01', end: '2026-10-05', lines: cln }, UA, /請填寫借用目的/);
+
+  // 聯絡方式從帳號帶,前端送什麼都不算數
+  const C1 = mk({ event: '自動帶入測試', contact: '亂填的分機 9999' }, UA);
+  assert.strictEqual(C1.contact, '10231 / ming@x.com', '★ 聯絡方式要從帳號帶(工號 / Email),不可以吃前端送的值');
+  // 帳號沒填 Email 的人,至少要留得下工號
+  assert.strictEqual(mk({ event: '沒有信箱的人' }, UB).contact, '10477', '帳號沒有 Email 時,聯絡方式至少要有工號');
+  // 代為登記:帶的是「被登記的那個人」,不是管理者自己
+  assert.strictEqual(mk({ event: '代登記測試', onBehalf: true, applicant: '10231' }, A).contact,
+    '10231 / ming@x.com', '★ 代為登記要帶被登記者的聯絡方式,不是管理者自己的');
+
+  // 代為登記對不到帳號就擋下來 —— 放行的話那張單沒有主人:
+  // 「我的借用」找不到、離職未還抓不到、通知永遠寄不出去,而且當下看起來完全正常
+  bad('createLoan', { event: '查無此人', start: '2026-10-01', end: '2026-10-05', lines: cln,
+    onBehalf: true, applicant: '路人甲' }, A, /找不到「路人甲」的帳號/);
+  assert.ok(!ok('loans', { filter: 'all' }, A).some(x => x.event === '查無此人'), '★ 擋下來之後不可以留下半張單');
+
+  // 自己補 Email:只能改自己的,而且要是像樣的 Email
+  const noMail = ok('importUsers', { rows: [{ empNo: '20001', name: '沒信箱的人' }] }, A);
+  assert.strictEqual(noMail.created, 1);
+  const UC = ok('login', { emp: '20001' }).token;
+  assert.strictEqual(ok('me', {}, UC).email, '', '匯入時沒帶 Email,帳號就是空的');
+  bad('setMyEmail', { email: '不是信箱' }, UC, /正確的 Email/);
+  bad('setMyEmail', { email: 'a@b' }, UC, /正確的 Email/);
+  assert.strictEqual(ok('setMyEmail', { email: 'new@x.com' }, UC).email, 'new@x.com', '★ 自己補得了 Email');
+  assert.strictEqual(ok('me', {}, UC).email, 'new@x.com', '補完要真的存進帳號');
+  // 補完之後,他的單子就帶得到 Email,核准通知也寄得到
+  const C5 = mk({ event: '補完信箱再申請' }, UC);
+  assert.strictEqual(C5.contact, '20001 / new@x.com', '★ 補完 Email 之後,聯絡方式要帶得到');
+  G.mails.length = 0;
+  ok('approve', { id: C5.id }, A);
+  assert.ok(/new@x\.com/.test(G.mails.filter(m => /借用已核准/.test(m.subject))[0].to), '★ 補完 Email 之後核准通知寄得到本人');
+
+  // 核准 → 申請人與核准的人在同一封信裡
+  G.mails.length = 0;
+  ok('approve', { id: C1.id }, A);
+  const ap = G.mails.filter(m => /借用已核准/.test(m.subject));
+  assert.strictEqual(ap.length, 1, '核准只寄一封(兩個收件者在同一封)');
+  assert.ok(/ming@x\.com/.test(ap[0].to), '★ 核准通知要寄給申請人');
+  assert.ok(/admin@x\.com/.test(ap[0].to), '★ 核准通知也要寄給按下核准的那位管理者');
+  assert.ok(/核准人:測試管理者/.test(ap[0].body), '★ 信裡要寫核准人是誰');
+  assert.ok(/10231 \/ ming@x\.com/.test(ap[0].body), '信裡要帶得到借用人的聯絡方式');
+
+  // 申請人自己就是核准人時,同一個信箱不可以寄兩次
+  const C4 = mk({ event: '管理者自己申請' }, A);
+  G.mails.length = 0;
+  ok('approve', { id: C4.id }, A);
+  assert.strictEqual(G.mails.filter(m => /借用已核准/.test(m.subject))[0].to, 'admin@x.com',
+    '★ 申請人就是核准人時,同一個信箱不可以出現兩次');
+}
+
 /* ===== 跨廠區歸還:總數不變,兩邊各加減 =====
  * 盤點只看兩件事:總數對不對、各區加起來對不對。
  * 「新竹借出、還到林口」是唯一會讓庫存在廠區之間移動的路徑,

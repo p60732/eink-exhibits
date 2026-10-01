@@ -94,6 +94,23 @@ function lookupModal(code) {
   $('#lkcam', m).onclick = () => openScanner(c => { go(c); return false; });
   if (code) go(code);
 }
+/**
+ * 帳號沒有 Email 就請本人補一次。
+ * 帳號多半是管理者匯入的,Email 欄常常空著 —— 而空的 Email = 核准通知寄不到,
+ * 偏偏當事人不會知道,他只會覺得「我申請了都沒下文」。所以在這裡擋一次,填完就不再問。
+ */
+function emailModal() {
+  const m = openModal(`<h2>請先補一下你的 Email</h2>
+    <div class="banner warn" style="font-size:13px">你的帳號還沒有 Email。借用核准、逾期提醒這些通知都是寄 Email 的,沒有就收不到。填一次就好。</div>
+    <label class="f"><span>Email</span><input type="email" id="myml" placeholder="請填公司信箱"></label>
+    <div class="modal-f"><button class="btn" id="mlout">登出</button><button class="btn pri" id="mlgo">儲存</button></div>`, { locked: true });
+  $('#mlout', m).onclick = () => { closeModal(); logout(); };
+  $('#mlgo', m).onclick = () => {
+    run(() => api('setMyEmail', { email: $('#myml', m).value.trim() }), 'Email 已存好').then(u => {
+      S.user = u; store.set('user', u); closeModal(); enterApp();
+    }).catch(() => { });
+  };
+}
 function pinModal(forced) {
   const m = openModal(`<h2>${forced ? '首次登入請變更 PIN' : '變更 PIN'}</h2>${forced ? '<div class="banner warn" style="font-size:13px">這組 PIN 是別人幫你設定的,請改成只有你知道的 PIN 才能繼續使用。</div>' : ''}
     <label class="f"><span>目前 PIN</span><input type="password" id="op"></label><label class="f"><span>新 PIN(4–12 碼)</span><input type="password" id="np"></label><label class="f"><span>再輸入一次新 PIN</span><input type="password" id="np2"></label>

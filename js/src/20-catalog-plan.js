@@ -169,14 +169,13 @@ VIEWS.plan = async main => {
       <div class="row" style="margin-top:10px"><button class="btn sm" data-act="go" data-v="catalog">${ICON.plus}繼續加展品</button><button class="btn sm ghost" data-act="clear-cart">清空</button><span class="spacer"></span><button class="btn sm" data-act="copy-plan">複製清單</button></div>
     </div>
     <form class="card" id="pform">
-      <label class="f"><span>活動 / 展覽名稱 <b>*</b></span><input type="text" name="event" required value="${esc(draft.event || '')}"></label>
-      <div class="grid2"><label class="f"><span>地點</span><input type="text" name="venue" value="${esc(draft.venue || '')}"></label><label class="f"><span>聯絡方式</span><input type="text" name="contact" value="${esc(draft.contact || '')}" placeholder="分機 / Email"></label></div>
-      <label class="f"><span>用途</span><input type="text" name="purpose" value="${esc(draft.purpose || '')}"></label>
-      <label class="f"><span>備註</span><textarea name="note" rows="2">${esc(draft.note || '')}</textarea></label>
+      <label class="f"><span>借用目的 <b>*</b></span><input type="text" name="event" required value="${esc(draft.event || '')}" placeholder="例:客戶參訪展示、春季展覽佈展"></label>
+      <div class="grid2"><label class="f"><span>地點</span><input type="text" name="venue" value="${esc(draft.venue || '')}"></label><label class="f"><span>備註</span><input type="text" name="note" value="${esc(draft.note || '')}"></label></div>
+      <div class="meta" style="margin:-4px 0 10px">聯絡方式自動帶:<b>${esc([S.user.empNo, S.user.email].filter(Boolean).join(' / '))}</b>(來自你的帳號,不用填)</div>
       ${admin ? `<div class="card" style="background:var(--surface-2);box-shadow:none;margin-bottom:12px">
         <label class="chk"><input type="checkbox" name="onBehalf" id="ob">代為登記(口頭借用 / 臨時借出)</label>
         <div id="obf" class="hidden" style="margin-top:10px"><div class="grid2"><label class="f"><span>借用人工號或姓名 <b>*</b></span><input type="text" name="applicant" list="ulist"></label><label class="f"><span>部門</span><input type="text" name="dept"></label></div>
-        <div class="meta">代為登記會直接成為「已核准」,可立即到借用單點交。</div>
+        <div class="meta">代為登記會直接成為「已核准」,可立即到借用單點交。<b>借用人要對得到真實帳號</b>(從上面的清單選),通知才寄得到他。</div>
         <label class="chk" style="margin-top:8px"><input type="checkbox" name="force">數量不足仍建立</label></div>
         <datalist id="ulist"></datalist></div>` : ''}
       <button class="btn pri" style="width:100%" id="psubmit">${ed ? '儲存修改' : '送出借用申請'}</button>
@@ -216,7 +215,7 @@ VIEWS.plan = async main => {
   S._recheck = recheck;
   const dch = () => { P.start = $('#ps').value; P.end = $('#pe').value; if (P.start && !P.end) { P.end = P.start; $('#pe').value = P.start; } saveCart(); recheck(); };
   $('#ps').onchange = dch; $('#pe').onchange = dch;
-  $('#pform').oninput = () => { const fd = Object.fromEntries(new FormData($('#pform'))); store.set(uk('draft'), { event: fd.event, venue: fd.venue, contact: fd.contact, purpose: fd.purpose, note: fd.note }); drawLines(); };
+  $('#pform').oninput = () => { const fd = Object.fromEntries(new FormData($('#pform'))); store.set(uk('draft'), { event: fd.event, venue: fd.venue, note: fd.note }); drawLines(); };
   // 先用在庫數把清單畫出來,不要讓它空在那裡等後端 —— 可借量回來再補上去就好
   drawLines();
   preCheck.then(pre => {
@@ -236,9 +235,9 @@ VIEWS.plan = async main => {
     const payload = { ...fd, start: P.start, end: P.end, lines: S.cart, onBehalf: !!fd.onBehalf, force: !!fd.force };
     if (payload.onBehalf && !String(fd.applicant || '').trim()) return toast('請填寫借用人', true);
     if (ed) {
-      const { event, venue, purpose, contact, note } = fd;
+      const { event, venue, note } = fd;
       const upd = await run(() => api('updateLoan',
-        { id: ed.id, event, venue, purpose, contact, note, start: P.start, end: P.end, lines: S.cart, force: !!fd.force }),
+        { id: ed.id, event, venue, note, start: P.start, end: P.end, lines: S.cart, force: !!fd.force }),
         '已儲存修改').catch(() => null);
       if (!upd) return;
       S.editing = null; S.cart = []; store.del(uk('draft')); saveCart();
