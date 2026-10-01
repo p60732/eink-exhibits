@@ -914,6 +914,19 @@ var Logic = (function () {
          */
         if (!who) throw E('找不到「' + s(c.p.applicant) + '」的帳號。代為登記要對得到真實帳號,請先在「使用者」建立(或用匯入),再回來登記。');
       }
+      /**
+       * 沒有 Email 的單子不收。
+       * 登入時已經有一道擋板會請本人補,但那是前端的;瀏覽器停在舊版、
+       * 或管理者代別人登記時都繞得過去,而繞過去的代價是「核准了卻沒人收到通知」——
+       * 當事人只會覺得「我申請了都沒下文」,管理者也不會知道信沒寄出去。
+       * 所以這裡再擋一次:要送單,Email 一定要先有。
+       */
+      var applyUser = onBehalf ? who : c.user;
+      if (!s(applyUser.email)) {
+        throw E(onBehalf
+          ? '「' + s(applyUser.name) + '」的帳號還沒有 Email,核准通知寄不到他手上。請先到「使用者」幫他補上,再回來登記。'
+          : '你的帳號還沒有 Email,核准通知會寄不到你手上。請重新整理頁面,系統會請你補一次。');
+      }
       var L = {
         id: nextId(c.db.Loans, 'L' + today.slice(2, 4) + today.slice(5, 7) + '-', 3),
         applicant: onBehalf ? (who ? who.name : s(c.p.applicant)) : c.user.name,

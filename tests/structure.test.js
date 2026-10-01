@@ -295,5 +295,7 @@ t('沒有 Email 就收不到任何通知:代填要對到帳號、登入要補 Em
     'setMyEmail 要掛在「登入後才能用」的路由上');
   assert.ok(/if \(!S\.user\.email\) \{[^}]*emailModal\(\)/.test(ui), '★ 登入後帳號沒有 Email 就要跳出補填');
   assert.ok(/openModal\(`<h2>請先補一下你的 Email/.test(ui) && /locked: true/.test(ui), '補 Email 的視窗要擋住畫面,不能略過');
+  // 前端那道擋板擋不住舊瀏覽器,也擋不住代為登記 —— 後端要再擋一次
+  assert.ok(/if \(!s\(applyUser\.email\)\)/.test(g), '★ 後端也要擋:帳號沒有 Email 就不收單');
 });
 console.log('✔ 結構檢查 ' + n + ' 項通過');

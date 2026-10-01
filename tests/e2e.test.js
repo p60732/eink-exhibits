@@ -11,7 +11,7 @@ assert.strictEqual(ok('status').hasUsers, false);
 bad('setup', { name: '測試管理者', empNo: '90001' }, null, /PIN/);
 const A = ok('setup', { name: '測試管理者', empNo: '90001', pin: '1234', email: 'admin@x.com' }).token;
 bad('setup', { name: 'x', empNo: '1', pin: '1234' }, null, /已初始化/);
-const imp = ok('importUsers', { rows: [{ empNo: '10231', name: '測試員工A', email: 'ming@x.com' }, { empNo: '10477', name: '測試員工B' }, { empNo: '90001', name: '測試管理者', active: '離職' }] }, A);
+const imp = ok('importUsers', { rows: [{ empNo: '10231', name: '測試員工A', email: 'ming@x.com' }, { empNo: '10477', name: '測試員工B', email: 'bee@x.com' }, { empNo: '90001', name: '測試管理者', active: '離職' }] }, A);
 assert.deepStrictEqual([imp.created, imp.updated], [2, 1]);
 assert.strictEqual(ok('login', { emp: '90001' }).needPin, true);
 bad('login', { emp: '90001', pin: '0000' }, null, /不正確/);
@@ -896,8 +896,7 @@ const itemCountBefore = ok('items', {}, A).length;
   // 聯絡方式從帳號帶,前端送什麼都不算數
   const C1 = mk({ event: '自動帶入測試', contact: '亂填的分機 9999' }, UA);
   assert.strictEqual(C1.contact, '10231 / ming@x.com', '★ 聯絡方式要從帳號帶(工號 / Email),不可以吃前端送的值');
-  // 帳號沒填 Email 的人,至少要留得下工號
-  assert.strictEqual(mk({ event: '沒有信箱的人' }, UB).contact, '10477', '帳號沒有 Email 時,聯絡方式至少要有工號');
+  assert.strictEqual(mk({ event: '另一個人也帶得到' }, UB).contact, '10477 / bee@x.com', '每個人帶自己帳號裡的');
   // 代為登記:帶的是「被登記的那個人」,不是管理者自己
   assert.strictEqual(mk({ event: '代登記測試', onBehalf: true, applicant: '10231' }, A).contact,
     '10231 / ming@x.com', '★ 代為登記要帶被登記者的聯絡方式,不是管理者自己的');
@@ -913,6 +912,14 @@ const itemCountBefore = ok('items', {}, A).length;
   assert.strictEqual(noMail.created, 1);
   const UC = ok('login', { emp: '20001' }).token;
   assert.strictEqual(ok('me', {}, UC).email, '', '匯入時沒帶 Email,帳號就是空的');
+
+  // 沒有 Email 的單子一律不收 —— 登入時那道擋板是前端的,舊瀏覽器與代為登記都繞得過去,
+  // 繞過去的代價是「核准了卻沒人收到通知」,當事人只會覺得申請完沒下文
+  bad('createLoan', { event: '沒信箱也想借', start: '2026-10-01', end: '2026-10-05', lines: cln }, UC,
+    /你的帳號還沒有 Email/);
+  bad('createLoan', { event: '代沒信箱的人登記', start: '2026-10-01', end: '2026-10-05', lines: cln,
+    onBehalf: true, applicant: '20001' }, A, /「沒信箱的人」的帳號還沒有 Email/);
+  assert.ok(!ok('loans', { filter: 'all' }, A).some(x => /沒信箱/.test(x.event)), '★ 擋下來之後不可以留下半張單');
   bad('setMyEmail', { email: '不是信箱' }, UC, /正確的 Email/);
   bad('setMyEmail', { email: 'a@b' }, UC, /正確的 Email/);
   assert.strictEqual(ok('setMyEmail', { email: 'new@x.com' }, UC).email, 'new@x.com', '★ 自己補得了 Email');
