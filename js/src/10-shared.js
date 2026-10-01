@@ -15,23 +15,8 @@ const PRINT_BAR = '<div class="pbar"><button class="go" onclick="window.print()"
   + '<span class="tip">印完按「關閉」就會回到展品管理系統。這一條不會被印出來。</span></div>';
 function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
 function statusPill(L) {
-  return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.stage ? ` <span class="pill pending">${esc(L.stage)}</span>` : '') + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
+  return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
 }
-/** 待確認請求的說明列。
-    v3.0 之後同仁端不再送出任何請求,這一段只剩「舊資料收尾」會用到 */
-function reqBanner(req, mine) {
-  if (!req || !req.type) return '';
-  const T = { pickup: '簽收領取', 'return': '歸還', extend: '延長歸還日', transfer: '轉借' };
-  let what = T[req.type] || '請求';
-  if (req.type === 'pickup') { const u = Object.values(req.units || {}).flat().join('、'); what += u ? ':' + u : ''; }
-  if (req.type === 'extend') what += ':延到 ' + req.end;
-  if (req.type === 'transfer') what += ':轉給 ' + (req.toName || '');
-  const body = mine
-    ? '已送出' + what + '(' + req.at + '),等管理者確認後才算完成。'
-    : req.by + ' 於 ' + req.at + ' 送出' + what + ',等待確認';
-  return '<div class="banner warn" style="margin:10px 0 0;font-size:13px">' + esc(body) + '</div>';
-}
-
 function loanCard(L, opts = {}) {
   const chk = {}; (L.check || []).forEach(c => { chk[c.itemId + '@' + nloc(c.location)] = c; });
   const lines = L.lines.map(ln => {
@@ -48,25 +33,17 @@ function loanCard(L, opts = {}) {
   }).join('');
   const A = [];
   const admin = isAdmin() && !opts.mine;
-  const req = L.request;
   const btn = (act, label, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" data-id="${L.id}">${label}</button>`;
-  if (admin && req) {
-    if (req.type === 'pickup') A.push(btn('checkout', '確認領取', 'pri'));
-    else if (req.type === 'return') A.push(btn('receive', '確認歸還', 'pri'));
-    else A.push(btn('req-no', '不同意', 'danger'), btn('req-ok', req.type === 'extend' ? '同意延期' : '同意轉借', 'pri'));
-  }
   if (admin && L.status === 'pending') A.push(`<button class="btn sm danger" data-act="reject" data-id="${L.id}">駁回</button>`, `<button class="btn sm pri" data-act="approve" data-id="${L.id}">核准</button>`);
-  if (admin && L.status === 'approved' && !req) A.push(`<button class="btn sm danger" data-act="reject" data-id="${L.id}">取消核准</button>`, `<button class="btn sm pri" data-act="checkout" data-id="${L.id}">點交出借</button>`);
-  if (admin && L.status === 'out' && !req) A.push(btn('receive', '登記歸還', 'pri'));
-  if (admin && (L.status === 'approved' || L.status === 'out') && !req) A.push(btn('extend', '延期'));
+  // 出借中的單:按錯了可以「取消核准」把東西收回來(只在還沒登記過歸還時,後端會擋)
+  if (admin && L.status === 'out') A.push(`<button class="btn sm danger" data-act="reject" data-id="${L.id}">取消核准</button>`,
+    btn('extend', '延期'), btn('receive', '登記歸還', 'pri'));
   if (!['pending', 'rejected', 'cancelled'].includes(L.status)) A.push(btn('print-loan', '列印', 'ghost'));
   if (opts.mine) {
-    if (L.status === 'pending' && !req) A.push(btn('edit-loan', '修改申請'));
-    if ((L.status === 'pending' || L.status === 'approved') && !req) A.push(btn('cancel', '取消申請', 'danger'));
-    /* v3.0(2026-10-01):同仁端只剩「申請」這一步。
-       簽收領取 / 申請歸還 / 申請延期 / 轉借 / 撤回 / 當面確認六個入口全部拿掉 ——
-       核准就等於東西交出去了,之後一律由管理者登記歸還,同仁收 Email 就好。
-       要延期就跟管理者說,管理者直接改。 */
+    /* v3.0(2026-10-01):同仁端只剩「申請」這一步 —— 待審核時可以改或取消,之後什麼都不用做。
+       簽收領取 / 申請歸還 / 申請延期 / 轉借 / 撤回 / 當面確認六個入口全部拿掉了,
+       核准就等於東西交出去,之後一律由管理者登記歸還,同仁收 Email 就好。 */
+    if (L.status === 'pending') A.push(btn('edit-loan', '修改申請'), btn('cancel', '取消申請', 'danger'));
   }
   const who = admin ? `<span>借用人 <b>${esc(L.applicant)}</b>${L.dept ? '・' + esc(L.dept) : ''}</span>${L.contact ? `<span>聯絡 ${esc(L.contact)}</span>` : ''}` : '';
   const notes = [L.purpose && '用途:' + L.purpose, L.reviewNote && '審核:' + L.reviewNote + (L.reviewer ? '(' + L.reviewer + ')' : ''), L.note && '備註:' + L.note].filter(Boolean);
@@ -81,12 +58,11 @@ function loanCard(L, opts = {}) {
       <button class="foldbtn" data-act="loan-fold" data-id="${L.id}" aria-expanded="${open}"
         aria-label="${open ? '收合' : '展開'}這張單的細項" title="${open ? '收合細項' : '展開細項'}">${open ? '−' : '+'}</button></div>
     <div class="loan-body">
-      <div class="loan-meta">${who}<span>期間 <b>${esc(L.start)} → ${esc(L.end)}</b></span>${L.venue ? `<span>地點 ${esc(L.venue)}</span>` : ''}${L.outAt ? `<span>點交 ${esc(L.outAt)}</span>` : ''}${L.returnedAt ? `<span>歸還 ${esc(L.returnedAt)}</span>` : ''}</div>
+      <div class="loan-meta">${who}<span>期間 <b>${esc(L.start)} → ${esc(L.end)}</b></span>${L.venue ? `<span>地點 ${esc(L.venue)}</span>` : ''}${L.outAt ? `<span>出借 ${esc(L.outAt)}</span>` : ''}${L.returnedAt ? `<span>歸還 ${esc(L.returnedAt)}</span>` : ''}</div>
       <div class="lines">${lines}</div>
       ${notes.length ? `<div class="note">${notes.map(esc).join('<br>')}</div>` : ''}
-      ${opts.mine || isAdmin() ? reqBanner(req, !!opts.mine) : ''}
     </div>
-    <!-- 操作按鈕**不收**:收起來的時候還是要能直接核准 / 點交 / 歸還,
+    <!-- 操作按鈕**不收**:收起來的時候還是要能直接核准 / 登記歸還,
          不然審 20 張待審核要先點開 20 次(2026-10-01 使用者決定) -->
     ${A.length ? `<div class="actions">${A.join('')}</div>` : ''}
   </div>`;

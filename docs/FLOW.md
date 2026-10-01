@@ -29,7 +29,7 @@
 | 分頁 | 誰看得到 | 用途 |
 |---|---|---|
 | **總覽 dash** | admin | 「展品品項 / 總件數 / 倉庫在庫」三塊磚點得開,展開各廠區的數字(合計必須等於磚塊上的數字);最上方「今天要做的事」把逾期、待審核、今日到期、已停用的人手上還沒還的單收成一張清單,每列一鍵跳過去;下方 KPI 磚與各狀態清單 |
-| **借用單 loans** | admin | 依狀態篩選,核准(= 直接出借)/ 駁回 / 登記歸還 / 延期 / 列印;待審核可勾選批次核准 |
+| **借用單 loans** | admin | 五個分頁(待審核 / 出借中 / 逾期 / 已歸還 / 全部):核准(= 直接出借)/ 駁回 / 取消核准 / 登記歸還 / 延期 / 列印;待審核可勾選批次核准 |
 | **展品目錄 catalog** | 全部 | **地點籤條 + 分類籤條**兩排(**釘在標題列底下**,捲到哪裡都換得了分類);依日期區間查「這段期間可借幾個」。可逐項加入規劃,也可以多選後按「一起填單」。搜尋框右邊那顆下載圖示是「匯出庫存 CSV」 |
 | **借用申請 plan** | 全部 | 購物車 → 填活動資訊 → 送出申請(送出前即時檢查衝突) |
 > ⚠️ 「借用申請」(全部人,舊名「展覽規劃」)跟「展覽檔期」(管理者)是兩件事:
@@ -72,8 +72,10 @@
 > **v3.0(2026-10-01)之前**還有一個 `approved` 已核准狀態與一個 `request` 欄
 > (pickup 簽收 / return 歸還 / extend 延期 / transfer 轉借),同仁要自己申請點交與歸還。
 > 那一整層拿掉了 —— **核准就等於把東西交出去**。
-> `checkout` 與 `decideRequest` 兩條路由刻意留著,只給線上還卡在舊狀態的單收尾用;
-> 新流程不會再產生那種單。完整的決定過程見專案文件「借用流程精簡規格」。
+> `checkout` / `decideRequest` / `pickupOptions` 一度為了舊資料留著,
+> 2026-10-01 查過線上一張卡著的單都沒有,所以連同「待確認」「待點交」兩個分頁一起砍乾淨。
+> 借用單的 `request` **欄位還在工作表上**(不動結構、舊值原樣保存),但不再出現在 API 回應裡。
+> 完整的決定過程見專案文件「借用流程精簡規格」。
 
 ⚠️ **任何在借中的單都從今天起佔住庫存** —— `loanWindow` 對 `out` 算的是
 `[min(start, today), end]`。核准即出借之後這一點變得很明顯:
@@ -217,7 +219,7 @@ user → 帳號、使用者、人員、PIN
 | (照片) | 不進試算表 —— 存在雲端硬碟「展品照片」資料夾,展品表只存連結 |
 | **展品 Items** | id, name, category, mode(unit/qty), qty, location, spec, image, archived, countedAt |
 | **單台編號 Units** | id(E0001), itemId, serial, status(in/out/repair/lost), location, countedAt |
-| **借用單 Loans** | id, applicant, dept, event, venue, purpose, start, end, status, lines(JSON,含 returned / damaged / lost / units), request(JSON,**只剩舊資料會有**), reviewer, outAt, returnedAt |
+| **借用單 Loans** | id, applicant, dept, event, venue, purpose, start, end, status, lines(JSON,含 returned / damaged / lost / units), request(**已停用的欄位**,欄留著、不再讀寫), reviewer, outAt, returnedAt |
 | **使用者 Users** | id, empNo, name, dept, email, role, pinHash, mustChange, sessionVer, active(`dept` 欄留著給舊資料,v2.8.3 起表單不再收)|
 | **操作紀錄 Logs** | ts, user, action, ref, detail(before → after) |
 
@@ -259,7 +261,7 @@ user → 帳號、使用者、人員、PIN
 
 | 刀法 | 做法 |
 |---|---|
-| **④ 進行中的分頁共用一次請求** | 待確認 / 待審核 / 待點交 / 出借中 / 逾期 五個分頁都是同一批「進行中」資料的子集合(v3.0 之後前兩個分頁只會有舊資料),所以只向後端要一次,分頁在前端切 —— 點分頁**不再等後端**。只有「已歸還」與「全部」才會另外去拿歷史單。 |
+| **④ 進行中的分頁共用一次請求** | 待審核 / 出借中 / 逾期 三個分頁都是同一批「進行中」資料的子集合,所以只向後端要一次,分頁在前端切 —— 點分頁**不再等後端**。只有「已歸還」與「全部」才會另外去拿歷史單。 |
 | **⑤ 路由依參數決定讀多少** | `tables` 可以是函式:看 `filter` 是進行中還是歷史,決定要不要翻出已結案的舊單。 |
 
 加上前後端兩層快取:

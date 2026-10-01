@@ -32,10 +32,8 @@ function routes_() {
   // 欄位組合:讀取類動作只讀真正用到的欄位(Sheets 讀取成本與儲存格數量成正比)
   var C = {
     LOAN_CALC: ['id', 'status', 'start', 'end', 'lines'],                                  // 只做可借量 / 在庫計算
-    LOAN_MINE: ['id', 'status', 'start', 'end', 'lines', 'applicantId'],                   // 加上「是不是我的單」
     LOAN_HOLD: ['id', 'status', 'start', 'end', 'lines', 'applicant', 'dept', 'event'],    // 加上「這台在誰手上」
     UNIT_CALC: ['id', 'itemId', 'status', 'location', 'countedAt'],                        // 地點要算各廠區的庫存;countedAt 供「該地點最後盤點日」
-    UNIT_PICK: ['id', 'itemId', 'status', 'serial', 'location', 'countedAt'],
     ITEM_CALC: ['id', 'name', 'category', 'mode', 'qty', 'location', 'stock', 'archived'],
     ITEM_CAT: ['id', 'name', 'category', 'archived'],
     USER_AUTH: ['id', 'name', 'dept', 'empNo', 'role', 'active', 'sessionVer', 'mustChange'],  // 不讀 pinHash / email
@@ -72,8 +70,6 @@ function routes_() {
     { Items: '*', Units: C.UNIT_CALC, Loans: { cols: C.LOAN_CALC.concat(['showId']), only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
   add('user', false, U, { myLoans: [] },
     { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Loans: '*', Shows: SHOWS_, Users: C.USER_AUTH });
-  add('user', false, U, { pickupOptions: ['id'] },
-    { Items: C.ITEM_CALC, Units: C.UNIT_PICK, Loans: C.LOAN_MINE, Users: C.USER_AUTH });
   add('user', false, U, { cats: [] }, { Cats: '*', Items: C.ITEM_CAT, Users: C.USER_AUTH });
   // 缺口是誰佔住的:要看得到借用單的人與活動,所以不能只讀 LOAN_CALC
   add('user', false, U, { holders: ['itemId', 'location', 'from', 'to', 'excludeId', 'excludeShowId'] },
@@ -119,11 +115,11 @@ function routes_() {
   add('admin', false, A, { archivePreview: ['includePlain'] },
     { Loans: { cols: ['id', 'status', 'showId', 'start', 'end', 'event'], only: null }, Shows: C.SHOW_CALC, Users: C.USER_AUTH });
   add('admin', true, A, {
-    approve: ['id', 'note', 'force'], reject: ['id', 'note'], checkout: ['id', 'units', 'note'], receive: ['id', 'lines', 'note'],
+    approve: ['id', 'note', 'force'], reject: ['id', 'note'], receive: ['id', 'lines', 'note'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
     stocktake: ['location', 'qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
     saveCat: ['cat'], moveCat: ['id', 'dir'],
-    approveMany: ['ids', 'note', 'force'], decideRequest: ['id', 'ok', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force'],
+    approveMany: ['ids', 'note', 'force'], extendLoan: ['id', 'end', 'note', 'force'],
     extendMany: ['ids', 'end', 'note', 'force'],
     saveShow: ['show'], setShowStatus: ['id', 'status', 'force'], deleteShow: ['id'],
     createLoansFromShow: ['id', 'locations', 'force'], returnMany: ['id', 'ids', 'note']

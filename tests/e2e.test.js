@@ -540,7 +540,6 @@ assert.deepStrictEqual([rm1.ok, rm1.fail.length], [1, 0], '批次歸還應該成
 // 2026-10-01 起批次歸還是**直接登記歸還**,不再掛「待確認」的請求
 const rmLoan = ok('loans', { filter: 'all' }, A).find(x => x.id === SSL);
 assert.strictEqual(rmLoan.status, 'returned', '★ 批次歸還要直接結案,不是掛請求等人確認');
-assert.strictEqual(rmLoan.request, null, '不應該留下任何待確認請求');
 // 已經結案的單再按一次要被擋(而不是重複扣)
 const rm2 = ok('returnMany', { id: SS.id, ids: [SSL] }, A);
 assert.deepStrictEqual([rm2.ok, rm2.fail.length], [0, 1]);
@@ -912,46 +911,24 @@ const itemCountBefore = ok('items', {}, A).length;
   assert.strictEqual(ok('items', {}, A).find(i => i.id === DM.id).total, 10, '★ 損壞不影響總數,東西還在');
 }
 
-/* ===== 流程精簡 C+D:舊資料收尾(2026-10-01) =====
-   新流程不會再產生「已核准」的單,也不會再產生 L.request。
-   但線上可能還卡著舊格式的單,所以 checkout / decideRequest 這兩條留著,
-   而且必須照舊守得住 —— 這一段就是在測那些「只給舊資料用」的路。      */
+/* ===== 流程精簡 C+D:舊流程的痕跡要真的消失(2026-10-01) =====
+   線上資料查過沒有任何卡在「已核准」或掛著 request 的舊單,所以那一整層連同
+   checkout / decideRequest / pickupOptions 三條路由一起砍掉了。
+   這裡守的是「真的砍乾淨」—— 留著一條叫得動的路,就等於流程還是兩套。 */
+['checkout', 'decideRequest', 'pickupOptions', 'requestPickup', 'requestReturn',
+  'requestExtend', 'requestTransfer', 'cancelRequest', 'confirmOnSite'].forEach(function (act) {
+  bad(act, { id: 'L0001' }, A, /未知的操作/);
+  bad(act, { id: 'L0001' }, U, /未知的操作/);
+});
+// 借用單也不會再帶出 request / stage 這兩個欄位
 {
-  const LGC = ok('saveItem', { item: { name: '舊資料收尾機', mode: 'unit', category: 'Signage', location: '新竹' } }, A);
-  ok('addUnits', { itemId: LGC.id, count: 1, location: '新竹' }, A);
-  ok('addUnits', { itemId: LGC.id, count: 1, location: '林口' }, A);
-  const gun = ok('units', { itemId: LGC.id }, A);
-  const hc = gun.find(u => u.location === '新竹').id, lk = gun.find(u => u.location === '林口').id;
-  const findG = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id);
-  // 把一張待審核的單手動改成舊格式(已核准 + 掛一個簽收請求),模擬線上殘留的資料
-  const legacy = (id, req) => {
-    const db = G.ctx.Memory.load();                 // 完整載入才寫得回去
-    const row = db.Loans.find(x => x.id === id);
-    row.status = 'approved'; row.units = ''; row.request = req || null;
-    (row.lines || []).forEach(ln => { ln.units = []; });
-    db._dirty.Loans = true; G.ctx.Memory.save(db);
-  };
-  const UG = ok('login', { emp: '10231', pin: '1234' }).token;   // 前面停用過一次,token 要重拿
-  const mk = ev => ok('createLoan', { event: ev, start: '2026-10-01', end: '2026-10-05',
-    lines: [{ itemId: LGC.id, location: '新竹', qty: 1 }] }, UG).id;
-
-  // ① 舊的「已核准」單還是要點交得出去,而且照舊不准拿別廠的機器交差
-  const G1 = mk('舊資料點交');
-  legacy(G1, { type: 'pickup', units: {} });
-  bad('checkout', { id: G1, units: { [LGC.id + '@新竹']: [lk] } }, A, /放在 林口/);
-  ok('checkout', { id: G1, units: { [LGC.id + '@新竹']: [hc] } }, A);
-  assert.strictEqual(findG(G1).status, 'out', '★ 舊的已核准單要推得到出借中');
-  ok('receive', { id: G1, lines: [{ itemId: LGC.id, location: '新竹', to: '新竹',
-    unitResults: [{ id: hc, result: 'in' }] }] }, A);
-
-  // ② 舊的待確認延期請求:駁回時必須清掉,不然已駁回的單還能被延期
-  const G2 = mk('舊資料駁回');
-  legacy(G2, { type: 'extend', end: '2026-12-31' });
-  assert.ok(findG(G2).request, '前置條件:這張單身上要掛著舊的延期請求');
-  ok('reject', { id: G2, note: '舊資料清掉' }, A);
-  assert.strictEqual(findG(G2).status, 'rejected');
-  assert.strictEqual(findG(G2).request, null, '★ 駁回要把舊的待確認請求清掉');
-  bad('decideRequest', { id: G2, ok: true }, A, /沒有待處理的延期或轉借申請/);
+  const anyLoan = ok('loans', { filter: 'all' }, A)[0];
+  assert.ok(anyLoan, '前置條件:這時候應該已經有借用單了');
+  assert.ok(!('request' in anyLoan), '★ 借用單不該再帶出 request 欄位');
+  assert.ok(!('stage' in anyLoan), '★ 借用單不該再帶出 stage 欄位');
+  const d0 = ok('dashboard', {}, A);
+  assert.ok(!('requests' in d0), '★ 總覽不該再算「待確認」');
+  assert.ok(!('pickups' in d0), '★ 總覽不該再算「待點交」');
 }
 
 /* ===== 人員管理:部門不再收;沒帶到的欄位不可以被清掉(2026-10-01) ===== */

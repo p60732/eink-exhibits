@@ -54,27 +54,6 @@ function extendModal(id) {
   };
 }
 
-/** 管理者處理延期 / 轉借申請 */
-function decideModal(id, agree) {
-  const L = findLoan(id), req = L && L.request;
-  if (!req) return toast('請重新整理這一頁', true);
-  const what = req.type === 'extend' ? '延期' : '轉借';
-  const detail = req.type === 'extend'
-    ? '把歸還日從 ' + L.end + ' 延到 ' + req.end
-    : '把借用人從 ' + L.applicant + ' 換成 ' + (req.toName || '');
-  const m = openModal(`<h2>${agree ? '同意' : '不同意'}${what} ${esc(id)}</h2>
-    <p class="sub">${esc(L.event)}・${esc(req.by)} 申請${esc(detail)}${req.note ? '(' + esc(req.note) + ')' : ''}</p>
-    <label class="f"><span>${agree ? '備註' : '原因'}${agree ? '' : ' <b>*</b>'}</span><input type="text" id="dn"></label>
-    ${agree && req.type === 'extend' ? '<label class="chk"><input type="checkbox" id="df">數量不足仍延期</label>' : ''}
-    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn ${agree ? 'pri' : 'danger'}" id="dgo">${agree ? '確定' : '不同意'}</button></div>`);
-  $('#dgo', m).onclick = () => {
-    const note = $('#dn', m).value;
-    if (!agree && !note.trim()) return toast('請填寫原因', true);
-    run(() => api('decideRequest', { id, ok: agree, note, force: $('#df', m) && $('#df', m).checked }), agree ? '已處理' : '已回覆')
-      .then(() => { closeModal(); render(); }).catch(() => { });
-  };
-}
-
 /** 把借用單印成一張可簽名的單據 */
 function printLoan(id) {
   const L = findLoan(id);
@@ -118,52 +97,6 @@ function rejectModal(id) {
     <div class="modal-f"><button class="btn" data-act="close">返回</button><button class="btn pri" id="rgo" style="background:var(--bad);border-color:var(--bad);color:#fff">確認駁回</button></div>`);
   $('#rgo', m).onclick = () => run(() => api('reject', { id, note: $('#rn', m).value }), '已駁回').then(() => { closeModal(); render(); }).catch(() => { });
 }
-async function checkoutModal(id) {
-  const L = await getLoan(id);
-  const unitLines = L.lines.filter(l => l.mode === 'unit');
-  const pools = {}, byItem = {};
-  await Promise.all([...new Set(unitLines.map(l => l.itemId))].map(async iid => { byItem[iid] = (await api('units', { itemId: iid })).filter(u => u.status === 'in'); }));
-  unitLines.forEach(l => { pools[lkey(l)] = (byItem[l.itemId] || []).filter(u => nloc(u.location) === nloc(l.location)); });
-  const pick = {}; unitLines.forEach(l => pick[lkey(l)] = []);
-  const m = openModal(`<h2>${L.request ? '確認領取' : '點交出借'} ${esc(L.id)}</h2>${L.request ? `<div class="banner warn" style="font-size:13px">${esc(L.request.by)} 已送出簽收,以下為他選的編號,核對實物後確認。</div>` : ''}<p><b>${esc(L.event)}</b>・借用人 ${esc(L.applicant)}・應還 ${esc(L.end)}</p>
-    ${unitLines.length ? `<div class="row" style="margin-bottom:10px"><input type="text" id="cscan" placeholder="輸入 / 刷編號後 Enter" style="flex:1"><button class="btn" id="ccam">${ICON.scan}掃描</button><button class="btn" id="cauto">自動指派</button></div>` : ''}
-    <div class="lines">${L.lines.map(l => { const k = lkey(l), where = esc(nloc(l.location)); return l.mode === 'unit' ? `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)} <span class="pill">${where}</span></b><span data-pc="${esc(k)}" class="short">已選 0 / ${l.qty}</span></div>
-      <div class="chips">${pools[k].map(u => `<span class="chipk" data-pick="${u.id}" data-it="${esc(k)}">${esc(u.id)}${u.serial ? ' <small>' + esc(u.serial) + '</small>' : ''}</span>`).join('') || '<span class="short">' + where + ' 沒有在庫的單台</span>'}</div></div>`
-      : `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">${where}</span></span><span class="q">× ${l.qty}</span></div>`; }).join('')}</div>
-    <label class="f" style="margin-top:12px"><span>點交備註</span><input type="text" id="cn" placeholder="外觀、配件狀況…"></label>
-    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="cgo">確認出借</button></div>`, { wide: true, noFocus: true });
-  const upd = () => unitLines.forEach(l => { const el = $(`[data-pc="${lkey(l)}"]`, m); const n = pick[lkey(l)].length; el.textContent = `已選 ${n} / ${l.qty}`; el.className = n === +l.qty ? 'okt' : 'short'; });
-  const toggle = (uid, force) => {
-    const el = $(`[data-pick="${uid}"]`, m); if (!el) return false;
-    const it = el.dataset.it, arr = pick[it], has = arr.includes(uid);
-    const line = unitLines.find(l => lkey(l) === it);
-    if (has && force !== true) arr.splice(arr.indexOf(uid), 1);
-    else if (!has) { if (arr.length >= +line.qty) { toast(line.name + ' 已選滿', true); return false; } arr.push(uid); }
-    el.classList.toggle('on', arr.includes(uid)); upd(); return true;
-  };
-  // 使用者已送出簽收 → 用他選的編號;否則自動挑前 N 台
-  const preset = L.request && L.request.type === 'pickup' ? L.request.units || {} : null;
-  const autoPick = () => {
-    unitLines.forEach(l => {
-      pick[lkey(l)].slice().forEach(uid => toggle(uid));                  // 先清掉
-      pools[lkey(l)].slice(0, l.qty).forEach(u => toggle(u.id, true));
-    });
-    toast('已自動指派可用的編號,要換哪一台再自己點');
-  };
-  unitLines.forEach(l => (preset ? (preset[lkey(l)] || preset[l.itemId] || []) : pools[lkey(l)].slice(0, l.qty).map(u => u.id)).forEach(uid => toggle(uid)));
-  if ($('#cauto', m)) $('#cauto', m).onclick = autoPick;
-  $$('[data-pick]', m).forEach(el => el.onclick = () => toggle(el.dataset.pick));
-  const sc = $('#cscan', m);
-  if (sc) {
-    sc.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); const c = sc.value.trim().toUpperCase(); if (!toggle(c, true)) toast('此單沒有可選的 ' + c, true); sc.value = ''; } };
-    $('#ccam', m).onclick = () => {
-      unitLines.forEach(l => { pick[lkey(l)].slice().forEach(u => toggle(u)); });
-      openScanner(code => { if (!toggle(code, true)) toast('不在可選清單:' + code, true); });
-    };
-  }
-  $('#cgo', m).onclick = () => run(() => api('checkout', { id, units: pick, note: $('#cn', m).value }), '已點交出借').then(() => { closeModal(); render(); }).catch(() => { });
-}
-/** 歸還時可以選還到哪個廠區(預設還回原本借出的那一點) */
 function backSelect(l) {
   const here = nloc(l.location);
   const list = [...new Set([here].concat(SITES, allSites()))];
@@ -174,7 +107,7 @@ function backOf(m, key) { const el = $(`[data-back="${key}"]`, m); return el ? e
 async function receiveModal(id) {
   const L = await getLoan(id);
   const open = L.lines.filter(l => l.outstanding > 0);
-  const m = openModal(`<h2>${L.request ? '確認歸還' : '登記歸還'} ${esc(L.id)}</h2>${L.request ? `<div class="banner warn" style="font-size:13px">${esc(L.request.by)} 已送出歸還,以下為他填的狀況,核對實物後可修改再確認。</div>` : ''}<p><b>${esc(L.event)}</b>・${esc(L.applicant)}・應還 ${esc(L.end)} ${L.overdue ? '<span class="pill bad">逾期</span>' : ''}</p>
+  const m = openModal(`<h2>登記歸還 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・${esc(L.applicant)}・應還 ${esc(L.end)} ${L.overdue ? '<span class="pill bad">逾期</span>' : ''}</p>
     <div class="lines">${open.map(l => {
       const k = esc(lkey(l)), back = backSelect(l);
       if (l.mode === 'unit') {
@@ -192,15 +125,6 @@ async function receiveModal(id) {
     <p class="meta">「未還」的項目會保留在借用單上,之後可再登記。</p>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="rgo2">確認</button></div>`, { wide: true, noFocus: true });
   $$('.seg[data-ru] button', m).forEach(b => b.onclick = () => { $$('button', b.parentNode).forEach(x => x.classList.remove('on')); b.classList.add('on'); });
-  if (L.request && L.request.type === 'return') {
-    const rq = {}; (L.request.lines || []).forEach(x => { rq[x.itemId + '@' + nloc(x.location)] = x; if (!(x.itemId in rq)) rq[x.itemId] = x; });
-    $$('.seg[data-ru]', m).forEach(sg => {
-      const x = rq[sg.dataset.it] || rq[String(sg.dataset.it).split('@')[0]], r = x && (x.unitResults || []).find(u => u.id === sg.dataset.ru);
-      const v = r ? r.result : '';
-      $$('button', sg).forEach(b => b.classList.toggle('on', b.dataset.v === v));
-    });
-    open.filter(l => l.mode !== 'unit').forEach(l => { const x = rq[lkey(l)] || rq[l.itemId] || { returned: 0, lost: 0 }; $(`[data-rq="${lkey(l)}"]`, m).value = x.returned || 0; $(`[data-rl="${lkey(l)}"]`, m).value = x.lost || 0; });
-  }
   $('#rgo2', m).onclick = () => {
     const lines = open.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
       ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }

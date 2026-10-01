@@ -1,8 +1,8 @@
 /* ===================== 事件分派 ===================== */
 const ACT = {
-  'go': el => { closeModal(); if (el.dataset.f === 'approved') S.loanFilter = 'approved'; go(el.dataset.v); },
+  'go': el => { closeModal(); go(el.dataset.v); },
   'go-loans': el => { S.loanFilter = el.dataset.f; go('loans'); },
-  'open-loan': el => { S.loanFilter = el.dataset.st; if (/逾期/.test(el.textContent)) S.loanFilter = 'overdue'; if (/待確認/.test(el.textContent)) S.loanFilter = 'request'; S._focusLoan = el.dataset.id; go('loans'); },
+  'open-loan': el => { S.loanFilter = el.dataset.st; if (/逾期/.test(el.textContent)) S.loanFilter = 'overdue'; S._focusLoan = el.dataset.id; go('loans'); },
   'lf': el => { S.loanFilter = el.dataset.f; render(); },
   /**
    * 單張借用單的收合。只動 DOM,不重畫 —— 重畫要再跑一次篩選與排版,
@@ -271,7 +271,7 @@ const ACT = {
   },
   'show-extend': async () => {
     const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });
-    const live = (v.loans || []).filter(L => ['approved', 'out'].includes(L.status));
+    const live = (v.loans || []).filter(L => L.status === 'out');
     if (!live.length) return toast('底下沒有可以延期的借用單(只有已核准 / 出借中的單能延)', true);
     const newEnd = esc(v.to);
     openModal(`<h2>批次延期</h2>
@@ -312,11 +312,8 @@ const ACT = {
   'edit-loan': el => editLoan(el.dataset.id),
   'cancel-edit': () => cancelEdit(),
   'extend': el => extendModal(el.dataset.id),
-  'req-ok': el => decideModal(el.dataset.id, true),
-  'req-no': el => decideModal(el.dataset.id, false),
   'print-loan': el => printLoan(el.dataset.id),
   'reject': el => rejectModal(el.dataset.id),
-  'checkout': el => checkoutModal(el.dataset.id),
   'receive': el => receiveModal(el.dataset.id),
   'cancel': el => { if (confirmInline('確定取消這筆申請?')) run(() => api('cancelLoan', { id: el.dataset.id }), '已取消').then(render).catch(() => { }); },
   'edit-item': el => itemModal(el.dataset.id, el.dataset.cat),

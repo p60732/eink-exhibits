@@ -337,7 +337,7 @@ function showLogin(mode) {
   const setup = mode === 'setup';
   box.innerHTML = `<div class="card">
     <h1><span class="brand"><span class="dot">${ICON.box}</span></span>${esc(CONFIG.APP_NAME)}</h1>
-    <p class="sub">${setup ? '建立第一位管理者' : '輸入工號即可借用、簽收與歸還'}</p>
+    <p class="sub">${setup ? '建立第一位管理者' : '輸入工號即可查詢展品、送出借用申請'}</p>
     ${setup ? '<div class="banner info" style="font-size:13px">系統尚未有任何帳號。這位將成為管理者,之後可在「使用者」頁匯入全公司人員清單。</div>' : ''}
     <form id="login-f" autocomplete="off">
       ${setup ? '<label class="f"><span>姓名 <b>*</b></span><input type="text" name="name" required></label>' : ''}

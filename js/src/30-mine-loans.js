@@ -1,6 +1,6 @@
 VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
   S._loans = list;
-  const act = list.filter(l => ['pending', 'approved', 'out'].includes(l.status)), past = list.filter(l => !act.includes(l));
+  const act = list.filter(l => l.status === 'pending' || l.status === 'out'), past = list.filter(l => !act.includes(l));
   main.innerHTML = `<div class="eyebrow">My Loans</div><h1>我的借用</h1><p class="sub">申請進度、借用中的展品與歸還日。</p>
     ${act.some(l => l.overdue) ? '<div class="banner bad">你有逾期未歸還的展品,請儘速歸還。</div>' : ''}
     <div class="row"><span class="spacer"></span><button class="btn sm ghost" data-act="loan-foldall">全部展開</button></div>
@@ -17,9 +17,7 @@ VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
 function todoList(d) {
   const G = [
     ['逾期未還', d.overdue, 'bad', 'overdue', '催回來'],
-    ['等待確認', d.requests, 'pending', 'request', '去確認'],
     ['待審核', d.pending, 'pending', 'pending', '去審核'],
-    ['今天要點交', d.pickups.filter(l => l.start <= d.today), 'approved', 'approved', '去點交'],
     ['今天到期', d.dueSoon.filter(l => l.end === d.today), 'out', 'out', '去登記歸還'],
     // 離職交接最容易掉東西的地方:帳號停用了,東西還在他手上。停用本身不擋,但這件事要被看見。
     ['已停用還沒還', d.leftBehind || [], 'bad', 'active', '去追回來']
@@ -33,7 +31,7 @@ function todoList(d) {
 }
 
 VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
-  S._loans = [].concat(d.pending, d.overdue, d.dueSoon, d.requests, d.pickups);
+  S._loans = [].concat(d.pending, d.overdue, d.dueSoon);
   const s = d.sum;
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Inventory &amp; Loans</div><h1>展品借用與庫存追蹤</h1><p class="sub">${esc(d.today)}・主管問「還有幾個」,看這裡或匯出庫存表。</p></div><span class="spacer"></span><button class="btn" data-act="export">${ICON.dl}匯出庫存表</button></div>
     <div class="kpis">
@@ -43,7 +41,6 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
       ${kpi(ICON.out, '出借中', s.out)}
       ${kpi(ICON.clock, '待審核', d.pending.length, d.pending.length ? 'warn' : '', 'go-loans', 'pending')}
       ${kpi(ICON.alert, '逾期未還', d.overdue.length, d.overdue.length ? 'bad' : '', 'go-loans', 'overdue')}
-      ${kpi(ICON.check, '待確認簽收/歸還', d.requests.length, d.requests.length ? 'warn' : '', 'go-loans', 'request')}
       ${kpi(ICON.wrench, '維修 / 遺失', s.repair + ' / ' + s.lost)}
     </div>
     <div id="sitebreak"></div>
@@ -51,7 +48,6 @@ VIEWS.dash = main => withData(main, 'dash', 'dashboard', {}, d => {
     <div class="cols" style="margin-top:14px">
       <div class="card"><h2 style="margin-top:0">逾期未還</h2>${d.overdue.map(l => miniRow(l, `<span class="pill bad">逾期 ${l.overdueDays} 天</span>`)).join('') || '<div class="empty">沒有逾期,很好</div>'}</div>
       <div class="card"><h2 style="margin-top:0">待審核</h2>${d.pending.map(l => miniRow(l)).join('') || '<div class="empty">沒有待審核的申請</div>'}</div>
-      <div class="card"><h2 style="margin-top:0">3 天內要點交</h2>${d.pickups.map(l => miniRow(l, `<span class="pill approved">${fmtD(l.start)} 領</span>`)).join('') || '<div class="empty">無</div>'}</div>
       <div class="card"><h2 style="margin-top:0">3 天內到期</h2>${d.dueSoon.map(l => miniRow(l, `<span class="pill out">${fmtD(l.end)} 還</span>`)).join('') || '<div class="empty">無</div>'}</div>
     </div>
     ${d.lowStock.length ? `<div class="card" style="margin-top:14px"><h2 style="margin-top:0">倉庫已無在庫</h2><div class="chips">${d.lowStock.map(i => `<span class="pill bad">${esc(i.name)}(${i.out}/${i.total} 借出)</span>`).join('')}</div></div>` : ''}`;
@@ -128,13 +124,16 @@ async function drawSiteBreak() {
 /* 進行中的五個分頁都是同一批資料的子集合:向後端要一次「active」,分頁在前端切,點分頁不再等後端 */
 const LOAN_HIST = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
 const loanSrv = f => LOAN_HIST[f] ? f : 'active';
+/* v3.0:只剩四格流程,所以分頁也只剩這幾個。
+   「待確認」「待點交」兩個分頁連同它們背後的請求 / 點交機制一起拿掉了 ——
+   線上資料已確認沒有卡在那兩個狀態的單(2026-10-01 查過),
+   萬一日後又冒出來,「全部」分頁照樣看得到。 */
 const loanTabOf = {
-  request: l => !!(l.request && l.request.type),
   pending: l => l.status === 'pending',
-  approved: l => l.status === 'approved',
   out: l => l.status === 'out',
   overdue: l => !!l.overdue
 };
+
 VIEWS.loans = main => {
   const srv = loanSrv(S.loanFilter);
   // 歷史表預設不讀 —— 讀了就等於沒搬。只有在翻舊單的分頁、而且使用者自己勾了才帶
@@ -144,8 +143,8 @@ VIEWS.loans = main => {
   const pick = loanTabOf[S.loanFilter];
   const list = pick ? all.filter(pick) : all;
   S._loans = all;
-  const F = [['request', '待確認'], ['pending', '待審核'], ['approved', '待點交'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
-  main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">審核 → 點交出借 → 登記歸還。口頭借用請從「借用申請」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
+  const F = [['pending', '待審核'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
+  main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">核准就等於把展品交出去,之後由你登記歸還。口頭借用請從「借用申請」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
     <div class="toolbar"><div class="seg">${F.map(([k, l]) => {
       const n = loanTabOf[k] ? all.filter(loanTabOf[k]).length : (k === 'all' || k === 'returned' ? null : all.length);
       return `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}${n ? ` <span class="n">${n}</span>` : ''}</button>`;

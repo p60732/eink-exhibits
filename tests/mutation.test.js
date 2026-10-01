@@ -82,7 +82,7 @@ const M = [
   ['00_gateway.gs', "var strMax = maxStr || LIMITS_.str;", "var strMax = 400000;", '所有路由的文字長度限制都被放寬'],
   // 分地點庫存的守門
   ['20_logic.gs', "if (where != null) return siteTotal(db, item, where);", '', '可借量不分地點,新竹借光了林口也跟著不能借'],
-  ['20_logic.gs', "if (loc(u.location) !== where) throw E(uid + ' 放在 '", "if (false) throw E(uid + ' 放在 '", '點交可以拿別廠的機器交差'],
+  ['20_logic.gs', '    delete o.request;', '', '借用單又把舊的 request 欄漏回 API(前端會長出讀它的分支)'],
   ['20_logic.gs', "return u.itemId === it.id && u.status === 'in' && loc(u.location) === where && !used[u.id];", "return u.itemId === it.id && u.status === 'in' && !used[u.id];", '核准自動綁定時拿了別廠的機器'],
   ['20_logic.gs', "if (sites.length > 1) throw E('「' + it.name + '」放在 '", "if (false) throw E('「' + it.name + '」放在 '", '多地點時沒要求指定要借哪一點'],
   ['20_logic.gs', "} else if (sites.length && sites.indexOf(where) < 0) {", '} else if (false) {', '可以借一個根本沒庫存的地點'],
@@ -107,7 +107,6 @@ const M = [
   ['20_logic.gs', "    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; });",
    "    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; if (!(s(x.itemId) in input)) input[s(x.itemId)] = x; });\n    L.lines.forEach(function (ln) { if (!input[lineKey(ln)] && input[ln.itemId]) input[lineKey(ln)] = input[ln.itemId]; });",
    '歸還只送一個地點時套用到同品項的另一個地點'],
-  ['20_logic.gs', "      L.status = 'rejected'; L.request = null;", "      L.status = 'rejected';", '駁回沒清掉待確認請求(已駁回的單還能被延期)'],
   ['20_logic.gs', "        idx[k] = (idx[k] || 0) + outstanding(ln);", '        idx[k] = (idx[k] || 0) + int(ln.qty);', '展覽已開單量與可借量基準不一致(部分歸還會放掉庫存)'],
   ['20_logic.gs', "        if (sw.status === 'closed' || sw.status === 'cancelled') throw E(", "        if (false) throw E(", '已結案 / 已取消的展覽還能掛新借用單'],
   ['20_logic.gs', "        if (wait) throw E('此展品還有 ' + wait + ' 張待審核的申請,請先處理完再下架');", '', '有待審核申請的展品也能下架'],

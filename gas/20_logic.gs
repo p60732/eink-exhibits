@@ -9,7 +9,6 @@
 var Logic = (function () {
   'use strict';
   var LOAN_ST = { pending: '待審核', approved: '已核准', out: '出借中', returned: '已歸還', rejected: '已駁回', cancelled: '已取消' };
-  var REQ_ST = { pickup: '待確認領取', 'return': '待確認歸還', extend: '待確認延期', transfer: '待確認轉借' };
   var UNIT_ST = { 'in': '在庫', out: '借出', repair: '維修', lost: '遺失', retired: '報廢' };
   var SHOW_ST = { draft: '規劃中', confirmed: '已確認', closed: '已結案', cancelled: '已取消' };
   /**
@@ -345,10 +344,12 @@ var Logic = (function () {
     var o = {};
     for (var k in L) o[k] = L[k];
     o.statusLabel = LOAN_ST[L.status] || L.status;
+    /* v3.0:借用單的 request 欄不再是流程的一部分(簽收 / 歸還 / 延期 / 轉借四種請求都拿掉了)。
+       **工作表的欄位刻意留著**不動結構,舊單裡的值也原樣保存;但它不再出現在 API 回應裡,
+       免得前端又長出讀它的分支。 */
+    delete o.request;
     o.showId = s(L.showId);
     if (o.showId) { var sw = byId(db.Shows || [], o.showId); o.showName = sw ? sw.name : ''; }
-    o.request = L.request && L.request.type ? L.request : null;
-    o.stage = o.request ? (REQ_ST[o.request.type] || '待確認') : '';
     o.overdue = isOverdue(L, today);
     if (o.overdue) o.overdueDays = Math.round((Date.parse(today) - Date.parse(L.end)) / 86400000);
     o.lines = (L.lines || []).map(function (ln) {
@@ -496,57 +497,16 @@ var Logic = (function () {
     var short = checkExtend(c.db, L, newEnd, c.today);
     if (short.length && !force) throw E('延長期間數量不足:' + short.map(function (x) { return x.name + ' 缺 ' + x.short; }).join('、') + '。若仍要延期請勾選「強制」');
     var old = L.end;
-    L.end = newEnd; L.request = null;
+    L.end = newEnd;
     dirty(c.db, 'Loans');
     log(c, '延長歸還日', L.id, old + ' → ' + newEnd + (note ? '|' + note : ''));
     notify(c, applicantEmail(c.db, L), '[展品管理] 已延長歸還日 ' + L.id + ' — ' + L.event,
       '歸還日由 ' + old + ' 延長為 ' + newEnd + '。' + (note ? '\n備註:' + note : ''));
     return enrichLoan(c.db, L, c.today);
   }
-  function doTransfer(c, L, toId, note) {
-    var to = byId(c.db.Users, s(toId));
-    if (!to || !bool(to.active)) throw E('找不到要轉給的人,或該帳號已停用');
-    if (to.id === L.applicantId) throw E('借用人本來就是這個人');
-    var from = L.applicant, fromMail = applicantEmail(c.db, L);
-    L.applicant = to.name; L.applicantId = to.id; L.dept = s(to.dept);
-    if (s(to.email)) L.contact = to.email;
-    L.request = null;
-    dirty(c.db, 'Loans');
-    log(c, '轉借', L.id, from + ' → ' + to.name + (note ? '|' + note : ''));
-    notify(c, [fromMail, s(to.email)].filter(function (x) { return x; }),
-      '[展品管理] 借用已轉給 ' + to.name + ' ' + L.id + ' — ' + L.event,
-      L.id + '(' + L.event + ')的借用人由 ' + from + ' 變更為 ' + to.name + ',歸還日 ' + L.end + '。' + (note ? '\n備註:' + note : ''));
-    return enrichLoan(c.db, L, c.today);
-  }
 
-  /* ---------- 點交 / 歸還(管理者後台與當面確認共用) ---------- */
-  function validatePickup(c, L, assign, allowPartial) {
-    var today = c.today, st = stats(c.db), used = {}, clean = {};
-    assign = assign || {};
-    L.lines.forEach(function (ln) {
-      var it = byId(c.db.Items, ln.itemId);
-      if (!it) throw E('展品已不存在:' + ln.itemId);
-      var key = lineKey(ln), where = loc(ln.location), label = it.name + '(' + where + ')';
-      if (it.mode === 'unit') {
-        var ids = (assign[key] || assign[ln.itemId] || []).map(function (x) { return s(x).toUpperCase(); });
-        if (!allowPartial && ids.length !== int(ln.qty)) throw E(label + ' 需要指定 ' + ln.qty + ' 台(目前 ' + ids.length + ' 台)');
-        if (ids.length > int(ln.qty)) throw E(label + ' 只借 ' + ln.qty + ' 台');
-        ids.forEach(function (uid) {
-          var u = byId(c.db.Units, uid);
-          if (!u || u.itemId !== it.id) throw E(uid + ' 不是「' + it.name + '」的編號');
-          if (u.status !== 'in') throw E(uid + ' 目前狀態為「' + UNIT_ST[u.status] + '」,無法出借');
-          if (loc(u.location) !== where) throw E(uid + ' 放在 ' + loc(u.location) + ',這一行借的是 ' + where + ' 的');
-          if (used[uid]) throw E(uid + ' 重複指定');
-          used[uid] = 1;
-        });
-        clean[key] = ids;
-      } else {
-        var have = st[key] ? st[key].inStock : 0;
-        if (have < int(ln.qty)) throw E(label + ' 現有 ' + have + ',不足 ' + ln.qty);
-      }
-    });
-    return clean;
-  }
+  /* ---------- 歸還 ---------- */
+
   /**
    * 核准即出借:逐台編號的展品,編號本來是在「點交」那一步綁定的。
    * 拿掉點交之後就得在核准當下自動挑 —— 不然 lines[].units 是空的,
@@ -599,23 +559,7 @@ var Logic = (function () {
     });
     return out;
   }
-  function doCheckout(c, L, assign, note) {
-    var today = c.today;
-    if (L.status !== 'approved') throw E('只有「已核准」的借用單可以點交出借');
-    var clean = validatePickup(c, L, assign, false);
-    L.lines.forEach(function (ln) {
-      var ids = clean[lineKey(ln)];
-      if (ids) {
-        ln.units = ids;
-        ids.forEach(function (uid) { var u = byId(c.db.Units, uid); u.status = 'out'; u.updatedAt = c.now; });
-      }
-    });
-    L.status = 'out'; L.outAt = c.now; L.request = null;
-    if (s(note)) L.note = s(L.note) + ' [點交] ' + s(note);
-    dirty(c.db, 'Loans'); dirty(c.db, 'Units');
-    log(c, c.onSite ? '當面確認領取' : '點交出借', L.id, L.applicant + ' 領取;' + L.lines.map(function (ln) { return ln.itemId + '×' + ln.qty + (ln.units.length ? '(' + ln.units.join(',') + ')' : ''); }).join(' '));
-    return enrichLoan(c.db, L, today);
-  }
+
   function doReceive(c, L, inputLines, note) {
     var today = c.today, now = c.now;
     if (L.status !== 'out') throw E('只有「出借中」的借用單可以歸還');
@@ -668,14 +612,12 @@ var Logic = (function () {
         }
       }
     });
-    // 一項都沒登記到就停在這裡。以前這種情況會「回報成功 + 寫一筆歸還紀錄 + 把同仁的歸還申請清掉」,
-    // 東西其實還在外面,申請卻從後台消失了 —— 雙方都以為處理過了,這是最難發現的那種掉東西。
-    // 在這裡丟錯誤,這次請求整個不存檔,L.request 自然保留著。
-    if (!touched) throw E('這次沒有登記到任何一項。數量型請至少填「歸還」或「短少」的數量,逐台型請選「歸還 / 送修 / 遺失」。'
-      + (L.request && L.request.type === 'return' ? '原本的歸還申請仍然保留著。' : ''));
+    // 一項都沒登記到就停在這裡。以前這種情況會「回報成功 + 寫一筆歸還紀錄」,
+    // 東西其實還在外面,單子看起來卻處理過了 —— 這是最難發現的那種掉東西。
+    // 在這裡丟錯誤,這次請求整個不存檔。
+    if (!touched) throw E('這次沒有登記到任何一項。數量型請至少填「歸還」或「短少」的數量,逐台型請選「歸還 / 送修 / 遺失」。');
     var done = L.lines.every(function (ln) { return outstanding(ln) === 0; });
     if (done) { L.status = 'returned'; L.returnedAt = now; }
-    L.request = null;
     if (s(note)) L.note = s(L.note) + ' [歸還] ' + s(note);
     dirty(c.db, 'Loans'); dirty(c.db, 'Units');
     log(c, (c.onSite ? '當面確認' : '') + (done ? '歸還完成' : '部分歸還'), L.id, notes.join(';') || '正常歸還');
@@ -1007,7 +949,7 @@ var Logic = (function () {
         start: r[0], end: r[1], status: onBehalf ? 'out' : 'pending', lines: lines,   // 代為登記 = 東西已經交出去了
         createdBy: c.user.name, createdAt: c.now,
         reviewer: onBehalf ? c.user.name : '', reviewedAt: onBehalf ? c.now : '', reviewNote: onBehalf ? '管理者代為登記' : '',
-        outAt: onBehalf ? c.now : '', returnedAt: '', note: s(c.p.note), request: null, showId: showId
+        outAt: onBehalf ? c.now : '', returnedAt: '', note: s(c.p.note), showId: showId
       };
       c.db.Loans.push(L); dirty(c.db, 'Loans');
       // 代為登記 = 東西已經交出去了,逐台編號要當場綁上(跟核准那條路一樣)
@@ -1060,20 +1002,9 @@ var Logic = (function () {
       // 核准即出借之後,按錯的唯一退路就是這裡 —— 但只要已經登記過歸還就不能整張收回去
       if (L.status === 'out' && !untouched(L)) throw E('這張單已經登記過歸還或短少,不能整張取消。請直接登記剩下的歸還。');
       var backC = releaseUnits(c, L);
-      L.status = 'cancelled'; L.request = null; L.note = s(L.note) + (c.p.reason ? ' [取消原因] ' + s(c.p.reason) : '');
+      L.status = 'cancelled'; L.note = s(L.note) + (c.p.reason ? ' [取消原因] ' + s(c.p.reason) : '');
       dirty(c.db, 'Loans'); log(c, '取消借用', L.id, s(c.p.reason) + (backC.length ? ';放回 ' + backC.join('、') : ''));
       return enrichLoan(c.db, L, c.today);
-    },
-    pickupOptions: function (c) {
-      var L = ownLoan(c);
-      if (L.status !== 'approved') throw E('這筆借用目前不能簽收');
-      var st = stats(c.db);
-      return L.lines.map(function (ln) {
-        var it = byId(c.db.Items, ln.itemId) || {}, where = loc(ln.location), box = st[lineKey(ln)];
-        return { itemId: ln.itemId, key: lineKey(ln), location: where, name: it.name, mode: it.mode, qty: int(ln.qty),
-          inStock: box ? box.inStock : 0,
-          units: it.mode === 'unit' ? c.db.Units.filter(function (u) { return u.itemId === it.id && u.status === 'in' && loc(u.location) === where; }).map(function (u) { return { id: u.id, serial: u.serial }; }) : [] };
-      });
     },
     /** 缺口是誰佔住的。同仁看得到數量與歸還日,看不到借用人姓名(跟借用單卡片同一套規則) */
     holders: function (c) {
@@ -1126,8 +1057,6 @@ var Logic = (function () {
         pending: L.filter(function (x) { return x.status === 'pending'; }).sort(sortLoans).map(en),
         overdue: L.filter(function (x) { return isOverdue(x, today); }).map(en),
         dueSoon: L.filter(function (x) { return x.status === 'out' && x.end >= today && x.end <= soon; }).map(en),
-        requests: L.filter(function (x) { return x.request && x.request.type && (x.status === 'approved' || x.status === 'out'); }).map(en),
-        pickups: L.filter(function (x) { return x.status === 'approved' && x.start <= soon; }).sort(function (a, b) { return a.start < b.start ? -1 : 1; }).map(en),
         outCount: L.filter(function (x) { return x.status === 'out'; }).length,
         leftBehind: leftBehindLoans(c.db, today).map(en),
         lowStock: items.map(function (it) { return itemView(c.db, it, st, null, today); }).filter(function (v) { return v.total > 0 && v.inStock === 0; })
@@ -1145,7 +1074,6 @@ var Logic = (function () {
         if (f === 'all') return true;
         if (f === 'active') return !!LIVE_ST[L.status];
         if (f === 'overdue') return isOverdue(L, today);
-        if (f === 'request') return !!(L.request && L.request.type) && (L.status === 'approved' || L.status === 'out');
         return L.status === f;
       }).slice().sort(sortLoans).map(function (L) {
         var o = enrichLoan(c.db, L, today);
@@ -1167,7 +1095,7 @@ var Logic = (function () {
         ln.units = ids;
         ids.forEach(function (uid) { var u = byId(c.db.Units, uid); if (u) { u.status = 'out'; u.updatedAt = c.now; } });
       });
-      L.status = 'out'; L.outAt = c.now; L.request = null;
+      L.status = 'out'; L.outAt = c.now;
       L.reviewer = c.user.name; L.reviewedAt = c.now; L.reviewNote = s(c.p.note);
       dirty(c.db, 'Loans'); dirty(c.db, 'Units'); log(c, '核准借用', L.id, s(c.p.note));
       // 申請人與核准的人各收到一份:核准的人自己也留一份存檔,不用另外記自己核了什麼
@@ -1184,27 +1112,12 @@ var Logic = (function () {
       // 已經出借中的只能在「還沒登記過任何歸還」時收回(等於取消核准,東西要拿回來)
       if (L.status === 'out' && !untouched(L)) throw E('這張單已經登記過歸還或短少,不能取消核准。請直接登記剩下的歸還。');
       var backR = releaseUnits(c, L);
-      L.status = 'rejected'; L.request = null;     // 不清掉的話,已駁回的單還能被延期 / 轉借
+      L.status = 'rejected';
       L.reviewer = c.user.name; L.reviewedAt = c.now; L.reviewNote = s(c.p.note);
       dirty(c.db, 'Loans'); log(c, '駁回借用', L.id, s(c.p.note) + (backR.length ? ';放回 ' + backR.join('、') : ''));
       notify(c, mailList([applicantEmail(c.db, L), c.user.email]), '[展品管理] 借用未核准 ' + L.id + ' — ' + L.event,
         L.applicant + ' 的借用申請未核准。\n原因:' + L.reviewNote + '\n審核人:' + L.reviewer);
       return enrichLoan(c.db, L, c.today);
-    },
-    /** 處理同仁送出的延期 / 轉借申請 */
-    decideRequest: function (c) {
-      var L = byId(c.db.Loans, s(c.p.id));
-      if (!L) throw E('找不到借用單');
-      var req = L.request;
-      if (!req || (req.type !== 'extend' && req.type !== 'transfer')) throw E('這張單沒有待處理的延期或轉借申請');
-      if (!bool(c.p.ok)) {
-        L.request = null; dirty(c.db, 'Loans');
-        log(c, req.type === 'extend' ? '不同意延期' : '不同意轉借', L.id, s(c.p.note));
-        notify(c, applicantEmail(c.db, L), '[展品管理] ' + (req.type === 'extend' ? '延期' : '轉借') + '申請未通過 ' + L.id + ' — ' + L.event,
-          '原因:' + (s(c.p.note) || '未說明'));
-        return enrichLoan(c.db, L, c.today);
-      }
-      return req.type === 'extend' ? doExtend(c, L, req.end, s(c.p.note), bool(c.p.force)) : doTransfer(c, L, req.toId, s(c.p.note));
     },
     /** 管理者直接延期,不用等同仁申請 */
     extendLoan: function (c) {
@@ -1471,16 +1384,10 @@ var Logic = (function () {
       });
       return { ok: ok, fail: fail };
     },
-    checkout: function (c) {
-      var L = byId(c.db.Loans, s(c.p.id));
-      if (!L) throw E('找不到借用單');
-      var units = c.p.units || (L.request && L.request.type === 'pickup' ? L.request.units : {});
-      return doCheckout(c, L, units, c.p.note);
-    },
     receive: function (c) {
       var L = byId(c.db.Loans, s(c.p.id));
       if (!L) throw E('找不到借用單');
-      var lines = c.p.lines || (L.request && L.request.type === 'return' ? L.request.lines : []);
+      var lines = c.p.lines || [];
       return doReceive(c, L, lines, c.p.note);
     },
     items: function (c) {

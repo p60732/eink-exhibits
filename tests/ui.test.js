@@ -264,10 +264,17 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2');
   await p.click('#rgo2'); await wait(600);
   await p.click('[data-f=returned]'); await wait(500); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
-  // 進行中的五個分頁共用同一次請求:切分頁不應該再打後端
+  // v3.0:舊流程那兩個分頁(待確認 / 待點交)連同背後的機制一起拿掉了
+  for (const t of ['request', 'approved']) {
+    if (await p.$(`[data-f=${t}]`)) throw new Error('★ 不該再有「' + t + '」分頁(舊流程已經拿掉)');
+  }
+  for (const a of ['checkout', 'req-ok', 'req-no']) {
+    if (await p.$(`[data-act=${a}]`)) throw new Error('★ 不該再有「' + a + '」按鈕(舊流程已經拿掉)');
+  }
+  // 進行中的分頁共用同一次請求:切分頁不應該再打後端
   await p.click('[data-f=pending]'); await wait(900);
   await p.evaluate(() => { window.__n = 0; const f = window.fetch; window.fetch = (...a) => { window.__n++; return f(...a); }; });
-  for (const t of ['approved', 'out', 'overdue', 'request', 'pending']) { await p.click(`[data-f=${t}]`); await wait(450); }
+  for (const t of ['out', 'overdue', 'pending']) { await p.click(`[data-f=${t}]`); await wait(450); }
   const nReq = await p.evaluate(() => window.__n);
   if (nReq > 0) throw new Error('切進行中的分頁不該再打後端,實際打了 ' + nReq + ' 次');
   await p.click('[data-f=all]'); await wait(700);
