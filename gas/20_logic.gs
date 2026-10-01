@@ -599,8 +599,16 @@ var Logic = (function () {
         });
       } else {
         var left = outstanding(ln), ret = Math.min(left, Math.max(0, int(x.returned))), lost = Math.min(left - ret, Math.max(0, int(x.lost)));
+        /**
+         * 損壞是「還回來了,但壞了」——**算在 ret 裡面的子集**,不另外佔 outstanding。
+         * 這樣 `outstanding = qty − returned − lost` 這條公式完全不用動,
+         * 是刻意選的最小風險路徑(動那條公式等於動整個庫存計算)。
+         * 東西還在庫存裡,只是在這張單與操作紀錄上留下記號。
+         */
+        var dmg = Math.min(ret, Math.max(0, int(x.damaged)));
         if (ret || lost) touched++;
         ln.returned = int(ln.returned) + ret; ln.lost = int(ln.lost) + lost;
+        if (dmg) { ln.damaged = int(ln.damaged) + dmg; notes.push(it ? it.name + ' 有 ' + dmg + ' 台損壞' : dmg + ' 台損壞'); }
         if (lost && it) { adjustStock(c, it, from, -lost); notes.push(it.name + '(' + from + ') 短少 ' + lost); }
         if (ret && it && back !== from) {                            // 還到別的廠區 = 庫存跟著搬過去
           adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);
@@ -619,6 +627,16 @@ var Logic = (function () {
     if (s(note)) L.note = s(L.note) + ' [歸還] ' + s(note);
     dirty(c.db, 'Loans'); dirty(c.db, 'Units');
     log(c, (c.onSite ? '當面確認' : '') + (done ? '歸還完成' : '部分歸還'), L.id, notes.join(';') || '正常歸還');
+    /**
+     * 歸還本來完全不寄信 —— 申請人只能自己去看系統才知道「這筆結案了沒」,
+     * 而管理者也沒有任何回執。對同仁來說,整個流程應該是「送出申請之後都靠信」。
+     */
+    notify(c, mailList([applicantEmail(c.db, L), c.user.email]),
+      '[展品管理] ' + (done ? '借用已結案' : '部分歸還') + ' ' + L.id + ' — ' + L.event,
+      L.applicant + ' 的借用單' + (done ? '已全部歸還,這筆結案。' : '登記了部分歸還,還有沒還完的項目。')
+      + '\n登記人:' + c.user.name + '\n歸還日:' + today
+      + (notes.length ? '\n\n' + notes.join('\n') : '')
+      + '\n\n' + linesText(c.db, L));
     return enrichLoan(c.db, L, today);
   }
   function ownLoan(c) {
@@ -1145,7 +1163,8 @@ var Logic = (function () {
       L.status = 'rejected'; L.request = null;     // 不清掉的話,已駁回的單還能被延期 / 轉借
       L.reviewer = c.user.name; L.reviewedAt = c.now; L.reviewNote = s(c.p.note);
       dirty(c.db, 'Loans'); log(c, '駁回借用', L.id, s(c.p.note));
-      notify(c, applicantEmail(c.db, L), '[展品管理] 借用未核准 ' + L.id + ' — ' + L.event, '原因:' + L.reviewNote);
+      notify(c, mailList([applicantEmail(c.db, L), c.user.email]), '[展品管理] 借用未核准 ' + L.id + ' — ' + L.event,
+        L.applicant + ' 的借用申請未核准。\n原因:' + L.reviewNote + '\n審核人:' + L.reviewer);
       return enrichLoan(c.db, L, c.today);
     },
     /** 處理同仁送出的延期 / 轉借申請 */

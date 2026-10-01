@@ -43,7 +43,7 @@ function loanCard(L, opts = {}) {
       return esc(u) + st;
     }).join('、')}</div>` : '';
     let right = `<span class="q">× ${ln.qty}</span>`;
-    if (L.status === 'out' && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.lost ? `・短少 ${ln.lost}` : ''}</span>`;
+    if ((L.status === 'out' || L.status === 'returned') && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.damaged ? `(損壞 ${ln.damaged})` : ''}${ln.lost ? `・短少 ${ln.lost}` : ''}</span>`;
     if (c) right += c.short ? ` <span class="short">缺 ${c.short}(可借 ${c.available})</span>` : ` <span class="okt">足夠</span>`;
     return `<div class="line"><span class="nm">${esc(ln.name)} ${ln.mode === 'unit' ? '<span class="pill unit">逐台</span>' : ''}<br><span class="meta">${where}</span></span>${right}${units}</div>`;
   }).join('');

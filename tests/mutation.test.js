@@ -53,6 +53,14 @@ const M = [
   ['20_logic.gs', 'if (!s(applyUser.email)) {', 'if (false) {', '帳號沒有 Email 照樣收單(核准了卻沒人收到通知)'],
   ['10_identity.gs', 'if (p.email !== undefined) u.email = s(p.email);', 'u.email = s(p.email);',
    'saveUser 整列覆蓋,沒帶到的 Email 被清掉'],
+  // 流程精簡 A+B:信要寄給兩方、損壞是已還的子集
+  ['20_logic.gs', "notify(c, mailList([applicantEmail(c.db, L), c.user.email]), '[展品管理] 借用未核准 '",
+   "notify(c, applicantEmail(c.db, L), '[展品管理] 借用未核准 '", '不核准沒有通知駁回的管理者'],
+  ['20_logic.gs', "notify(c, mailList([applicantEmail(c.db, L), c.user.email]),\n      '[展品管理] ' + (done ? '借用已結案'", "notify(c, [],\n      '[展品管理] ' + (done ? '借用已結案'", '歸還不寄信(申請人不知道結案了沒)'],
+  ['20_logic.gs', 'var dmg = Math.min(ret, Math.max(0, int(x.damaged)));', 'var dmg = Math.max(0, int(x.damaged));',
+   '損壞可以大於這次歸還的數量'],
+  ['20_logic.gs', "if (dmg) { ln.damaged = int(ln.damaged) + dmg;", "if (false) { ln.damaged = int(ln.damaged) + dmg;",
+   '損壞沒有記下來'],
   // 跨廠區歸還:盤點只看「總數」與「各區總和」,這四條就是守它們的
   ['20_logic.gs', 'adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);',
    'adjustStock(c, it, from, -ret);', '還到別區只減不加(總數會憑空變少)'],

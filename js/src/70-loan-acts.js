@@ -202,8 +202,10 @@ async function receiveModal(id) {
         return `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b>${back}</div>${pend.map(u => `<div class="row" style="margin:6px 0"><span class="mono" style="min-width:70px">${esc(u)}</span>
           <div class="seg" data-ru="${u}" data-it="${k}">${[['in', '歸還'], ['repair', '送修'], ['lost', '遺失'], ['', '未還']].map(([kk, t], i) => `<button type="button" data-v="${kk}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}</div>`;
       }
+      // 損壞是「還回來了但壞了」,是歸還數裡面的子集,所以上限綁在歸還數上
       return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>${back}
         <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${k}" style="width:80px"></label>
+        <label class="meta">其中損壞 <input type="number" min="0" max="${l.outstanding}" value="0" data-rd="${k}" style="width:80px"></label>
         <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${k}" style="width:80px"></label></div>`;
     }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>備註</span><input type="text" id="rn2" placeholder="損壞狀況、短少原因…"></label>
@@ -222,7 +224,10 @@ async function receiveModal(id) {
   $('#rgo2', m).onclick = () => {
     const lines = open.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
       ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
-      : { itemId: l.itemId, location: nloc(l.location), to: to, returned: +$(`[data-rq="${k}"]`, m).value || 0, lost: +$(`[data-rl="${k}"]`, m).value || 0 }; });
+      : { itemId: l.itemId, location: nloc(l.location), to: to, returned: +$(`[data-rq="${k}"]`, m).value || 0,
+          damaged: +$(`[data-rd="${k}"]`, m).value || 0, lost: +$(`[data-rl="${k}"]`, m).value || 0 }; });
+    const over = lines.find(x => (x.damaged || 0) > (x.returned || 0));
+    if (over) return toast('「其中損壞」不能大於「歸還」的數量', true);
     run(() => api('receive', { id, lines, note: $('#rn2', m).value })).then(r => { toast(r.status === 'returned' ? '已全部歸還' : '已登記部分歸還'); closeModal(); render(); }).catch(() => { });
   };
 }

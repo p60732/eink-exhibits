@@ -874,6 +874,52 @@ const itemCountBefore = ok('items', {}, A).length;
   ok('receive', { id: E3, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, A);
 }
 
+/* ===== 流程精簡 A+B:駁回與歸還都要寄信;數量型可以標損壞(2026-10-01) ===== */
+{
+  const DM = ok('saveItem', { item: { name: '損壞標記測試機', mode: 'qty', category: '體驗區',
+    sites: [{ location: '新竹', qty: 10 }] } }, A);
+  const dln = [{ itemId: DM.id, location: '新竹', qty: 4 }];
+  const u231 = ok('users', {}, A).find(x => x.empNo === '10231');
+  ok('saveUser', { user: { id: u231.id, empNo: '10231', name: u231.name, email: 'ming@x.com', active: true } }, A);
+  const UD = ok('login', { emp: '10231' }).token;
+
+  // 不核准 → 申請人與按下駁回的管理者都要收到
+  const R1 = ok('createLoan', { event: '駁回要寄兩方', start: '2026-10-01', end: '2026-10-05', lines: dln }, UD);
+  G.mails.length = 0;
+  ok('reject', { id: R1.id, note: '這批要留給客戶參訪' }, A);
+  const rj = G.mails.filter(m => /未核准/.test(m.subject))[0];
+  assert.ok(rj, '駁回要寄信');
+  assert.ok(/ming@x\.com/.test(rj.to) && /admin@x\.com/.test(rj.to), '★ 不核准也要同步通知兩方');
+  assert.ok(/審核人:測試管理者/.test(rj.body), '信裡要寫審核人');
+
+  // 登記歸還 → 兩方都要收到(以前完全沒寄)
+  const R2 = ok('createLoan', { event: '歸還要寄兩方', start: '2026-10-01', end: '2026-10-05', lines: dln }, UD);
+  ok('approve', { id: R2.id }, A); ok('checkout', { id: R2.id }, A);
+  G.mails.length = 0;
+  const half = ok('receive', { id: R2.id, lines: [{ itemId: DM.id, location: '新竹', returned: 2, damaged: 1, to: '新竹' }] }, A);
+  const m1 = G.mails.filter(m => /部分歸還/.test(m.subject))[0];
+  assert.ok(m1, '★ 部分歸還也要寄信');
+  assert.ok(/ming@x\.com/.test(m1.to) && /admin@x\.com/.test(m1.to), '★ 歸還要同步通知兩方');
+  assert.ok(/1 台損壞/.test(m1.body), '★ 損壞要寫在信裡');
+
+  // 損壞是「已還」的子集:不可以多扣 outstanding
+  assert.strictEqual(half.lines[0].returned, 2, '還了 2 台');
+  assert.strictEqual(half.lines[0].damaged, 1, '★ 其中 1 台損壞');
+  assert.strictEqual(half.lines[0].outstanding, 2, '★ 損壞不可以另外佔 outstanding(還有 2 台沒還)');
+  // 損壞不可以大於歸還數 —— 後端要自己夾住
+  const over = ok('receive', { id: R2.id, lines: [{ itemId: DM.id, location: '新竹', returned: 1, damaged: 9, to: '新竹' }] }, A);
+  assert.strictEqual(over.lines[0].damaged, 2, '★ 損壞要被夾在「這次歸還數」以內(1+1=2)');
+
+  // 全部還完 → 結案信
+  G.mails.length = 0;
+  const done = ok('receive', { id: R2.id, lines: [{ itemId: DM.id, location: '新竹', returned: 1, to: '新竹' }] }, A);
+  assert.strictEqual(done.status, 'returned');
+  const m2 = G.mails.filter(m => /已結案/.test(m.subject))[0];
+  assert.ok(m2 && /ming@x\.com/.test(m2.to) && /admin@x\.com/.test(m2.to), '★ 結案信也要兩方都收到');
+  // 總數不變:損壞的東西還在庫存裡
+  assert.strictEqual(ok('items', {}, A).find(i => i.id === DM.id).total, 10, '★ 損壞不影響總數,東西還在');
+}
+
 /* ===== 人員管理:部門不再收;沒帶到的欄位不可以被清掉(2026-10-01) ===== */
 {
   const mk = r => ok('importUsers', { rows: [r] }, A);

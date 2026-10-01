@@ -381,5 +381,13 @@ t('借用單一張一張收合:預設只露出標題與狀態,但按鈕不收', 
   assert.ok(/歷史紀錄<span class="chipnum">/.test(ui), '我的借用的那一條要標出有幾張');
   assert.ok(/S\.openLoans = new Set\(\);/.test(ui), '★ 換人登入要清掉展開狀態');
 });
+t('流程精簡:每一個轉折都要同步通知兩方', () => {
+  // 對同仁來說,送出申請之後就只靠信知道發生了什麼事 —— 少寄一封就是斷掉一截。
+  const g = read('gas/20_logic.gs');
+  const both = (g.match(/mailList\(\[applicantEmail\(c\.db, L\), c\.user\.email\]\)/g) || []).length;
+  assert.ok(both >= 3, '★ 核准 / 不核准 / 歸還三個轉折都要寄給兩方,目前只有 ' + both + ' 處');
+  assert.ok(/其中損壞/.test(read('js/ui.js')), '歸還單要有「其中損壞」欄位');
+  assert.ok(/var dmg = Math\.min\(ret,/.test(g), '★ 損壞要夾在這次歸還的數量以內');
+});
 Promise.all(PENDING).then(() => console.log('✔ 結構檢查 ' + n + ' 項通過'))
   .catch(e => { console.error('✘ ' + e.message); process.exit(1); });
