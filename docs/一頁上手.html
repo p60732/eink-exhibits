@@ -1,0 +1,209 @@
+<!--
+  【文件】docs/一頁上手.html — 印出來貼牆上的一頁 A4 使用說明(三種對象:同仁 / 管理者 / 主管)
+  輸出:docs/一頁上手.pdf
+  怎麼重新產生(需要 playwright 的 chromium,只跑得動在雲端沙箱):
+    node -e "const{chromium}=require('playwright');(async()=>{const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium'});const p=await b.newPage();await p.goto('file://'+process.cwd()+'/docs/一頁上手.html',{waitUntil:'networkidle'});await p.pdf({path:'docs/一頁上手.pdf',format:'A4',printBackground:true,margin:{top:'0',right:'0',bottom:'0',left:'0'}});await b.close()})()"
+  ⚠️ 流程一改就要回來改這張 —— 過時的說明比沒有說明更糟,使用者會照著去找一顆不存在的按鈕。
+  ⚠️ 版面是「剛好一頁」排出來的(.sheet 高度就是 297mm),加東西就要拿掉等量的東西,
+     改完一定要重新產生 PDF 並確認頁數還是 1。
+-->
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>展品借用系統 一頁上手</title>
+<style>
+  @page { size: A4; margin: 0; }
+  :root{
+    --ink:#1f2937; --muted:#6b7280; --line:#d8dce0; --red:#C8102E; --slate:#333F48;
+    --wash:#f5f6f8; --warn:#fff6e8; --warnline:#e9a23b; --ok:#eef7f0;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0 }
+  body{
+    font-family:"Noto Sans CJK TC","Noto Sans TC",sans-serif; color:var(--ink);
+    font-size:8.6pt; line-height:1.5; -webkit-print-color-adjust:exact; print-color-adjust:exact;
+  }
+  .sheet{ width:210mm; height:297mm; padding:11mm 11mm 8mm; display:flex; flex-direction:column; gap:3.4mm }
+
+  /* ---------- 抬頭 ---------- */
+  .top{ display:flex; align-items:flex-start; gap:6mm; border-bottom:2.2pt solid var(--slate); padding-bottom:2.6mm }
+  .top h1{ font-size:19pt; letter-spacing:.5pt; line-height:1.15 }
+  .top h1 small{ display:block; font-size:9pt; font-weight:400; color:var(--muted); letter-spacing:0; margin-top:1.4mm }
+  .top .sp{ flex:1 }
+  .qr{ display:flex; align-items:center; gap:2.6mm }
+  .qr svg{ width:19mm; height:19mm; display:block }
+  .qr .u{ text-align:right; font-size:7.6pt; line-height:1.45 }
+  .qr .u b{ display:block; font-size:8.6pt }
+  .qr .u code{ font-family:"DejaVu Sans Mono",monospace; font-size:7.2pt; color:var(--slate) }
+
+  /* ---------- 流程條 ---------- */
+  .flow{ background:var(--wash); border:.6pt solid var(--line); border-radius:2mm; padding:3mm 3.4mm }
+  .steps{ display:flex; align-items:center; gap:2mm; flex-wrap:nowrap }
+  .st{ background:#fff; border:.8pt solid var(--line); border-radius:1.6mm; padding:1.6mm 2.6mm; text-align:center; white-space:nowrap }
+  .st b{ display:block; font-size:9.6pt; line-height:1.25 }
+  .st span{ font-size:7pt; color:var(--muted) }
+  .st.now{ border-color:var(--red); border-width:1.2pt }
+  .ar{ color:var(--muted); font-size:9pt; white-space:nowrap; text-align:center; line-height:1.25 }
+  .ar b{ display:block; font-size:7.2pt; color:var(--slate) }
+  .st.off{ background:#fff; border-style:dashed; color:var(--muted) }
+  .flownote{ margin-top:2.4mm; font-size:8.4pt }
+  .flownote b{ color:var(--red) }
+
+  /* ---------- 兩欄 ---------- */
+  .cols{ display:flex; gap:4mm; flex:1; min-height:0 }
+  .col{ flex:1; display:flex; flex-direction:column; gap:2.6mm }
+  .card{ border:.6pt solid var(--line); border-radius:2mm; padding:3mm 3.4mm }
+  .col > .card:last-child{ flex:1 }
+  h2{ font-size:11pt; line-height:1.2; display:flex; align-items:baseline; gap:2mm; margin-bottom:2mm }
+  h2 .who{ font-size:7.4pt; font-weight:400; color:#fff; background:var(--slate); border-radius:1mm; padding:.6mm 1.6mm }
+  h3{ font-size:9pt; margin:2.2mm 0 1mm; color:var(--slate) }
+  ol{ padding-left:0; list-style:none; counter-reset:s }
+  ol li{ counter-increment:s; position:relative; padding-left:6.2mm; margin-bottom:1.8mm }
+  ol li::before{
+    content:counter(s); position:absolute; left:0; top:.2mm; width:4.4mm; height:4.4mm; border-radius:50%;
+    background:var(--slate); color:#fff; font-size:7.4pt; line-height:4.4mm; text-align:center; font-weight:700;
+  }
+  ol li b{ color:var(--slate) }
+  ul{ list-style:none }
+  ul li{ position:relative; padding-left:3.4mm; margin-bottom:1.1mm }
+  ul li::before{ content:'・'; position:absolute; left:0; color:var(--muted) }
+  .warn{ background:var(--warn); border-left:2.2pt solid var(--warnline); border-radius:1mm; padding:2.2mm 2.6mm; margin-bottom:2mm }
+  .warn b{ color:#8a5200 }
+  .tip{ background:var(--ok); border-radius:1mm; padding:1.8mm 2.4mm; margin-top:1.6mm; font-size:8.2pt }
+  .stt{ border-collapse:collapse; width:100%; margin-top:.6mm }
+  .stt td{ padding:1.1mm 0; vertical-align:top; border-top:.5pt solid var(--line) }
+  .stt tr:first-child td{ border-top:0 }
+  .stt td:first-child{ width:16mm; white-space:nowrap }
+  .pill{ display:inline-block; border-radius:1mm; padding:.3mm 1.4mm; font-size:7.4pt; font-weight:700 }
+  .pill.pend{ background:#fdf0dd; color:#8a5200 }
+  .pill.out{ background:#e6effa; color:#1e4e8c }
+  .pill.done{ background:#e7f3ea; color:#1f6b36 }
+  .pill.bad2{ background:#fae8ea; color:#8e1220 }
+  .k{ background:var(--wash); border:.5pt solid var(--line); border-radius:.8mm; padding:.2mm 1.1mm; font-size:7.8pt; white-space:nowrap }
+  .muted{ color:var(--muted) }
+
+  /* ---------- 常見問題 ---------- */
+  .faq{ border-top:1.2pt solid var(--slate); padding-top:2.4mm }
+  .faq h2{ margin-bottom:1.6mm }
+  .faqgrid{ display:grid; grid-template-columns:1fr 1fr; gap:.8mm 5mm }
+  .faqgrid div{ font-size:8pt; padding-left:3.4mm; position:relative }
+  .faqgrid div::before{ content:'?'; position:absolute; left:0; color:var(--red); font-weight:700 }
+  .foot{ margin-top:2.2mm; display:flex; font-size:7pt; color:var(--muted); border-top:.6pt solid var(--line); padding-top:1.6mm }
+  .foot .sp{ flex:1 }
+</style></head><body><div class="sheet">
+
+  <div class="top">
+    <div>
+      <h1>展品借用系統<small>一頁上手 —— 借東西的人只要填一次單,其他都是收 Email</small></h1>
+    </div>
+    <div class="sp"></div>
+    <div class="qr">
+      <div class="u">
+        <b>掃我開啟</b>
+        <code>p60732.github.io<br>/eink-exhibits/</code>
+        <div class="muted" style="margin-top:1.2mm">同仁輸入工號即可<br>管理者另外要 PIN</div>
+      </div>
+      <img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyOSIgaGVpZ2h0PSIyOSIgY2xhc3M9InNlZ25vIj48cGF0aCBjbGFzcz0icXJsaW5lIiBzdHJva2U9IiMxZjI5MzciIGQ9Ik0wIDAuNWg3bTIgMGgzbTMgMGgxbTEgMGgzbTIgMGg3bS0yOSAxaDFtNSAwaDFtMiAwaDFtMiAwaDFtMSAwaDJtMSAwaDFtNCAwaDFtNSAwaDFtLTI5IDFoMW0xIDBoM20xIDBoMW01IDBoMW0zIDBoMm0xIDBoMm0xIDBoMW0xIDBoM20xIDBoMW0tMjkgMWgxbTEgMGgzbTEgMGgxbTIgMGg0bTEgMGgxbTMgMGgxbTMgMGgxbTEgMGgzbTEgMGgxbS0yOSAxaDFtMSAwaDNtMSAwaDFtMyAwaDRtMSAwaDRtMSAwaDFtMSAwaDFtMSAwaDNtMSAwaDFtLTI5IDFoMW01IDBoMW0xIDBoMm0xIDBoMW0yIDBoMm0xIDBoNG0xIDBoMW01IDBoMW0tMjkgMWg3bTEgMGgxbTEgMGgxbTEgMGgxbTEgMGgxbTEgMGgxbTEgMGgxbTEgMGgxbTEgMGg3bS0yMCAxaDJtMSAwaDFtMSAwaDFtMSAwaDRtLTIwIDFoMW0yIDBoMW0xIDBoMm0xIDBoMW0xIDBoMW0yIDBoMW0yIDBoMW0xIDBoMW0yIDBoMW0xIDBoMW0tMjQgMWgybTIgMGgybTEgMGgzbTEgMGgybTMgMGgxbTMgMGgxbTEgMGgybTEgMGgxbTIgMGgxbS0yOSAxaDVtMSAwaDRtMiAwaDFtMyAwaDJtMSAwaDFtMyAwaDFtMSAwaDNtLTI4IDFoMW0xIDBoMm0xIDBoMW00IDBoMm0xIDBoMW0xIDBoMW0yIDBoMm0yIDBoMm0yIDBoMm0tMjcgMWgzbTIgMGgxbTEgMGgzbTMgMGg0bTQgMGgybTEgMGgxbTEgMGgybS0yNSAxaDFtMiAwaDFtMSAwaDJtNiAwaDFtMSAwaDJtMiAwaDFtLTIwIDFoMW0xIDBoMm0xIDBoMm0xIDBoMW0zIDBoMm00IDBoN20tMjkgMWgxbTEgMGgzbTMgMGgxbTEgMGgxbTEgMGgybTEgMGgxbTEgMGgzbTEgMGgzbTEgMGgxbTEgMGgxbS0yMiAxaDFtMiAwaDFtMSAwaDVtMSAwaDFtMiAwaDFtMiAwaDFtMyAwaDFtLTI1IDFoMW0zIDBoMm0zIDBoMW0xIDBoMW0xIDBoMm0zIDBoMm0yIDBoMW0yIDBoMW0tMjkgMWgxbTIgMGgxbTEgMGgybTMgMGgybTEgMGgxbTIgMGgxbTEgMGgxbTEgMGgybTUgMGgybS0yNiAxaDFtNSAwaDNtMSAwaDFtMSAwaDRtMSAwaDJtNSAwaDJtLTI5IDFoMW0xIDBoNW0yIDBoMW0yIDBoMW0xIDBoMm00IDBoNW0xIDBoMW0tMTkgMWg2bTIgMGgxbTMgMGgxbTMgMGgxbTEgMGgzbS0yOSAxaDdtMyAwaDJtMSAwaDJtMSAwaDJtMiAwaDFtMSAwaDFtMSAwaDFtMiAwaDFtLTI4IDFoMW01IDBoMW0xIDBoMm0xIDBoM20xIDBoMm0zIDBoMW0zIDBoM20xIDBoMW0tMjkgMWgxbTEgMGgzbTEgMGgxbTUgMGgxbTEgMGgxbTEgMGgybTIgMGg1bTIgMGgybS0yOSAxaDFtMSAwaDNtMSAwaDFtMSAwaDJtNCAwaDFtNCAwaDFtMiAwaDFtMSAwaDRtLTI4IDFoMW0xIDBoM20xIDBoMW0yIDBoM20xIDBoMW00IDBoMW0xIDBoMW0yIDBoNG0xIDBoMW0tMjkgMWgxbTUgMGgxbTMgMGgzbTIgMGg2bTIgMGgxbTMgMGgxbS0yOCAxaDdtMSAwaDFtMSAwaDZtMSAwaDJtMSAwaDNtMSAwaDFtMiAwaDEiLz48L3N2Zz4K" alt="網站 QR Code" style="width:19mm;height:19mm;display:block">
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="steps">
+      <div class="st"><b>填單送出</b><span>同仁</span></div>
+      <div class="ar">→</div>
+      <div class="st"><b>待審核</b><span>等管理者</span></div>
+      <div class="ar">→<b>核准</b></div>
+      <div class="st now"><b>出借中</b><span>東西已經交出去</span></div>
+      <div class="ar">→<b>登記歸還</b></div>
+      <div class="st"><b>已歸還</b><span>結案</span></div>
+      <div class="ar" style="padding:0 1mm">或</div>
+      <div class="st off"><b>已駁回</b><span>不核准</span></div>
+    </div>
+    <div class="flownote"><b>沒有「簽收」「點交」這些步驟了。</b>管理者按下核准的那一刻，東西就算交付；同仁去現場拿就好。</div>
+  </div>
+
+  <div class="cols">
+    <div class="col">
+      <div class="card" style="flex:1">
+        <h2>我要借東西 <span class="who">一般同仁</span></h2>
+        <ol>
+          <li><b>登入</b>　開網址，輸入<b>工號</b>，不用密碼。<br>
+              第一次登入會請你填 Email —— 核准、歸還的通知全靠它，<b>一定要填</b>。</li>
+          <li><b>挑展品</b>　到「展品目錄」先選借出日與歸還日，卡片上就會顯示那段期間<b>還能借幾台</b>，按加入。</li>
+          <li><b>送出</b>　「借用申請」只要填<b>借用目的</b>和<b>借用期間</b>。工號與 Email 系統自動帶，不用再打一次。</li>
+          <li><b>然後你就不用再做什麼了</b><br>
+              核准、不核准、歸還結案，每一步都會寄 Email 給你。</li>
+        </ol>
+        <div class="tip">
+          拿東西：核准信寄到就可以去現場拿，<b>不用再回系統簽收</b>。<br>
+          還東西：交給管理者，他登記完你會收到結案信。
+        </div>
+        <h3>小提醒</h3>
+        <ul>
+          <li>填錯了 → 「我的借用」按 <span class="k">修改申請</span>（核准之後要找管理者）</li>
+          <li>不借了 → 待審核時按 <span class="k">取消申請</span></li>
+          <li>要延期 → <b>跟管理者說</b>，他可以直接幫你改歸還日</li>
+          <li>東西要給別的同事用 → 請他自己開一張單，<span class="muted">系統沒有「轉借」這個動作</span></li>
+          <li>要紙本簽名 → 單子上按 <span class="k">列印</span></li>
+          <li>公用電腦記得按右上角登出</li>
+        </ul>
+
+        <h3>「我的借用」上的狀態是什麼意思</h3>
+        <table class="stt">
+          <tr><td><span class="pill pend">待審核</span></td><td>單子送出去了，等管理者看。<b>這時候還可以自己改或取消。</b></td></tr>
+          <tr><td><span class="pill out">出借中</span></td><td>已經核准，<b>東西算在你手上了</b>。去現場拿（或已經拿了），還的時候交給管理者。</td></tr>
+          <tr><td><span class="pill done">已歸還</span></td><td>管理者登記完了，結案。</td></tr>
+          <tr><td><span class="pill bad2">已駁回</span></td><td>沒核准，信裡會寫原因。要改就重開一張。</td></tr>
+        </table>
+        <div class="tip" style="background:#fdf1f3">
+          <b>過了歸還日還沒還＝逾期。</b>系統會一直把它算成佔用，別人就借不到那幾台 —— 還不了的話先跟管理者說一聲延期。
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h2>我管展品 <span class="who">展品管理者</span></h2>
+        <div class="warn">
+          <b>⚠ 按下「核准」＝ 東西交出去了。</b>
+          單子直接變「出借中」，庫存立刻扣掉、逐台編號也當場綁好。
+          <b>先確認東西真的在架上、人也來拿了再按。</b>
+        </div>
+        <ul>
+          <li><b>按錯了</b> → 對出借中的單按 <span class="k">取消核准</span>，綁定的編號會放回架上。<span class="muted">已經登記過歸還的不行，改用登記歸還。</span></li>
+          <li><b>東西還回來</b> → <span class="k">登記歸還</span>：填<b>還幾台 / 其中損壞幾台 / 短少幾台</b>，還可以選還到哪一個廠區。<span class="muted">損壞的東西還算在庫存裡，只是留個記號。</span></li>
+          <li><b>口頭借用</b> → 「借用申請」勾 <span class="k">代為登記</span>，直接變出借中。<b>工號要對得到真帳號</b>，不然通知寄不到他。</li>
+          <li><b>一次核准很多張</b> → 待審核超過兩張會出現批次列，數量不夠的會被跳過並告訴你原因。</li>
+          <li><b>下架 vs 刪除</b> → 暫時不用就下架（紀錄都在，隨時上架）；<span class="muted">借過的展品刪不掉。</span></li>
+        </ul>
+        <div class="tip">每一步都會<b>同時寄信給申請人和按下按鈕的你</b>，兩邊留底。</div>
+      </div>
+
+      <div class="card">
+        <h2>我只是想看一下 <span class="who">主管</span></h2>
+        <ul>
+          <li><b>總覽</b>：展品品項 / 總件數 / 倉庫在庫三塊磚，<b>點得開</b>看各廠區數字。</li>
+          <li><b>今天要做的事</b>：逾期未還、待審核、今天到期、已停用的人手上還沒還的單，都收在總覽最上面。</li>
+          <li><b>匯出庫存表</b>：總覽右上角一鍵匯出，可以直接給人。</li>
+          <li><b>東西在誰手上</b>：借用單與盤點頁都查得到，盤點時「借出中」的會另外列，不用盤也不算短少。</li>
+          <li><b>整場展覽</b>：「展覽檔期」可以把一場展覽底下的好幾張單管在一起，確認檔期之後，<b>還沒開單的部分會先幫你把庫存卡住</b>，不會被別人借走。</li>
+          <li><b>系統不會自己改庫存</b>：展後結算把「規劃 / 借出 / 已還 / 短少 / 未還」攤開給人看，追討還是人的事。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="faq">
+    <h2>常見問題</h2>
+    <div class="faqgrid">
+      <div><b>一直要我填 Email？</b>　沒有 Email 就收不到任何通知，填一次就好。</div>
+      <div><b>查無此工號？</b>　請管理者把你加進人員名冊。</div>
+      <div><b>可借數量比倉庫少？</b>　被別張借用單或展覽卡位佔住了。出借中的單<b>從今天就開始佔</b>，不是從借出日才算。</div>
+      <div><b>核准時說「現在只有 N 台在庫」？</b>　那個廠區實際不夠這張單要的量，先確認實物。</div>
+      <div><b>管理者 PIN 一直錯？</b>　連錯 5 次會鎖 10 分鐘，等一下再試。</div>
+      <div><b>畫面怪怪的 / 數字不對？</b>　重新整理一次。系統換版時會自己跳出「立即更新」。</div>
+    </div>
+    <div class="foot">
+      <span>展品借用系統 · 一頁上手</span><span class="sp"></span>
+      <span>流程版本 v3.0（2026-10）· 詳細說明見系統內「借用單」頁面上的提示</span>
+    </div>
+  </div>
+
+</div></body></html>
