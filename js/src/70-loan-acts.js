@@ -75,7 +75,7 @@ function printLoan(id) {
     + '<h1>展品借用單 ' + esc(L.id) + '</h1><div class="sub">' + esc(L.statusLabel) + '・列印於 ' + esc(todayStr()) + '</div>'
     + '<table>' + row('活動', L.event) + row('借用人', L.applicant + (L.dept ? '・' + L.dept : '')) + row('聯絡', L.contact)
     + row('地點', L.venue) + row('用途', L.purpose) + row('期間', L.start + ' → ' + L.end)
-    + row('點交', L.outAt) + row('歸還', L.returnedAt) + row('備註', L.note) + '</table>'
+    + row('出借', L.outAt) + row('歸還', L.returnedAt) + row('備註', L.note) + '</table>'
     + '<table class="items"><thead><tr><th>品名</th><th>取自</th><th>方式</th><th class="n">數量</th><th>單台編號</th></tr></thead><tbody>' + lines + '</tbody></table>'
     + '<div class="sign"><div>借用人簽名</div><div>展品管理者簽名</div></div>'
     + '</body></html>');
@@ -86,16 +86,33 @@ function printLoan(id) {
 async function approveModal(id) {
   const L = await getLoan(id);
   const short = (L.check || []).filter(c => c.short);
+  /**
+   * v3.0 起**核准就是出借**:按下去的那一刻單子變成「出借中」、庫存立刻扣掉、
+   * 逐台編號也當場綁定。這跟以前「核准 → 之後再點交」差很多,
+   * 所以這裡一定要講明白 —— 不然會有人在東西還沒交出去的時候就先按核准。
+   */
   const m = openModal(`<h2>核准 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・${esc(L.applicant)}・${esc(L.start)} → ${esc(L.end)}</p>
+    <div class="banner warn" style="font-size:13px">核准之後這張單<b>直接變成「出借中」</b>:庫存立刻扣掉,逐台編號也會當場綁好。
+      請先確認東西真的在架上、人也來拿了再按。</div>
     ${short.length ? `<div class="banner bad">數量不足:${short.map(s => esc(s.name) + ' 缺 ' + s.short).join('、')}</div><label class="chk" style="margin-bottom:12px"><input type="checkbox" id="af">仍要核准(強制)</label>` : '<div class="banner ok">所有展品在期間內數量足夠</div>'}
-    <label class="f"><span>給借用人的備註(選填)</span><input type="text" id="an" placeholder="例:請於 9:00 到湖口倉領取"></label>
-    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="ago">核准</button></div>`);
-  $('#ago', m).onclick = async () => { await run(() => api('approve', { id, note: $('#an', m).value, force: $('#af', m) && $('#af', m).checked }), '已核准').then(() => { closeModal(); render(); }).catch(() => { }); };
+    <label class="f"><span>給借用人的備註(選填)</span><input type="text" id="an" placeholder="例:附件與電源線一起帶走了"></label>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="ago">核准,直接出借</button></div>`);
+  $('#ago', m).onclick = async () => { await run(() => api('approve', { id, note: $('#an', m).value, force: $('#af', m) && $('#af', m).checked }), '核准完成,展品已交付').then(() => { closeModal(); render(); }).catch(() => { }); };
 }
+/**
+ * 同一條後端路由(reject)被兩種情境共用:待審核的「駁回」、出借中的「取消核准」。
+ * 文案不分開的話,按了「取消核准」卻跳出「確認駁回」、成功訊息也寫「已駁回」——
+ * 而「東西會被收回來」這件最重要的事反而沒人講。
+ */
 function rejectModal(id) {
-  const m = openModal(`<h2>駁回 / 取消 ${esc(id)}</h2><label class="f"><span>原因 <b>*</b></span><textarea id="rn" rows="3"></textarea></label>
-    <div class="modal-f"><button class="btn" data-act="close">返回</button><button class="btn pri" id="rgo" style="background:var(--bad);border-color:var(--bad);color:#fff">確認駁回</button></div>`);
-  $('#rgo', m).onclick = () => run(() => api('reject', { id, note: $('#rn', m).value }), '已駁回').then(() => { closeModal(); render(); }).catch(() => { });
+  const L = findLoan(id), back = L && L.status === 'out';
+  const m = openModal(`<h2>${back ? '取消核准' : '駁回'} ${esc(id)}</h2>
+    ${back ? `<div class="banner warn" style="font-size:13px">這張單已經是「出借中」,取消核准等於<b>把東西收回來</b>:
+      綁定的單台編號會放回架上,數量也會還原。<br>已經登記過歸還或短少的單不能這樣取消,請改用「登記歸還」把剩下的登記完。</div>` : ''}
+    <label class="f"><span>原因 <b>*</b></span><textarea id="rn" rows="3"></textarea></label>
+    <div class="modal-f"><button class="btn" data-act="close">返回</button><button class="btn pri" id="rgo" style="background:var(--bad);border-color:var(--bad);color:#fff">${back ? '確認取消核准' : '確認駁回'}</button></div>`);
+  $('#rgo', m).onclick = () => run(() => api('reject', { id, note: $('#rn', m).value }), back ? '已取消核准,東西放回架上' : '已駁回')
+    .then(() => { closeModal(); render(); }).catch(() => { });
 }
 function backSelect(l) {
   const here = nloc(l.location);

@@ -42,6 +42,21 @@ function run(file) {
   }
   const before = fs.existsSync(gl.OUT) ? fs.readFileSync(gl.OUT, 'utf8') : null;
   if (before !== joined) {
+    /**
+     * ⚠️ 這裡會直接覆蓋掉 gas/20_logic.gs。2026-10-01 真的踩到:
+     * 改錯地方(直接改產物)、build 一跑就被蓋回去,而且原本只印一行「已更新」,
+     * 看起來像正常的建置訊息 —— 改動就這樣無聲無息地不見了。
+     * 所以:產物比所有原始碼都新 = 有人直接改了產物,**當場停下來**,不要幫他蓋掉。
+     */
+    const outM = before === null ? 0 : fs.statSync(gl.OUT).mtimeMs;
+    const srcM = Math.max(...gl.parts().map(f => fs.statSync(path.join(gl.SRC, f)).mtimeMs));
+    if (outM > srcM) {
+      console.error('✘ gas/20_logic.gs 比 gas-src/20_logic 的每一個檔都新,而且內容對不上。');
+      console.error('  看起來是直接改到**產物**了 —— 那個檔是建置出來的,改它沒有用。');
+      console.error('  請把改動搬到 gas-src/20_logic/ 底下對應的分片,再跑一次 node build.js。');
+      console.error('  (真的要丟掉那些改動,就先 git checkout gas/20_logic.gs)');
+      process.exit(1);
+    }
     fs.writeFileSync(gl.OUT, joined);
     console.log('  gas-src/20_logic → gas/20_logic.gs(' + gl.parts().length + ' 個檔,已更新,記得一起 commit)');
   }

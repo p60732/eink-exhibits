@@ -1,6 +1,6 @@
 /* ===================== 事件分派 ===================== */
 const ACT = {
-  'go': el => { closeModal(); go(el.dataset.v); },
+  'go': el => { closeModal(); if (el.dataset.f) S.loanFilter = el.dataset.f; go(el.dataset.v); },
   'go-loans': el => { S.loanFilter = el.dataset.f; go('loans'); },
   'open-loan': el => { S.loanFilter = el.dataset.st; if (/逾期/.test(el.textContent)) S.loanFilter = 'overdue'; S._focusLoan = el.dataset.id; go('loans'); },
   'lf': el => { S.loanFilter = el.dataset.f; render(); },
@@ -145,7 +145,7 @@ const ACT = {
     S.showLines = null; render();
   },
   'show-gen': async () => {
-    if (!confirmInline('依地點產生借用單?每個還需要開單的地點各開一張,直接成為已核准。')) return;
+    if (!confirmInline('依地點產生借用單?每個還需要開單的地點各開一張,直接成為「出借中」——\n等於東西當下就交出去了,逐台編號也會自動綁定。')) return;
     const r = await run(() => api('createLoansFromShow', { id: S.showId })).catch(() => null);
     if (!r) return;
     S.showLines = null;
@@ -272,7 +272,7 @@ const ACT = {
   'show-extend': async () => {
     const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });
     const live = (v.loans || []).filter(L => L.status === 'out');
-    if (!live.length) return toast('底下沒有可以延期的借用單(只有已核准 / 出借中的單能延)', true);
+    if (!live.length) return toast('底下沒有可以延期的借用單(只有出借中的單能延)', true);
     const newEnd = esc(v.to);
     openModal(`<h2>批次延期</h2>
       <p class="meta">改檔期不會自動改單。勾選要一起延的,系統會逐張檢查延長那一段的庫存,一張失敗不影響其他張。</p>

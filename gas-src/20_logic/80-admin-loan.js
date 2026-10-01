@@ -77,7 +77,7 @@
     extendLoan: function (c) {
       var L = byId(c.db.Loans, s(c.p.id));
       if (!L) throw E('找不到借用單');
-      if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以延期');
+      if (L.status !== 'approved' && L.status !== 'out') throw E('只有出借中的借用可以延期');
       return doExtend(c, L, s(c.p.end), s(c.p.note), bool(c.p.force));
     },
     /** 批次核准:一張失敗不影響其他張,回報哪幾張沒過 */

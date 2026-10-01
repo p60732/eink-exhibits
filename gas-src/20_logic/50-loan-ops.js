@@ -7,7 +7,7 @@
     return checkLines(db, L.lines, addDays(L.end, 1), newEnd, L.id, today, s(L.showId)).filter(function (x) { return x.short > 0; });
   }
   function doExtend(c, L, newEnd, note, force) {
-    if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以延期');
+    if (L.status !== 'approved' && L.status !== 'out') throw E('只有出借中的借用可以延期');
     var short = checkExtend(c.db, L, newEnd, c.today);
     if (short.length && !force) throw E('延長期間數量不足:' + short.map(function (x) { return x.name + ' 缺 ' + x.short; }).join('、') + '。若仍要延期請勾選「強制」');
     var old = L.end;

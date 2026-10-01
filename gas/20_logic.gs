@@ -493,7 +493,7 @@ var Logic = (function () {
     return checkLines(db, L.lines, addDays(L.end, 1), newEnd, L.id, today, s(L.showId)).filter(function (x) { return x.short > 0; });
   }
   function doExtend(c, L, newEnd, note, force) {
-    if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以延期');
+    if (L.status !== 'approved' && L.status !== 'out') throw E('只有出借中的借用可以延期');
     var short = checkExtend(c.db, L, newEnd, c.today);
     if (short.length && !force) throw E('延長期間數量不足:' + short.map(function (x) { return x.name + ' 缺 ' + x.short; }).join('、') + '。若仍要延期請勾選「強制」');
     var old = L.end;
@@ -1123,7 +1123,7 @@ var Logic = (function () {
     extendLoan: function (c) {
       var L = byId(c.db.Loans, s(c.p.id));
       if (!L) throw E('找不到借用單');
-      if (L.status !== 'approved' && L.status !== 'out') throw E('只有已核准或出借中的借用可以延期');
+      if (L.status !== 'approved' && L.status !== 'out') throw E('只有出借中的借用可以延期');
       return doExtend(c, L, s(c.p.end), s(c.p.note), bool(c.p.force));
     },
     /** 批次核准:一張失敗不影響其他張,回報哪幾張沒過 */
@@ -1501,7 +1501,7 @@ var Logic = (function () {
       var on = !!c.p.archived;
       if (on) {
         var st = stats(c.db)[it.id];
-        if (st.out || st.reserved) throw E('此展品還有借出或已核准的借用,無法下架');
+        if (st.out || st.reserved) throw E('此展品還有借出中的借用,無法下架');
         // 待審核不算在 reserved 裡,但下架之後核准就會變成「看不到的展品被借出去」
         var wait = c.db.Loans.filter(function (L) {
           return L.status === 'pending' && (L.lines || []).some(function (ln) { return ln.itemId === it.id; });
@@ -1533,7 +1533,7 @@ var Logic = (function () {
       var p = c.p.unit || {}, u = byId(c.db.Units, s(p.id).toUpperCase());
       if (!u) throw E('找不到編號');
       if (p.status && p.status !== u.status) {
-        if (u.status === 'out' || p.status === 'out') throw E('借出狀態請透過點交 / 歸還變更');
+        if (u.status === 'out' || p.status === 'out') throw E('借出狀態請透過核准 / 登記歸還變更');
         if (!UNIT_ST[p.status]) throw E('狀態不正確');
         log(c, '變更單台狀態', u.id, UNIT_ST[u.status] + ' → ' + UNIT_ST[p.status] + (s(p.note) ? '(' + s(p.note) + ')' : ''));
         u.status = p.status;

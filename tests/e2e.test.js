@@ -186,7 +186,7 @@ ok('cancelLoan', { id: H2.id }, A);
 
 // 待審核的不能延期(核准了才有東西可以延)
 const E4 = ok('createLoan', { event: '還沒審', start: '2026-12-10', end: '2026-12-12', lines: [{ itemId: stand.id, qty: 1 }] }, U);
-bad('extendLoan', { id: E4.id, end: '2026-12-20' }, A, /已核准或出借中/);
+bad('extendLoan', { id: E4.id, end: '2026-12-20' }, A, /只有出借中的借用可以延期/);
 ok('cancelLoan', { id: E4.id }, U);
 
 // ---- 分類 ----
@@ -364,7 +364,7 @@ ok('receive', { id: R2.id, lines: [{ itemId: RQ.id, location: '林口', returned
 const R3 = ok('createLoan', { event: '取消核准測試', start: '2026-09-25', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
 ok('approve', { id: R3.id }, A);
 ok('reject', { id: R3.id, note: '不准' }, A);
-bad('extendLoan', { id: R3.id, end: '2026-11-30' }, A, /已核准或出借中/);
+bad('extendLoan', { id: R3.id, end: '2026-11-30' }, A, /只有出借中的借用可以延期/);
 // 已經登記過歸還的就不能整張收回去了
 const R3b = ok('createLoan', { event: '還一半不給取消', start: '2026-09-25', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 2 }] }, U);
 ok('approve', { id: R3b.id }, A);

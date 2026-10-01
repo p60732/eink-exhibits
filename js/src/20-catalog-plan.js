@@ -51,7 +51,7 @@ VIEWS.catalog = async main => {
     </div>
     <!-- 挑選中的提示與「一起填單」都放進釘住的那一塊:往下挑的時候按鈕要一直在手邊 -->
     <div class="catbar-stick" id="cbars">${pick ? `<div class="card bulkbar" id="pickbar"></div>` : ''}<div class="catbar" id="csite"></div><div id="cbar"></div><div id="mbar"></div></div>
-    ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到借用申請</a></div>` : ''}
+    ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除出借中的借用與展覽卡位)。 <a href="#" data-act="use-range">套用到借用申請</a></div>` : ''}
     <div id="cgrid"></div>`;
   const card = i => {
     const inCart = pick
@@ -174,7 +174,7 @@ VIEWS.plan = async main => {
       ${admin ? `<div class="card" style="background:var(--surface-2);box-shadow:none;margin-bottom:12px">
         <label class="chk"><input type="checkbox" name="onBehalf" id="ob">代為登記(口頭借用 / 臨時借出)</label>
         <div id="obf" class="hidden" style="margin-top:10px"><label class="f"><span>借用人工號或姓名 <b>*</b></span><input type="text" name="applicant" list="ulist"></label>
-        <div class="meta">代為登記會直接成為「已核准」,可立即到借用單點交。<b>借用人要對得到真實帳號</b>(從上面的清單選),通知才寄得到他。</div>
+        <div class="meta">代為登記會直接成為「<b>出借中</b>」—— 等於東西當下就交出去了,逐台編號也會自動綁定。<b>借用人要對得到真實帳號</b>(從上面的清單選),通知才寄得到他。</div>
         <label class="chk" style="margin-top:8px"><input type="checkbox" name="force">數量不足仍建立</label></div>
         <datalist id="ulist"></datalist></div>` : ''}
       <button class="btn pri" style="width:100%" id="psubmit">${ed ? '儲存修改' : '送出借用申請'}</button>
@@ -245,9 +245,13 @@ VIEWS.plan = async main => {
     const L = await run(() => api('createLoan', payload)).catch(() => null);
     if (!L) return;
     S.cart = []; store.del(uk('draft')); saveCart();
-    openModal(`<h2>${L.status === 'approved' ? '已建立借用單' : '申請已送出'}</h2>
-      <p>單號 <b class="mono">${esc(L.id)}</b>。${L.status === 'approved' ? '已直接核准,可前往借用單進行點交。' : '管理者核准後會通知你(有填 Email 的話),可在「我的借用」查看進度。'}</p>
-      <div class="modal-f"><button class="btn" data-act="close">留在此頁</button><button class="btn pri" data-act="go" data-v="${L.status === 'approved' ? 'loans' : 'mine'}" data-f="${L.status}">查看借用單</button></div>`);
+    // 代為登記回來的是「出借中」(v3.0 起沒有「已核准」這個中繼狀態了),兩邊的文案與落點都要跟著分
+    const direct = L.status === 'out';
+    openModal(`<h2>${direct ? '已建立借用單' : '申請已送出'}</h2>
+      <p>單號 <b class="mono">${esc(L.id)}</b>。${direct
+        ? '已直接登記為「出借中」,展品當下就算交出去了。歸還時再到借用單按「登記歸還」。'
+        : '管理者核准或不核准都會寄 Email 通知你,核准的那一刻展品就算交付了。進度也可以在「我的借用」查看。'}</p>
+      <div class="modal-f"><button class="btn" data-act="close">留在此頁</button><button class="btn pri" data-act="go" data-v="${direct ? 'loans' : 'mine'}" data-f="${direct ? 'out' : ''}">查看借用單</button></div>`);
     render();
   };
 };

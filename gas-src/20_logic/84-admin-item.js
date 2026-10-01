@@ -115,7 +115,7 @@
       var on = !!c.p.archived;
       if (on) {
         var st = stats(c.db)[it.id];
-        if (st.out || st.reserved) throw E('此展品還有借出或已核准的借用,無法下架');
+        if (st.out || st.reserved) throw E('此展品還有借出中的借用,無法下架');
         // 待審核不算在 reserved 裡,但下架之後核准就會變成「看不到的展品被借出去」
         var wait = c.db.Loans.filter(function (L) {
           return L.status === 'pending' && (L.lines || []).some(function (ln) { return ln.itemId === it.id; });
@@ -147,7 +147,7 @@
       var p = c.p.unit || {}, u = byId(c.db.Units, s(p.id).toUpperCase());
       if (!u) throw E('找不到編號');
       if (p.status && p.status !== u.status) {
-        if (u.status === 'out' || p.status === 'out') throw E('借出狀態請透過點交 / 歸還變更');
+        if (u.status === 'out' || p.status === 'out') throw E('借出狀態請透過核准 / 登記歸還變更');
         if (!UNIT_ST[p.status]) throw E('狀態不正確');
         log(c, '變更單台狀態', u.id, UNIT_ST[u.status] + ' → ' + UNIT_ST[p.status] + (s(p.note) ? '(' + s(p.note) + ')' : ''));
         u.status = p.status;

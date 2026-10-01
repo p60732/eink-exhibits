@@ -1,7 +1,7 @@
 VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
   S._loans = list;
   const act = list.filter(l => l.status === 'pending' || l.status === 'out'), past = list.filter(l => !act.includes(l));
-  main.innerHTML = `<div class="eyebrow">My Loans</div><h1>我的借用</h1><p class="sub">申請進度、借用中的展品與歸還日。</p>
+  main.innerHTML = `<div class="eyebrow">My Loans</div><h1>我的借用</h1><p class="sub">只有送出申請要填單,之後核准、歸還都會寄 Email 通知你。這裡看得到進度與歸還日。</p>
     ${act.some(l => l.overdue) ? '<div class="banner bad">你有逾期未歸還的展品,請儘速歸還。</div>' : ''}
     <div class="row"><span class="spacer"></span><button class="btn sm ghost" data-act="loan-foldall">全部展開</button></div>
     <h2>進行中(${act.length})</h2><div class="loans">${act.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">目前沒有進行中的借用</div>'}</div>

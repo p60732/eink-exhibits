@@ -60,13 +60,13 @@ function settleCard(v, SE) {
       <button class="btn sm" data-act="settle-csv">${ICON.dl}匯出清單</button></div>
     <div class="meta" style="margin:6px 0">${SE.archived
       ? '底下的借用單已經封存到歷史工作表,這裡顯示的是結案當下留下的數字。'
-      : '即時計算。駁回與取消的單不算;已開單但還沒領走的另外列在「已開單」。'}</div>
+      : '即時計算。駁回與取消的單不算;還在等審核、東西還沒出去的另外列在「已開單」。'}</div>
     ${bad ? `<div class="banner bad"><b>還有 ${T.unreturned || 0} 件沒回來、${T.lost || 0} 件短少</b> —— 明細在下面,請自行追討;系統不會自動扣庫存。</div>`
       : `<div class="banner ok"><b>東西都回來了</b>,共 ${T.issued || 0} 件。</div>`}
     <div class="tbl-wrap"><table><thead><tr><th>展品</th><th class="num">規劃</th><th class="num">實際借出</th><th class="num">已歸還</th><th class="num">短少</th><th class="num">未歸還</th><th>借用單</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="7" class="empty">沒有資料</td></tr>'}
       <tr class="grouph"><th>合計</th><th class="num">${T.planned || 0}</th><th class="num">${T.issued || 0}</th><th class="num">${T.returned || 0}</th><th class="num">${T.lost || 0}</th><th class="num">${T.unreturned || 0}</th><th></th></tr></tbody></table></div>
-    ${T.booked ? `<div class="meta" style="margin-top:8px">另有 ${T.booked} 件已開單但還沒領走。</div>` : ''}
+    ${T.booked ? `<div class="meta" style="margin-top:8px">另有 ${T.booked} 件已經開單、但還在等審核(東西還沒出去)。</div>` : ''}
   </div>`;
 }
 
