@@ -306,4 +306,13 @@ t('人員管理不再收部門,而且 Email 要看得出有沒有', () => {
   assert.ok(/if \(p\.email !== undefined\) u\.email = s\(p\.email\);/.test(i),
     '★ saveUser 沒帶到的欄位要保留原值,不可以整列覆蓋');
 });
+t('「一起填單」要釘在分類籤條那一塊裡面', () => {
+  // 往下挑的時候按鈕要一直在手邊。以前靠 .multibar 的 sticky bottom,
+  // 但它的容器只有自己那麼高,捲過去就跟著不見了 —— 挑到一半還得捲回最上面。
+  const ui = read('js/ui.js'), css = read('css/style.css');
+  const bars = (ui.match(/<div class="catbar-stick" id="cbars">[^\n]*/) || [])[0] || '';
+  assert.ok(/id="mbar"/.test(bars), '★ #mbar 必須放在 .catbar-stick 裡面');
+  assert.ok(/id="pickbar"/.test(bars), '★ 挑選模式的那一條也要放在 .catbar-stick 裡面');
+  assert.ok(!/\.multibar\{position:sticky;bottom/.test(css), '★ 舊的 sticky bottom 要拿掉,不然兩種釘法會打架');
+});
 console.log('✔ 結構檢查 ' + n + ' 項通過');

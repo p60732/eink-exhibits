@@ -727,6 +727,25 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     await stickyOk('catalog', '#cbars', '展品目錄');
     await stickyOk('items', '#ibars', '展品管理');
     await stickyOk('count', '#kbars', '盤點');
+    // 多選的「一起填單」要跟著釘住:捲到下面還要看得到、按得到(2026-10-01 回報)
+    {
+      await p.click('[data-v=catalog]'); await wait(1500);
+      await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+      const box = await p.$$('[data-mpick]');
+      if (!box.length) throw new Error('目錄上找不到多選框');
+      await box[0].check(); await wait(400);
+      if (!await p.$('[data-act=multi-go]')) throw new Error('勾了之後應該出現「一起填單」');
+      const topH = await p.$eval('.top', el => el.getBoundingClientRect().height);
+      await p.evaluate(() => window.scrollTo(0, 3000)); await wait(400);
+      const m = await (await p.$('[data-act=multi-go]')).boundingBox();
+      if (!m) throw new Error('★ 捲下去之後「一起填單」不見了 —— 要跟分類籤條一起釘住');
+      if (m.y < 0 || m.y > topH + 140) throw new Error('★ 捲下去時「一起填單」要還在畫面上方(標題列高 '
+        + Math.round(topH) + ',按鈕在 ' + Math.round(m.y) + ')');
+      // 釘住之後還要按得動
+      await p.click('[data-act=multi-clear]'); await wait(400);
+      if (await p.$('[data-act=multi-go]')) throw new Error('清空之後那一條應該收起來');
+      await p.evaluate(() => window.scrollTo(0, 0)); await wait(200);
+    }
     // 展品目錄釘的也是兩排(廠區 + 分類)
     {
       await p.click('[data-v=catalog]'); await wait(1200);

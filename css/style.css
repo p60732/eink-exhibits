@@ -258,7 +258,12 @@ tr.dim td{opacity:.5}
 .todo-row .meta{flex:1 1 180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card.ok-empty{margin-top:14px;text-align:center;color:var(--muted);font-size:14px}
 /* 目錄多選一起填單:固定在畫面下方 */
-.multibar{position:sticky;bottom:12px;z-index:5;box-shadow:0 6px 24px rgba(51,63,72,.18)}
+/* 多選的「一起填單」與挑選模式的「完成」跟著分類籤條一起釘在上面 ——
+   往下挑的時候那顆按鈕要一直在手邊,不要挑到一半還得捲回最上面(2026-10-01 回報)。
+   以前是靠 .multibar 的 sticky bottom,但它的容器只有自己那麼高,捲過去就跟著不見了。 */
+.catbar-stick>#mbar:empty{display:none}
+.catbar-stick .bulkbar{margin:0 0 10px}
+.multibar{box-shadow:0 2px 10px rgba(51,63,72,.10)}
 /* 展品照片:預覽與上傳 */
 .photo{margin-top:6px;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;background:var(--surface-2);
   height:170px;display:flex;align-items:center;justify-content:center}

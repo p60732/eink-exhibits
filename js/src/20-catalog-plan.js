@@ -43,15 +43,14 @@ VIEWS.catalog = async main => {
   const picked = () => (S.showLines || []).reduce((a, l) => a + l.qty, 0);
   main.innerHTML = `<div class="eyebrow">Catalog</div><h1>展品目錄</h1>
     ${pick ? '' : `<p class="sub">即時庫存。選擇日期區間可查看該期間還能借多少,再加入「借用申請」。</p>`}
-    ${pick ? `<div class="card bulkbar" id="pickbar"></div>` : ''}
     <div class="toolbar">
       <input class="grow" type="search" id="cq" placeholder="搜尋品名、規格、位置…" value="${esc(f.q)}">
       ${pick ? '' : `<span class="row" style="gap:6px"><input type="date" id="cs" ${DLIM()} value="${esc(f.start)}" aria-label="起"><span class="meta">→</span><input type="date" id="ce" ${DLIM()} value="${esc(f.end)}" aria-label="迄"></span>`}
       <label class="chk"><input type="checkbox" id="cav" ${f.onlyAvail ? 'checked' : ''}>只看可借</label>
       ${pick ? '' : `<button class="btn" data-act="export" title="把目前的庫存表匯出成 CSV" aria-label="匯出庫存 CSV">${ICON.dl}<span class="lbl-hide">匯出</span></button>`}
     </div>
-    <div class="catbar-stick" id="cbars"><div class="catbar" id="csite"></div><div id="cbar"></div></div>
-    <div id="mbar"></div>
+    <!-- 挑選中的提示與「一起填單」都放進釘住的那一塊:往下挑的時候按鈕要一直在手邊 -->
+    <div class="catbar-stick" id="cbars">${pick ? `<div class="card bulkbar" id="pickbar"></div>` : ''}<div class="catbar" id="csite"></div><div id="cbar"></div><div id="mbar"></div></div>
     ${range && !pick ? `<div class="banner info">顯示 <b>${esc(f.start)} → ${esc(f.end)}</b> 期間可借數量(已扣除已核准與出借中的借用)。 <a href="#" data-act="use-range">套用到借用申請</a></div>` : ''}
     <div id="cgrid"></div>`;
   const card = i => {
