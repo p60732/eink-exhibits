@@ -56,6 +56,18 @@ if (!args.includes('--no-test')) ['rules.test.js', 'e2e.test.js', 'structure.tes
 const uiArg = args.find(a => a === '--ui' || a.startsWith('--ui='));
 if (uiArg) {
   const ids = uiArg.includes('=') ? uiArg.slice(5).split(',').map(x => x.trim()).filter(Boolean) : [];
+  /**
+   * 先確認這台機器跑得動 —— UI 場景要 playwright 的 chromium,**Mac 上沒有**,
+   * 只跑得動在雲端沙箱。不先擋的話錯誤會長成
+   * 「Cannot find module 'playwright'」夾在測試輸出中間,看起來像某個場景壞了。
+   */
+  try { require.resolve('playwright'); }
+  catch (e) {
+    console.error('✘ 這台機器沒有 playwright,跑不了 UI 場景測試。');
+    console.error('  UI 測試只跑得動在雲端沙箱(Mac 上沒有 chromium)。');
+    console.error('  後端四層已經跑完了,要只建置請改用:node build.js --no-test');
+    process.exit(1);
+  }
   const port = 8700 + Math.floor(Math.random() * 200);
   const srv = require('child_process').spawn(process.execPath, [path.join(root, 'tests', 'serve.js'), String(port)],
     { stdio: 'ignore', detached: true });
