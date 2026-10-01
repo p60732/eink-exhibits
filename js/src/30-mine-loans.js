@@ -3,6 +3,7 @@ VIEWS.mine = main => withData(main, 'mine', 'myLoans', {}, list => {
   const act = list.filter(l => ['pending', 'approved', 'out'].includes(l.status)), past = list.filter(l => !act.includes(l));
   main.innerHTML = `<div class="eyebrow">My Loans</div><h1>我的借用</h1><p class="sub">申請進度、借用中的展品與歸還日。</p>
     ${act.some(l => l.overdue) ? '<div class="banner bad">你有逾期未歸還的展品,請儘速歸還。</div>' : ''}
+    <div class="row"><span class="spacer"></span><button class="btn sm ghost" data-act="loan-foldall">全部展開</button></div>
     <h2>進行中(${act.length})</h2><div class="loans">${act.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">目前沒有進行中的借用</div>'}</div>
     <h2>歷史紀錄</h2><div class="loans">${past.map(l => loanCard(l, { mine: true })).join('') || '<div class="card empty">尚無紀錄</div>'}</div>`;
 });
@@ -146,6 +147,7 @@ VIEWS.loans = main => {
     }).join('')}</div>
     <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…">
     ${LOAN_HIST[srv] ? `<label class="chk"><input type="checkbox" id="lhist" ${S.loanHist ? 'checked' : ''}>含歷史資料</label>` : ''}
+    <button class="btn sm ghost" data-act="loan-foldall">全部展開</button>
     <button class="btn sm ghost" data-act="arch-open">整理歷史</button></div>
     ${hist ? '<div class="banner info">已含封存到歷史工作表的舊單(標示「已封存」的那些)。查完建議取消勾選,平常翻單會比較快。</div>' : ''}
     <div id="lbulk"></div>

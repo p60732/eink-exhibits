@@ -807,6 +807,37 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     if (h > 1) throw new Error('★ 總覽:收起之後空容器還佔了 ' + Math.round(h) + 'px');
   }
 
+  // ---- 每張借用單自己收合:預設只露出標題與狀態,按鈕不收(2026-10-01)----
+  {
+    await p.click('[data-v=loans]'); await wait(1200);
+    await p.click('[data-act=lf][data-f=all]'); await wait(1500);
+    const card = await p.$('.loan');
+    if (!card) throw new Error('借用單頁上沒有任何單子');
+    const id = await card.getAttribute('id');
+    const body = async () => await p.isVisible(`#${id} .loan-body`);
+    if (await body()) throw new Error('★ 預設應該是收起來的,只露出標題與狀態');
+    if (!await p.isVisible(`#${id} .loan-h h3`)) throw new Error('★ 收起來的時候標題還是要看得到');
+    // 有動作按鈕的單,按鈕不可以被收掉 —— 收起來還是要能直接核准 / 點交 / 歸還
+    const withAct = await p.$('.loan:has(.actions)');
+    if (withAct) {
+      const aid = await withAct.getAttribute('id');
+      if (!await p.isVisible(`#${aid} .actions`)) throw new Error('★ 收起來的時候操作按鈕要還在');
+    }
+    await p.click(`#${id} [data-act=loan-fold]`); await wait(400);
+    if (!await body()) throw new Error('★ 點 + 要展開細項');
+    if (await p.textContent(`#${id} [data-act=loan-fold]`) !== '−') throw new Error('展開後按鈕要變成 −');
+    await p.click(`#${id} [data-act=loan-fold]`); await wait(400);
+    if (await body()) throw new Error('★ 再點一次要收回去');
+    // 全部展開 / 全部收合
+    await p.click('[data-act=loan-foldall]'); await wait(500);
+    const opened = await p.$$eval('.loan', els => els.filter(e => e.classList.contains('open')).length);
+    const total = await p.$$eval('.loan', els => els.length);
+    if (opened !== total) throw new Error('★ 全部展開要全開(' + opened + '/' + total + ')');
+    await p.click('[data-act=loan-foldall]'); await wait(500);
+    const still = await p.$$eval('.loan', els => els.filter(e => e.classList.contains('open')).length);
+    if (still !== 0) throw new Error('★ 再按一次要全部收合,還開著 ' + still + ' 張');
+  }
+
   // ---- 封存過的舊單預設收起來(2026-10-01 回報:歷史單太多很亂)----
   {
     await p.click('[data-v=loans]'); await wait(1200);

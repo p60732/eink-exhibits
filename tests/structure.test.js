@@ -362,5 +362,20 @@ t('連線層實測:一樣的寫入同時送兩次,只能發出一趟', () => {
     });
 });
 
+t('借用單一張一張收合:預設只露出標題與狀態,但按鈕不收', () => {
+  const ui = read('js/ui.js'), css = read('css/style.css');
+  assert.ok(/data-act="loan-fold"/.test(ui), '★ 每張單的標題旁要有收合鈕');
+  assert.ok(/\.loan \.loan-body\{display:none\}/.test(css) && /\.loan\.open \.loan-body\{display:block\}/.test(css),
+    '★ 細項預設收起來,open 才展開');
+  // 操作按鈕必須在 .loan-body 外面 —— 收起來還是要能直接核准 / 點交 / 歸還
+  const i0 = ui.indexOf('<div class="loan-body">');
+  const i1 = ui.indexOf('\n    </div>', i0);          // loan-body 的結尾
+  assert.ok(i0 > 0 && i1 > i0, '找不到 .loan-body 區塊');
+  assert.ok(!ui.slice(i0, i1).includes('class="actions"'),
+    '★ 操作按鈕不可以放進 .loan-body(收起來就按不到了)');
+  assert.ok(ui.slice(i1, i1 + 400).includes('class="actions"'), '操作按鈕要緊接在收合區塊之後');
+  assert.ok(/'loan-fold':/.test(ui) && /'loan-foldall':/.test(ui), '要有單張與整批的收合動作');
+  assert.ok(/S\.openLoans = new Set\(\);/.test(ui), '★ 換人登入要清掉展開狀態');
+});
 Promise.all(PENDING).then(() => console.log('✔ 結構檢查 ' + n + ' 項通過'))
   .catch(e => { console.error('✘ ' + e.message); process.exit(1); });

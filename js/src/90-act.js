@@ -4,6 +4,34 @@ const ACT = {
   'go-loans': el => { S.loanFilter = el.dataset.f; go('loans'); },
   'open-loan': el => { S.loanFilter = el.dataset.st; if (/逾期/.test(el.textContent)) S.loanFilter = 'overdue'; if (/待確認/.test(el.textContent)) S.loanFilter = 'request'; S._focusLoan = el.dataset.id; go('loans'); },
   'lf': el => { S.loanFilter = el.dataset.f; render(); },
+  /**
+   * 單張借用單的收合。只動 DOM,不重畫 —— 重畫要再跑一次篩選與排版,
+   * 點一下等半秒就太鈍了,而且畫面會閃一下。
+   */
+  'loan-fold': el => {
+    const id = el.dataset.id, card = el.closest('.loan');
+    const open = !S.openLoans.has(id);
+    open ? S.openLoans.add(id) : S.openLoans.delete(id);
+    if (card) card.classList.toggle('open', open);
+    el.textContent = open ? '−' : '+';
+    el.setAttribute('aria-expanded', String(open));
+    el.setAttribute('aria-label', (open ? '收合' : '展開') + '這張單的細項');
+    el.title = open ? '收合細項' : '展開細項';
+  },
+  /** 一次展開 / 收合畫面上所有的單 */
+  'loan-foldall': () => {
+    const cards = $$('.loan');
+    const anyClosed = cards.some(c => !c.classList.contains('open'));
+    cards.forEach(c => {
+      const b = $('[data-act=loan-fold]', c); if (!b) return;
+      const id = b.dataset.id;
+      anyClosed ? S.openLoans.add(id) : S.openLoans.delete(id);
+      c.classList.toggle('open', anyClosed);
+      b.textContent = anyClosed ? '−' : '+';
+      b.setAttribute('aria-expanded', String(anyClosed));
+    });
+    const t = $('[data-act=loan-foldall]'); if (t) t.textContent = anyClosed ? '全部收合' : '全部展開';
+  },
   // 封存過的舊單預設收起來,點一下展開(含歷史資料時才會出現這一條)
   'hist-toggle': () => { S.histOpen = !S.histOpen; render(); },
   'close': () => closeModal(),

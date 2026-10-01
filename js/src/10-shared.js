@@ -74,12 +74,24 @@ function loanCard(L, opts = {}) {
   }
   const who = admin ? `<span>借用人 <b>${esc(L.applicant)}</b>${L.dept ? '・' + esc(L.dept) : ''}</span>${L.contact ? `<span>聯絡 ${esc(L.contact)}</span>` : ''}` : '';
   const notes = [L.purpose && '用途:' + L.purpose, L.reviewNote && '審核:' + L.reviewNote + (L.reviewer ? '(' + L.reviewer + ')' : ''), L.note && '備註:' + L.note].filter(Boolean);
-  return `<div class="card" id="loan-${L.id}">
-    <div class="loan-h"><span class="id">${esc(L.id)}</span><h3>${esc(L.event)}</h3>${statusPill(L)}${archPill(L)}</div>
-    <div class="loan-meta">${who}<span>期間 <b>${esc(L.start)} → ${esc(L.end)}</b></span>${L.venue ? `<span>地點 ${esc(L.venue)}</span>` : ''}${L.outAt ? `<span>點交 ${esc(L.outAt)}</span>` : ''}${L.returnedAt ? `<span>歸還 ${esc(L.returnedAt)}</span>` : ''}</div>
-    <div class="lines">${lines}</div>
-    ${notes.length ? `<div class="note">${notes.map(esc).join('<br>')}</div>` : ''}
-    ${opts.mine || isAdmin() ? reqBanner(req, !!opts.mine) : ''}
+  /**
+   * 每張單子自己收合:預設只露出「單號 + 標題 + 狀態」,點標題旁的 +/− 才展開細項。
+   * 一頁幾十張單、每張都攤開全部明細,要找的那張得捲很久(2026-10-01 回報)。
+   * 展開狀態記在 S.openLoans,重畫之後還在;換人登入會清掉。
+   */
+  const open = S.openLoans.has(L.id);
+  return `<div class="card loan ${open ? 'open' : ''}" id="loan-${L.id}">
+    <div class="loan-h"><span class="id">${esc(L.id)}</span><h3>${esc(L.event)}</h3>${statusPill(L)}${archPill(L)}
+      <button class="foldbtn" data-act="loan-fold" data-id="${L.id}" aria-expanded="${open}"
+        aria-label="${open ? '收合' : '展開'}這張單的細項" title="${open ? '收合細項' : '展開細項'}">${open ? '−' : '+'}</button></div>
+    <div class="loan-body">
+      <div class="loan-meta">${who}<span>期間 <b>${esc(L.start)} → ${esc(L.end)}</b></span>${L.venue ? `<span>地點 ${esc(L.venue)}</span>` : ''}${L.outAt ? `<span>點交 ${esc(L.outAt)}</span>` : ''}${L.returnedAt ? `<span>歸還 ${esc(L.returnedAt)}</span>` : ''}</div>
+      <div class="lines">${lines}</div>
+      ${notes.length ? `<div class="note">${notes.map(esc).join('<br>')}</div>` : ''}
+      ${opts.mine || isAdmin() ? reqBanner(req, !!opts.mine) : ''}
+    </div>
+    <!-- 操作按鈕**不收**:收起來的時候還是要能直接核准 / 點交 / 歸還,
+         不然審 20 張待審核要先點開 20 次(2026-10-01 使用者決定) -->
     ${A.length ? `<div class="actions">${A.join('')}</div>` : ''}
   </div>`;
 }
