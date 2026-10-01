@@ -261,6 +261,16 @@ tr.dim td{opacity:.5}
 /* 多選的「一起填單」與挑選模式的「完成」跟著分類籤條一起釘在上面 ——
    往下挑的時候那顆按鈕要一直在手邊,不要挑到一半還得捲回最上面(2026-10-01 回報)。
    以前是靠 .multibar 的 sticky bottom,但它的容器只有自己那麼高,捲過去就跟著不見了。 */
+/* 借用單:封存過的舊單收成一條,點開才展開 */
+.histfold{padding:0;margin:10px 0}
+.histbtn{display:flex;align-items:center;gap:10px;width:100%;padding:12px 16px;border:0;border-radius:var(--r);
+  background:none;color:var(--text);font:inherit;font-weight:600;cursor:pointer;text-align:left}
+.histbtn:hover{background:var(--surface-2)}
+.histbtn .meta{font-weight:400;margin-left:auto}
+.histbtn::before{content:'▸';color:var(--muted);transition:transform .15s}
+.histfold.open .histbtn::before{transform:rotate(90deg)}
+/* 送出中的按鈕:看得出來正在送,而且再按也沒有用 */
+[aria-busy="true"]{opacity:.55;pointer-events:none}
 .catbar-stick>#mbar:empty{display:none}
 .catbar-stick .bulkbar{margin:0 0 10px}
 .multibar{box-shadow:0 2px 10px rgba(51,63,72,.10)}

@@ -164,9 +164,20 @@ VIEWS.loans = main => {
   const draw = q => {
     q = (q || '').toLowerCase();
     const f = list.filter(l => !q || [l.id, l.applicant, l.dept, l.event, l.venue].concat(l.lines.map(x => x.name)).join(' ').toLowerCase().includes(q));
-    $('#llist').innerHTML = f.map(l => l.status === 'pending'
+    /**
+     * 封存過的舊單預設收起來。勾了「含歷史資料」之後,一兩百張舊單會跟現行的混在一起,
+     * 要找的那張反而被淹掉(2026-10-01 回報)。現行的照舊直接列,歷史的收成一條,點開才展開。
+     */
+    const card = l => l.status === 'pending'
       ? `<div class="pickwrap"><label class="chk pickbox"><input type="checkbox" data-pl="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>選取</label>${loanCard(l)}</div>`
-      : loanCard(l)).join('') || '<div class="card empty">沒有符合的借用單</div>';
+      : loanCard(l);
+    const now = f.filter(l => !l.archived), old = f.filter(l => l.archived);
+    const fold = old.length ? `<div class="card histfold ${S.histOpen ? 'open' : ''}">
+      <button class="histbtn" data-act="hist-toggle">${S.histOpen ? '收起' : '展開'}歷史單<span class="chipnum">${old.length}</span>
+        <span class="meta">已封存到歷史工作表的舊單</span></button></div>` : '';
+    const body = now.map(card).join('');
+    $('#llist').innerHTML = (body || (old.length ? '' : '<div class="card empty">沒有符合的借用單</div>'))
+      + fold + (S.histOpen ? old.map(card).join('') : '');
     $$('[data-pl]').forEach(el => el.onchange = () => { el.checked ? sel.add(el.dataset.pl) : sel.delete(el.dataset.pl); bulk(); });
     bulk();
   };

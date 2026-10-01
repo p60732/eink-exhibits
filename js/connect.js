@@ -59,7 +59,24 @@ const Api = (() => {
     if (reject_(j)) throw Object.assign(new Error('後端正在更新,請稍後再試一次'), { network: true });
     return j;
   }
+  /**
+   * 同一個寫入還在路上時,再送一次一模一樣的就共用那一趟。
+   * 2026-10-01 回報:連點兩下「下架」會變成兩筆 —— 兩次點擊是兩個獨立的請求,
+   * 後端照單全收;換成「送出申請」那種就會變成兩張單。
+   * 只擋「動作與參數完全一樣、而且還在路上」的那一種:
+   * 前一趟回來之後再按就是正常的第二次操作,不受影響。
+   */
+  const FLYING = new Map();
   async function call(action, payload = {}, token = null) {
+    if (READ.has(action)) return send(action, payload, token);
+    const key = action + '|' + JSON.stringify(payload);
+    if (FLYING.has(key)) return FLYING.get(key);
+    const p = send(action, payload, token);
+    FLYING.set(key, p);
+    p.catch(() => { }).then(() => { FLYING.delete(key); });
+    return p;
+  }
+  async function send(action, payload = {}, token = null) {
     if (!CONFIG.GAS_URL || CONFIG.GAS_URL.startsWith('__')) throw new Error('尚未設定後端網址(js/connect.js 的 GAS_URL)');
     let j;
     try { j = check_(await once(action, payload, token)); }

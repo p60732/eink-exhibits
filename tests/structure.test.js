@@ -9,7 +9,15 @@ const { concat: concatUI, parts: uiParts } = require('../js/src/_concat');
 const read = f => f === 'js/ui.js' ? concatUI() : fs.readFileSync(path.join(root, f), 'utf8');
 const gasFiles = fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs'));
 const webFiles = ['index.html', 'css/style.css', 'js/connect.js', 'js/ui.js'];
-let n = 0; const t = (name, fn) => { try { fn(); n++; } catch (e) { e.message = name + ':' + e.message; throw e; } };
+// 絕大多數檢查是同步的;少數需要真的跑起來(例如連線層的去重)會回傳 Promise,
+// 那種要收集起來最後一起等 —— 不等的話斷言失敗會變成沒人接的 rejection,報錯訊息也認不出是哪一條。
+let n = 0; const PENDING = [];
+const t = (name, fn) => {
+  try {
+    const r = fn(); n++;
+    if (r && typeof r.then === 'function') PENDING.push(r.catch(e => { e.message = name + ':' + e.message; throw e; }));
+  } catch (e) { e.message = name + ':' + e.message; throw e; }
+};
 
 t('公開函式白名單:GAS 頂層函式除白名單外必須以 _ 結尾', () => {
   const allow = ['doGet', 'doPost', 'setupSheets', 'installDailyTrigger', 'dailyReminder', 'authorizeDrive',
@@ -315,4 +323,44 @@ t('「一起填單」要釘在分類籤條那一塊裡面', () => {
   assert.ok(/id="pickbar"/.test(bars), '★ 挑選模式的那一條也要放在 .catbar-stick 裡面');
   assert.ok(!/\.multibar\{position:sticky;bottom/.test(css), '★ 舊的 sticky bottom 要拿掉,不然兩種釘法會打架');
 });
-console.log('✔ 結構檢查 ' + n + ' 項通過');
+t('連點防呆:一樣的寫入還在路上就不可以再送一次', () => {
+  // 2026-10-01 回報:連點兩下「下架」變成兩筆。真正保證不會變成兩筆的是連線層那一道。
+  const c = read('js/connect.js'), ui = read('js/ui.js');
+  assert.ok(/const FLYING = new Map\(\)/.test(c) && /if \(FLYING\.has\(key\)\) return FLYING\.get\(key\)/.test(c),
+    '★ 連線層要擋掉「動作與參數一樣、而且還在路上」的寫入');
+  assert.ok(/if \(READ\.has\(action\)\) return send\(action, payload, token\);/.test(c),
+    '讀取類不走這個去重(讀取本來就可以重試)');
+  assert.ok(/if \(el\.dataset\.busy === '1'\) return;/.test(ui), '★ 同一顆按鈕上一次還沒結束之前不可以再觸發');
+  assert.ok(/aria-busy/.test(ui) && /\[aria-busy="true"\]\{opacity/.test(read('css/style.css')),
+    '送出中的按鈕要看得出來(不然使用者會一直按)');
+  assert.ok(/confirmInline\('確定要下架這個展品/.test(ui), '★ 下架要先問一次');
+});
+t('連線層實測:一樣的寫入同時送兩次,只能發出一趟', () => {
+  /**
+   * 這一條是真的跑起來驗,不是比對字串。
+   * UI 測試擋不到這一層 —— 按鈕那道守門會先攔下第二次點擊,
+   * 所以拿掉連線層的去重,UI 測試照樣綠(2026-10-01 實測過)。
+   */
+  const src = read('js/connect.js').replace("'__GAS_URL__'", "'https://script.google.com/macros/s/x/exec'");
+  let calls = 0;
+  const sandbox = {
+    fetch: () => { calls++; return new Promise(r => setTimeout(() => r({ ok: true, json: () => ({ success: true, data: 1 }) }), 60)); },
+    AbortController: function () { this.signal = null; this.abort = () => { }; },
+    setTimeout, clearTimeout, TypeError
+  };
+  const make = new Function('fetch', 'AbortController', 'setTimeout', 'clearTimeout',
+    src + '\nreturn Api;');
+  const Api = make(sandbox.fetch, sandbox.AbortController, setTimeout, clearTimeout);
+  const payload = { id: 'P0001', archived: true };
+  return Promise.all([Api.call('archiveItem', payload, 't'), Api.call('archiveItem', payload, 't')])
+    .then(() => {
+      assert.strictEqual(calls, 1, '★ 同時送兩次一模一樣的寫入,只能真的發出一趟,實際 ' + calls);
+      // 前一趟回來之後再送就是正常的第二次,不可以被吃掉
+      return Api.call('archiveItem', payload, 't').then(() => {
+        assert.strictEqual(calls, 2, '★ 前一趟結束後再送一次要照常發出');
+      });
+    });
+});
+
+Promise.all(PENDING).then(() => console.log('✔ 結構檢查 ' + n + ' 項通過'))
+  .catch(e => { console.error('✘ ' + e.message); process.exit(1); });

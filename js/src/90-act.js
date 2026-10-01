@@ -4,6 +4,8 @@ const ACT = {
   'go-loans': el => { S.loanFilter = el.dataset.f; go('loans'); },
   'open-loan': el => { S.loanFilter = el.dataset.st; if (/逾期/.test(el.textContent)) S.loanFilter = 'overdue'; if (/待確認/.test(el.textContent)) S.loanFilter = 'request'; S._focusLoan = el.dataset.id; go('loans'); },
   'lf': el => { S.loanFilter = el.dataset.f; render(); },
+  // 封存過的舊單預設收起來,點一下展開(含歷史資料時才會出現這一條)
+  'hist-toggle': () => { S.histOpen = !S.histOpen; render(); },
   'close': () => closeModal(),
   'close-render': () => { closeModal(); render(); },
   // 總覽:展開 / 收起各廠區的數字。再點同一塊磚就收起來
@@ -293,7 +295,12 @@ const ACT = {
   'cancel': el => { if (confirmInline('確定取消這筆申請?')) run(() => api('cancelLoan', { id: el.dataset.id }), '已取消').then(render).catch(() => { }); },
   'edit-item': el => itemModal(el.dataset.id, el.dataset.cat),
   'units': el => unitsModal(el.dataset.id),
-  'archive': el => run(() => api('archiveItem', { id: el.dataset.id, archived: el.dataset.on === '1' }), el.dataset.on === '1' ? '已下架' : '已上架').then(render).catch(() => { }),
+  'archive': el => {
+    const off = el.dataset.on === '1';                 // on=1 代表「現在要下架」
+    // 下架會讓它從目錄消失、借不到,要問一次;重新上架是補救動作,不用問
+    if (off && !confirmInline('確定要下架這個展品?\n\n下架之後不會出現在目錄,也借不到,但歷史紀錄都留著,隨時可以重新上架。')) return;
+    return run(() => api('archiveItem', { id: el.dataset.id, archived: off }), off ? '已下架' : '已上架').then(render).catch(() => { });
+  },
   'import': () => importModal(),
   'edit-user': el => userModal(el.dataset.id),
   'import-users': () => importUsersModal(),
@@ -327,7 +334,18 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) { if (!e.target.closest('.menu')) $('#menu-pop').classList.add('hidden'); return; }
   if (el.tagName === 'A') e.preventDefault();
-  const f = ACT[el.dataset.act]; if (f) f(el);
+  const f = ACT[el.dataset.act]; if (!f) return;
+  /**
+   * 連點防呆:同一顆按鈕在上一次還沒結束之前不再觸發,而且看得出來正在送。
+   * 連線層也會擋掉「一模一樣又還在路上」的寫入(真正保證不會變成兩筆的是那一層),
+   * 這裡這一層是給眼睛看的 —— 按下去沒反應會讓人一直按。
+   */
+  if (el.dataset.busy === '1') return;
+  const r = f(el);
+  if (r && typeof r.then === 'function') {
+    el.dataset.busy = '1'; el.setAttribute('aria-busy', 'true');
+    r.catch(() => { }).then(() => { delete el.dataset.busy; el.removeAttribute('aria-busy'); });
+  }
 });
 document.addEventListener('keydown', e => { const m = $('#modal-bg'); if (e.key === 'Escape' && !$('#scanner-bg') && !(m && m.dataset.locked)) closeModal(); });
 /* 主題(淺色 / 深色),記在這台裝置 */

@@ -807,6 +807,53 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     if (h > 1) throw new Error('★ 總覽:收起之後空容器還佔了 ' + Math.round(h) + 'px');
   }
 
+  // ---- 封存過的舊單預設收起來(2026-10-01 回報:歷史單太多很亂)----
+  {
+    await p.click('[data-v=loans]'); await wait(1200);
+    await p.click('[data-act=lf][data-f=all]'); await wait(1200);
+    // ⚠️ 每次 render 都會把節點換掉,抓著舊的 handle 會「not attached to the DOM」——
+    //    一律用選擇器,讓 playwright 每次重新解析。
+    if (await p.$('#lhist')) {
+      await p.check('#lhist'); await wait(2000);
+      if (await p.$('[data-act=hist-toggle]')) {
+        const before = await p.$$eval('[id^=loan-]', els => els.length);
+        await p.click('[data-act=hist-toggle]'); await wait(900);
+        const after = await p.$$eval('[id^=loan-]', els => els.length);
+        if (after <= before) throw new Error('★ 展開歷史單之後單子要變多(' + before + ' → ' + after + ')');
+        await p.click('[data-act=hist-toggle]'); await wait(900);
+        const back = await p.$$eval('[id^=loan-]', els => els.length);
+        if (back !== before) throw new Error('★ 收起來要回到原本的數量(' + before + ' → ' + back + ')');
+      }
+      if (await p.$('#lhist')) await p.uncheck('#lhist');
+      await wait(1500);
+    }
+  }
+
+  // ---- 連點兩下只能算一次(2026-10-01 回報:連點下架變成兩筆)----
+  {
+    await p.click('[data-v=items]'); await wait(1500);
+    const before = await p.evaluate(async () => (await Api.call('logs', { limit: 500 }, S.token))
+      .filter(r => /下架/.test(r.action)).length);
+    const btn = await p.$$('[data-act=archive][data-on="1"]');
+    if (!btn.length) throw new Error('展品管理上找不到可以下架的展品');
+    // ⚠️ 本機假後端是瞬間回應的,直接連點兩下根本撞不出競態,
+    //    那樣的測試拿掉修正也不會紅。這裡把回應壓慢 1.2 秒,讓第二下**確實**落在第一趟還沒回來的時候。
+    await p.evaluate(() => { const f = window.fetch.bind(window); window.__realFetch = f;
+      window.fetch = (...a) => new Promise(r => setTimeout(() => r(f(...a)), 1200)); });
+    await btn[0].click();
+    // 第一下按下去之後,按鈕要看得出來正在送 —— 沒有回饋的話使用者就是會一直按
+    await wait(400);
+    if (!await p.$('[data-act=archive][aria-busy="true"]'))
+      throw new Error('★ 送出中的按鈕要標成忙碌(aria-busy),不然使用者會連點');
+    await btn[0].click({ force: true }).catch(() => { });
+    await wait(4000);
+    await p.evaluate(() => { window.fetch = window.__realFetch; });
+    const after = await p.evaluate(async () => (await Api.call('logs', { limit: 500 }, S.token))
+      .filter(r => /下架/.test(r.action)).length);
+    if (after !== before + 1) throw new Error('★ 連點兩下只能產生一筆下架紀錄,實際多了 ' + (after - before) + ' 筆');
+    await wait(600);
+  }
+
   // ---- 帳號沒有 Email:登入時擋下來要他補(2026-10-01)----
   // 空的 Email = 核准通知寄不到,而且當事人完全不會知道,
   // 他只會覺得「我申請了都沒下文」。所以在進系統之前擋一次。
