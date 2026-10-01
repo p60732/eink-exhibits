@@ -84,9 +84,13 @@ function routes_() {
   add('user', true, U, {
     createLoan: ['event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'onBehalf', 'applicant', 'dept', 'force', 'showId'],
     updateLoan: ['id', 'event', 'venue', 'purpose', 'contact', 'note', 'start', 'end', 'lines', 'force'],
-    cancelLoan: ['id', 'reason'], requestPickup: ['id', 'units', 'note'], requestReturn: ['id', 'lines', 'note'], cancelRequest: ['id'],
-    requestExtend: ['id', 'end', 'note'], requestTransfer: ['id', 'emp', 'note']
+    cancelLoan: ['id', 'reason']
   }, FULL_);
+  /**
+   * 2026-10-01 流程精簡:同仁端只剩「申請 / 改單 / 取消」。
+   * 簽收領取、申請歸還、申請延期、轉借、撤回、當面確認六個路由整個移除 ——
+   * 送出申請之後的每一步都由管理者做,同仁靠 Email 知道進度。
+   */
   // 邏輯積木:管理者
   add('admin', false, A, { dashboard: [] },
     { Items: '*', Units: '*', Loans: { cols: '*', only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
@@ -131,7 +135,6 @@ function routes_() {
   R.uploadImage = { auth: 'admin', write: false, fields: ['name', 'data', 'ext'], big: 420000,
     tables: { Users: C.USER_AUTH }, fn: function (c) { return Files.saveImage(c.p.name, c.p.data, c.p.ext); } };
   // 當面確認:先由身份積木驗證在場管理者,再交邏輯積木
-  R.confirmOnSite = { auth: 'user', write: true, fields: ['id', 'emp', 'pin'], tables: FULL_, fn: function (c) { return Logic.confirmOnSite(c, Identity.verifyAdmin(c.db, c.p.emp, c.p.pin)); } };
   return (ROUTES_ = R);
 }
 

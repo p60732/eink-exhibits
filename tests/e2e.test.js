@@ -35,22 +35,21 @@ ok('approve', { id: L.id }, A);
 const chk = ok('check', { start: '2026-10-03', end: '2026-10-08', lines: [{ itemId: panel.id, qty: 2 }] }, U2);
 assert.strictEqual(chk[0].short, 1);
 
-// 簽收 → 當面確認
-const opt = ok('pickupOptions', { id: L.id }, U); assert.strictEqual(opt[0].units.length, 3);
-bad('requestPickup', { id: L.id, units: { [panel.id]: ['E0001'] } }, U, /需要指定 2/);
-bad('requestPickup', { id: L.id, units: { [panel.id]: ['E0001', 'E0002'] } }, U2, /不是你的/);
-ok('requestPickup', { id: L.id, units: { [panel.id]: ['E0001', 'E0003'] } }, U);
-assert.strictEqual(ok('dashboard', {}, A).requests.length, 1);
-bad('confirmOnSite', { id: L.id, emp: '10477', pin: 'x' }, U, /不是管理者/);
-bad('confirmOnSite', { id: L.id, emp: '90001', pin: '9999' }, U, /不正確/);
-let x = ok('confirmOnSite', { id: L.id, emp: '90001', pin: '1234' }, U);
-assert.strictEqual(x.status, 'out'); assert.strictEqual(x.lines[0].units.join(), 'E0001,E0003');
-assert.strictEqual(ok('lookup', { code: 'e0003' }, U2).loan.applicant, '測試員工A');
+// 核准即出借(2026-10-01 流程精簡:沒有簽收、沒有點交這兩步了)
+// 逐台編號在核准當下自動綁上 —— 不然歸還時一台都對不到
+let x = ok('loans', { filter: 'all' }, A).find(l => l.id === L.id);
+assert.strictEqual(x.status, 'out', '★ 核准之後直接就是出借中');
+assert.strictEqual(x.lines.find(l => l.itemId === panel.id).units.length, 2, '★ 逐台編號要自動指派好');
+assert.ok(x.outAt, '核准當下要記下出借時間');
+assert.strictEqual(ok('units', { itemId: panel.id }, A).filter(u => u.status === 'out').length, 2,
+  '★ 被指派的那兩台要變成「借出」(盤點看得到它們不在架上)');
+const gotUnits = x.lines.find(l => l.itemId === panel.id).units;
+assert.strictEqual(ok('lookup', { code: gotUnits[1].toLowerCase() }, U2).loan.applicant, '測試員工A');
 
-// 歸還 → 後台確認
-ok('requestReturn', { id: L.id, lines: [{ itemId: panel.id, unitResults: [{ id: 'E0001', result: 'in' }, { id: 'E0003', result: 'repair' }] }, { itemId: stand.id, returned: 5, lost: 1 }] }, U);
-assert.strictEqual(ok('loans', { filter: 'request' }, A).length, 1);
-x = ok('receive', { id: L.id }, A);
+// 歸還:管理者直接登記,同仁不用先申請
+x = ok('receive', { id: L.id, lines: [
+  { itemId: panel.id, unitResults: [{ id: gotUnits[0], result: 'in' }, { id: gotUnits[1], result: 'repair' }] },
+  { itemId: stand.id, returned: 5, lost: 1 }] }, A);
 assert.strictEqual(x.status, 'returned');
 const items = ok('items', {}, A);
 assert.strictEqual(items.find(i => i.id === stand.id).total, 9);
@@ -58,15 +57,21 @@ assert.strictEqual(items.find(i => i.id === panel.id).repair, 1);
 
 // 代為登記 + 逾期提醒(排程→邏輯→通知)
 const L2 = ok('createLoan', { onBehalf: true, applicant: '10231', event: '拜訪', start: '2026-09-20', end: '2026-09-21', lines: [{ itemId: stand.id, qty: 2 }] }, A);
-assert.strictEqual(L2.applicant, '測試員工A'); assert.strictEqual(L2.status, 'approved');
-ok('checkout', { id: L2.id }, A);
+assert.strictEqual(L2.applicant, '測試員工A'); assert.strictEqual(L2.status, 'out', '代為登記 = 東西已經交出去了');
+// 代為登記已經是出借中,不用再點交
 G.mails.length = 0; G.ctx.dailyReminder();
 assert.ok(G.mails.some(m => m.to === 'ming@x.com' && /逾期/.test(m.subject)));
 assert.ok(G.mails.some(m => m.to === 'admin@x.com' && /今日逾期 1 筆/.test(m.subject)));
 
 // 盤點
-const rep = ok('stocktake', { qty: [{ itemId: stand.id, counted: 6 }], unitItems: [panel.id], seenUnits: ['E0001'], apply: true }, A);
-assert.strictEqual(rep.qty[0].diff, -1); assert.strictEqual(rep.missingUnits.map(u => u.id).join(), 'E0002');
+// ⚠️ 不要寫死編號:核准時是自動指派的,哪幾台被借走會隨資料改變。
+//    盤點只看到第一台,其他「應該在架上」的就是短少。
+const onShelf = ok('units', { itemId: panel.id }, A).filter(u => u.status === 'in').map(u => u.id).sort();
+const seen = onShelf[0];
+const rep = ok('stocktake', { qty: [{ itemId: stand.id, counted: 6 }], unitItems: [panel.id], seenUnits: [seen], apply: true }, A);
+assert.strictEqual(rep.qty[0].diff, -1);
+assert.strictEqual(rep.missingUnits.map(u => u.id).sort().join(), onShelf.slice(1).join(),
+  '在架上卻沒盤到的就是短少');
 
 // 其他身份規則
 bad('saveUser', { user: { id: 'U0002', empNo: '10231', name: '測試員工A', role: 'admin' } }, A, /PIN/);
@@ -147,50 +152,41 @@ bad('updateLoan', { id: E1.id, event: '不該改得動', start: '2026-11-10', en
 const again = ok('approveMany', { ids: [E1.id] }, A);
 assert.strictEqual(again.ok, 0);
 assert.match(again.fail[0].error, /不是待審核/);
-// 延期:同仁申請 → 管理者同意
-bad('requestExtend', { id: E1.id, end: '2026-11-14' }, U, /要比原本的 2026-11-15 晚/);
-bad('requestExtend', { id: E1.id, end: '2026-13-01' }, U, /請填寫新的歸還日/);
-ok('requestExtend', { id: E1.id, end: '2026-11-25', note: '展期延後' }, U);
-assert.strictEqual(ok('myLoans', {}, U).find(l => l.id === E1.id).stage, '待確認延期');
-bad('requestTransfer', { id: E1.id, emp: '10477' }, U, /還有待確認的請求/);
-const ext = ok('decideRequest', { id: E1.id, ok: true }, A);
-assert.strictEqual(ext.end, '2026-11-25', '同意後歸還日要換掉');
-assert.strictEqual(ext.request, null);
-// 不同意延期:日期不變、請求清掉
-ok('requestExtend', { id: E1.id, end: '2026-12-31' }, U);
-const no = ok('decideRequest', { id: E1.id, ok: false, note: '那段要給別的展' }, A);
-assert.strictEqual(no.end, '2026-11-25', '不同意就不該改日期');
-assert.strictEqual(no.request, null);
-// 管理者也可以直接延期
+// 延期:2026-10-01 流程精簡之後只剩管理者這一條(同仁要延期就跟管理者說)
+bad('extendLoan', { id: E1.id, end: '2026-11-14' }, A, /要比原本的 2026-11-15 晚/);
+bad('extendLoan', { id: E1.id, end: '2026-13-01' }, A, /請填寫新的歸還日/);
+assert.strictEqual(ok('extendLoan', { id: E1.id, end: '2026-11-25', note: '展期延後' }, A).end, '2026-11-25');
 assert.strictEqual(ok('extendLoan', { id: E1.id, end: '2026-11-28' }, A).end, '2026-11-28');
 bad('extendLoan', { id: E1.id, end: '2026-11-01' }, A, /要比原本的/);
-// 轉借:同仁申請 → 管理者同意 → 借用人換人
-bad('requestTransfer', { id: E1.id, emp: '99999' }, U, /查無此工號/);
-bad('requestTransfer', { id: E1.id, emp: '10231' }, U, /本來就是這個人/);
-ok('requestTransfer', { id: E1.id, emp: '10477', note: '我出差' }, U);
-bad('requestExtend', { id: E1.id, end: '2026-12-31' }, U, /還有待確認的請求/);
-assert.strictEqual(ok('myLoans', {}, U).find(l => l.id === E1.id).stage, '待確認轉借');
-const tr = ok('decideRequest', { id: E1.id, ok: true }, A);
-assert.strictEqual(tr.applicant, '測試員工B', '轉借後借用人要換人');
-assert.ok(!ok('myLoans', {}, U).some(l => l.id === E1.id), '轉走後就不在原借用人的清單裡');
-assert.ok(ok('myLoans', {}, UX).some(l => l.id === E1.id), '要出現在新借用人的清單裡');
-// 當面確認也走同一條路:延期請求可以請管理者當場確認(用副管理者,主管理者前面被鎖測試鎖住了)
-ok('requestExtend', { id: E1.id, end: '2026-12-05' }, UX);
-assert.strictEqual(ok('confirmOnSite', { id: E1.id, emp: '90002', pin: '8765' }, UX).end, '2026-12-05');
-// 延期要檢查「延長出來的那一段」有沒有庫存
-const avD = ok('check', { start: '2026-12-01', end: '2026-12-31', lines: [{ itemId: stand.id, qty: 1 }] }, U)[0].available;
-assert.ok(avD >= 1, '測試前提:12 月還借得到');
-const H1 = ok('createLoan', { onBehalf: true, applicant: '10231', event: '把12月吃滿', start: '2026-12-01', end: '2026-12-31', lines: [{ itemId: stand.id, qty: avD }] }, A);
-const H2 = ok('createLoan', { onBehalf: true, applicant: '10231', event: '想延到12月', start: '2026-11-05', end: '2026-11-06', lines: [{ itemId: stand.id, qty: 1 }] }, A);
+// 同仁端的六個入口都已經移除 —— 再送就是「未知的操作」
+['requestPickup', 'requestReturn', 'requestExtend', 'requestTransfer', 'cancelRequest', 'confirmOnSite']
+  .forEach(a => bad(a, { id: E1.id }, U, /未知的操作/));
+/**
+ * 延期要檢查「延長出來的那一段」有沒有庫存。
+ * ⚠️ 2026-10-01 之後的語意:**出借中的單從今天起就佔住**(東西實體已經不在架上),
+ * 所以這一段用專屬展品,不受前面累積下來的佔用影響。
+ */
+const EXT = ok('saveItem', { item: { name: '延期庫存測試機', mode: 'qty', category: 'Signage',
+  sites: [{ location: '新竹', qty: 2 }] } }, A);
+const H2 = ok('createLoan', { onBehalf: true, applicant: '10231', event: '想延到12月',
+  start: '2026-11-05', end: '2026-11-06', lines: [{ itemId: EXT.id, location: '新竹', qty: 1 }] }, A);
+/**
+ * ⚠️ 12 月要被「只佔住那一段」的東西吃滿,才試得出「延長進去會不足」。
+ * 出借中的單一律從**今天**開始佔(東西已經不在架上),所以拿它來吃 12 月的話,
+ * 11 月也會一起被吃掉,H2 根本開不出來 —— 真正只佔一段期間的是**展覽卡位**。
+ */
+let EXS = ok('saveShow', { show: { name: '吃滿12月的展', from: '2026-12-01', to: '2026-12-31',
+  venue: '測試', owner: '10231', lines: [{ itemId: EXT.id, location: '新竹', qty: 2 }] } }, A);
+EXS = ok('setShowStatus', { id: EXS.id, status: 'confirmed', force: true }, A);
 bad('extendLoan', { id: H2.id, end: '2026-12-20' }, A, /延長期間數量不足/);
 assert.strictEqual(ok('loans', { filter: 'all' }, A).find(l => l.id === H2.id).end, '2026-11-06', '擋下來之後日期不能被改到');
-ok('cancelLoan', { id: H1.id }, A);
+ok('setShowStatus', { id: EXS.id, status: 'cancelled' }, A);
 assert.strictEqual(ok('extendLoan', { id: H2.id, end: '2026-12-20' }, A).end, '2026-12-20', '騰出空間後就延得動');
 ok('cancelLoan', { id: H2.id }, A);
 
-// 待審核的不能延期
+// 待審核的不能延期(核准了才有東西可以延)
 const E4 = ok('createLoan', { event: '還沒審', start: '2026-12-10', end: '2026-12-12', lines: [{ itemId: stand.id, qty: 1 }] }, U);
-bad('requestExtend', { id: E4.id, end: '2026-12-20' }, U, /已核准或出借中/);
+bad('extendLoan', { id: E4.id, end: '2026-12-20' }, A, /已核准或出借中/);
 ok('cancelLoan', { id: E4.id }, U);
 
 // ---- 分類 ----
@@ -326,7 +322,6 @@ assert.strictEqual(availAt('2027-03-06', '2027-03-07'), 5, '刪掉之後卡位�
 // 結案前底下不能還有沒結束的單
 bad('setShowStatus', { id: SH.id, status: 'closed' }, A, /沒結束的借用單/);
 bad('deleteShow', { id: SH.id }, A, /不能刪除/);
-ok('checkout', { id: SL, units: {} }, A);
 ok('receive', { id: SL, lines: [{ itemId: expo.id, location: '新竹', returned: 5 }] }, A);
 SH = ok('setShowStatus', { id: SH.id, status: 'closed' }, A);
 assert.strictEqual(SH.status, 'closed');
@@ -346,8 +341,9 @@ const RQ = ok('saveItem', { item: { name: '回歸用雙廠機', mode: 'qty', cat
 // 1. 同一台編號送兩次,只能算一次 —— 否則單子提早結案,另一台永遠卡在「借出中」
 const R1 = ok('createLoan', { event: '重複歸還', start: '2026-09-22', end: '2026-09-30',
   lines: [{ itemId: RG.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A);
-const RU = ok('units', { itemId: RG.id }, A).map(u => u.id);
-ok('checkout', { id: R1.id, units: { [RG.id]: RU } }, A);
+// 代為登記的當下就已經自動綁好編號了,直接讀回來用
+const RU = R1.lines[0].units;
+assert.strictEqual(RU.length, 2, '★ 代為登記要自動指派兩台');
 let r1 = ok('receive', { id: R1.id, lines: [{ itemId: RG.id, location: '新竹',
   unitResults: [{ id: RU[0], result: 'in' }, { id: RU[0], result: 'in' }] }] }, A);
 assert.strictEqual(r1.status, 'out', '★ 只還了一台,單子不可以變成已歸還');
@@ -359,29 +355,32 @@ assert.strictEqual(ok('units', { itemId: RG.id }, A).every(u => u.status === 'in
 const R2 = ok('createLoan', { event: '兩地借用', start: '2026-09-22', end: '2026-09-30',
   lines: [{ itemId: RQ.id, location: '新竹', qty: 3 }, { itemId: RQ.id, location: '林口', qty: 2 }],
   onBehalf: true, applicant: '10231' }, A);
-ok('checkout', { id: R2.id, units: {} }, A);
 const r2 = ok('receive', { id: R2.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 3 }] }, A);
 assert.strictEqual(r2.status, 'out', '★ 林口還沒還,整張單不可以結案');
 assert.strictEqual(r2.lines.find(l => l.location === '林口').returned, 0, '★ 林口那行不可以被新竹的數量帶著還掉');
 ok('receive', { id: R2.id, lines: [{ itemId: RQ.id, location: '林口', returned: 2 }] }, A);
 
-// 3. 駁回要清掉待確認請求,而且已駁回的單不能再被延期 / 轉借
-const R3 = ok('createLoan', { event: '駁回測試', start: '2026-09-25', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
+// 3. 取消核准:東西要拿回來(單台放回架上),而且不能再延期
+const R3 = ok('createLoan', { event: '取消核准測試', start: '2026-09-25', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
 ok('approve', { id: R3.id }, A);
-ok('requestExtend', { id: R3.id, end: '2026-10-31' }, U);
 ok('reject', { id: R3.id, note: '不准' }, A);
-assert.strictEqual(ok('loans', { filter: 'all' }, A).find(L => L.id === R3.id).request, null, '★ 駁回要把待確認請求清掉');
-bad('decideRequest', { id: R3.id, ok: true }, A, /沒有待處理/);
 bad('extendLoan', { id: R3.id, end: '2026-11-30' }, A, /已核准或出借中/);
+// 已經登記過歸還的就不能整張收回去了
+const R3b = ok('createLoan', { event: '還一半不給取消', start: '2026-09-25', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 2 }] }, U);
+ok('approve', { id: R3b.id }, A);
+ok('receive', { id: R3b.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 1 }] }, A);
+bad('reject', { id: R3b.id, note: '反悔' }, A, /已經登記過歸還/);
+bad('cancelLoan', { id: R3b.id }, A, /已經登記過歸還/);
+ok('receive', { id: R3b.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 1 }] }, A);
 
-// 4. 已經有待確認請求時,不可以被簽收 / 歸還申請無聲蓋掉
-const R4 = ok('createLoan', { event: '請求覆蓋測試', start: '2026-09-22', end: '2026-09-28', lines: [{ itemId: RQ.id, location: '新竹', qty: 1 }] }, U);
+// 4. 取消核准要把單台編號放回架上 —— 不放回去的話那幾台永遠卡在「借出」
+const R4 = ok('createLoan', { event: '放回編號測試', start: '2026-09-22', end: '2026-09-28', lines: [{ itemId: RG.id, location: '新竹', qty: 1 }] }, U);
 ok('approve', { id: R4.id }, A);
-ok('checkout', { id: R4.id, units: {} }, A);
-ok('requestExtend', { id: R4.id, end: '2026-10-31' }, U);
-bad('requestReturn', { id: R4.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 1 }] }, U, /待確認的請求/);
-ok('cancelRequest', { id: R4.id }, U);
-ok('receive', { id: R4.id, lines: [{ itemId: RQ.id, location: '新竹', returned: 1 }] }, A);
+const r4u = ok('loans', { filter: 'all' }, A).find(L => L.id === R4.id).lines[0].units[0];
+assert.strictEqual(ok('units', { itemId: RG.id }, A).find(u => u.id === r4u).status, 'out', '核准之後那一台是借出');
+ok('cancelLoan', { id: R4.id }, A);
+assert.strictEqual(ok('units', { itemId: RG.id }, A).find(u => u.id === r4u).status, 'in',
+  '★ 取消之後那一台要回到在庫,不然盤點永遠對不起來');
 
 // 5. 展覽卡位:部分歸還不可以把展期內的庫存放給別人
 const RS0 = ok('saveItem', { item: { name: '回歸用展覽機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 10 }] } }, A);
@@ -389,7 +388,6 @@ let RS = ok('saveShow', { show: { name: '回歸展', from: '2027-06-01', to: '20
   lines: [{ itemId: RS0.id, location: '新竹', qty: 10 }] } }, A);
 RS = ok('setShowStatus', { id: RS.id, status: 'confirmed' }, A);
 const RSg = ok('createLoansFromShow', { id: RS.id }, A);
-ok('checkout', { id: RSg.ids[0], units: {} }, A);
 const rsAvail = () => ok('check', { start: '2027-06-10', end: '2027-06-11', lines: [{ itemId: RS0.id, location: '新竹', qty: 1 }] }, U)[0].available;
 assert.strictEqual(rsAvail(), 0, '全部借出時展期內可借 0');
 ok('receive', { id: RSg.ids[0], lines: [{ itemId: RS0.id, location: '新竹', returned: 4 }] }, A);
@@ -481,7 +479,6 @@ assert.strictEqual(ok('show', { id: SH.id }, A).lines[0].category, 'Signage', '�
     const TL = ok('createLoan', { event: '兩項的單', start: '2026-09-20', end: '2026-11-30',
       lines: [{ itemId: X1.id, location: '新竹', qty: 3 }, { itemId: X2.id, location: '新竹', qty: 3 }],
       onBehalf: true, applicant: '10477' }, A);
-    ok('checkout', { id: TL.id, units: {} }, A);
     ok('receive', { id: TL.id, lines: [{ itemId: X1.id, location: '新竹', returned: 3 }] }, A);
     assert.strictEqual(ok('loans', { filter: 'all' }, A).find(x => x.id === TL.id).status, 'out', '另一項還沒還,單子仍然是出借中');
     const h1 = ok('holders', { itemId: X1.id, location: '新竹', from: '2026-10-01', to: '2026-10-05' }, A);
@@ -528,7 +525,6 @@ let SS = ok('saveShow', { show: { name: '結算測試展', from: '2027-08-01', t
 SS = ok('setShowStatus', { id: SS.id, status: 'confirmed' }, A);
 const SSg = ok('createLoansFromShow', { id: SS.id }, A);
 const SSL = SSg.ids[0];
-ok('checkout', { id: SSL, units: {} }, A);
 // 規劃 6、借出 6、還 4、短少 1 → 未歸還 1
 ok('receive', { id: SSL, lines: [{ itemId: SS0.id, location: '林口', returned: 4, lost: 1 }] }, A);
 const st2 = ok('showSettle', { id: SS.id }, A);
@@ -537,22 +533,20 @@ assert.deepStrictEqual(
   [6, 6, 4, 1, 1], '★ 短少要算進 lost,剩下的才是未歸還');
 assert.deepStrictEqual(st2.lines[0].loans, [SSL], '結算要指得出是哪張單');
 
-// ---- 批次申請歸還 ----
+// ---- 批次登記歸還 ----
 bad('returnMany', { id: SS.id, ids: [] }, A, /請先勾選/);
 const rm1 = ok('returnMany', { id: SS.id, ids: [SSL], note: '撤場' }, A);
 assert.deepStrictEqual([rm1.ok, rm1.fail.length], [1, 0], '批次歸還應該成功一張');
-const rmLoan = ok('loans', { filter: 'active' }, A).find(x => x.id === SSL);
-assert.strictEqual(rmLoan.request.type, 'return', '要掛上歸還請求');
-assert.strictEqual(rmLoan.request.lines[0].returned, 1, '預設把剩下沒還的全部帶進去');
-// 已經掛了請求的單再按一次要被擋(而不是覆蓋掉)
+// 2026-10-01 起批次歸還是**直接登記歸還**,不再掛「待確認」的請求
+const rmLoan = ok('loans', { filter: 'all' }, A).find(x => x.id === SSL);
+assert.strictEqual(rmLoan.status, 'returned', '★ 批次歸還要直接結案,不是掛請求等人確認');
+assert.strictEqual(rmLoan.request, null, '不應該留下任何待確認請求');
+// 已經結案的單再按一次要被擋(而不是重複扣)
 const rm2 = ok('returnMany', { id: SS.id, ids: [SSL] }, A);
 assert.deepStrictEqual([rm2.ok, rm2.fail.length], [0, 1]);
-assert.match(rm2.fail[0].error, /待確認的請求/);
 // 不屬於這場的單要被擋,而且不影響同批其他張
 const rm3 = ok('returnMany', { id: SS.id, ids: [SL] }, A);
 assert.match(rm3.fail[0].error, /不屬於這場展覽/);
-ok('cancelRequest', { id: SSL }, A);
-ok('receive', { id: SSL, lines: [{ itemId: SS0.id, location: '林口', returned: 1 }] }, A);
 SS = ok('setShowStatus', { id: SS.id, status: 'closed' }, A);
 
 // ---- 封存到歷史表 ----
@@ -639,7 +633,6 @@ bad('archiveLoans', { ids: ['L-沒這張'] }, A, /沒有符合條件/);
     lines: [{ itemId: UH0.id, qty: 1 }] } }, A);
   UHS = ok('setShowStatus', { id: UHS.id, status: 'confirmed' }, A);
   const uhl = ok('createLoansFromShow', { id: UHS.id }, A).ids[0];
-  ok('checkout', { id: uhl, units: { [UH0.id]: [uid] } }, A);
   ok('receive', { id: uhl, lines: [{ itemId: UH0.id, unitResults: [{ id: uid, result: 'in' }] }] }, A);
   ok('setShowStatus', { id: UHS.id, status: 'closed' }, A);
   ok('archiveLoans', { ids: [uhl] }, A);
@@ -656,7 +649,6 @@ bad('archiveLoans', { ids: ['L-沒這張'] }, A, /沒有符合條件/);
     lines: [{ itemId: AD0.id, location: '新竹', qty: 3 }] } }, A);
   OLD = ok('setShowStatus', { id: OLD.id, status: 'confirmed' }, A);
   const ol = ok('createLoansFromShow', { id: OLD.id }, A).ids[0];
-  ok('checkout', { id: ol, units: {} }, A);
   ok('receive', { id: ol, lines: [{ itemId: AD0.id, location: '新竹', returned: 3 }] }, A);
   ok('setShowStatus', { id: OLD.id, status: 'closed' }, A);
   // 直接把 settle 欄清掉,模擬「這一列是舊版寫的,根本沒有這一欄」
@@ -681,12 +673,11 @@ const gone = ok('saveItem', { item: { name: '已封存燈箱', mode: 'qty', qty:
 ok('archiveItem', { id: gone.id, archived: true }, A);
 const L3 = ok('createLoan', { event: '待審中', start: '2026-12-01', end: '2026-12-03', lines: [{ itemId: stand.id, qty: 1 }] }, U2b);
 ok('approve', { id: L3.id }, A);
-ok('requestPickup', { id: L3.id, units: {} }, U2b);
-// 再留一筆「出借中」且指定到單台的借用單,讓「這台在誰手上」也被比對到
+// 再留一筆「出借中」且綁到單台的借用單,讓「這台在誰手上」也被比對到
 const L4 = ok('createLoan', { event: '出借中的展', start: '2026-11-01', end: '2026-11-05', lines: [{ itemId: panel.id, qty: 1 }] }, U);
 ok('approve', { id: L4.id }, A);
-ok('checkout', { id: L4.id, units: { [panel.id]: ['E0002'] } }, A);
-assert.strictEqual(ok('units', { itemId: panel.id }, A).find(u => u.id === 'E0002').holder.applicant, '測試員工A');
+const l4u = ok('loans', { filter: 'all' }, A).find(l => l.id === L4.id).lines[0].units[0];
+assert.strictEqual(ok('units', { itemId: panel.id }, A).find(u => u.id === l4u).holder.applicant, '測試員工A');
 
 /* 舊資料相容:直接在試算表補一列「只有總數 + 單一地點、沒有 stock 欄」的舊展品 */
 (() => {
@@ -702,8 +693,10 @@ assert.strictEqual(legacy.total, 7, '舊資料的總數要讀得到');
 assert.deepStrictEqual(legacy.sites.map(g => g.location + g.total), ['湖口7'], '舊資料要自動視為全部放在那個地點');
 const LG = ok('createLoan', { event: '舊資料場', start: '2026-12-01', end: '2026-12-03', lines: [{ itemId: 'P9000', qty: 2 }] }, U);
 ok('approve', { id: LG.id }, A);
-assert.strictEqual(ok('pickupOptions', { id: LG.id }, U)[0].inStock, 7, '舊資料的在庫量要算得出來');
-assert.strictEqual(ok('pickupOptions', { id: LG.id }, U)[0].location, '湖口', '沒指定地點時要自動補上唯一的那個地點');
+const lgView = ok('items', {}, A).find(x => x.id === 'P9000');
+assert.strictEqual(lgView.total, 7, '舊資料的總數要算得出來');
+assert.strictEqual(lgView.inStock, 5, '舊資料的在庫量要扣掉已經借出去的 2 台');
+assert.strictEqual(LG.lines[0].location, '湖口', '沒指定地點時要自動補上唯一的那個地點');
 
 /* ===== 分地點庫存:同一個展品散在兩個廠區 ===== */
 const dual = ok('saveItem', { item: { name: '雙廠展示機', mode: 'qty', category: 'Signage', sites: [{ location: '新竹', qty: 3 }, { location: '林口', qty: 2 }] } }, A);
@@ -728,13 +721,13 @@ assert.strictEqual(dual2.sites.find(g => g.location === '新竹').countedAt, '',
 // 逐台編號也分廠區:點交時不能拿別廠的機器交差
 const dualU = ok('saveItem', { item: { name: '雙廠單台機', mode: 'unit', category: 'Signage', unitCount: 2, location: '新竹' } }, A);
 const dualUnits = ok('units', { itemId: dualU.id }, A).map(u => u.id);
-ok('saveUnit', { unit: { id: dualUnits[1], location: '林口' } }, A);
+ok('saveUnit', { unit: { id: dualUnits[0], location: '林口' } }, A);   // 故意讓「別廠的那一台」排在前面
 const dualUView = ok('items', {}, A).find(x => x.id === dualU.id);
 assert.deepStrictEqual(dualUView.sites.map(g => g.location + g.total).sort(), ['新竹1', '林口1'].sort());
 const LU = ok('createLoan', { event: '新竹單台場', start: '2026-11-10', end: '2026-11-12', lines: [{ itemId: dualU.id, location: '新竹', qty: 1 }] }, U);
 ok('approve', { id: LU.id }, A);
-bad('checkout', { id: LU.id, units: { [dualU.id + '@新竹']: [dualUnits[1]] } }, A, /放在 林口/);
-ok('checkout', { id: LU.id, units: { [dualU.id + '@新竹']: [dualUnits[0]] } }, A);
+assert.deepStrictEqual(ok('loans', { filter: 'all' }, A).find(l => l.id === LU.id).lines[0].units, [dualUnits[1]],
+  '★ 核准自動綁定時只能挑該廠區在庫的機器,不能拿別廠的交差');
 // 只盤林口:新竹那一台沒點到也不算短少(根本不在這一區)
 const dualU2 = ok('saveItem', { item: { name: '雙廠單台機B', mode: 'unit', category: 'Signage', unitCount: 2, location: '新竹' } }, A);
 const u2 = ok('units', { itemId: dualU2.id }, A).map(u => u.id);
@@ -815,24 +808,23 @@ const itemCountBefore = ok('items', {}, A).length;
 }
 
 /* ===== v2.6:迴圈缺口 =====
-   ① 一項都沒登記到的歸還,不可以回報成功、更不可以把同仁的歸還申請清掉
+   ① 一項都沒登記到的歸還,不可以回報成功、更不可以把單子的狀態動掉
    ② 已停用的人手上還沒還的單,要在總覽看得到 */
 {
   const DZ = ok('saveItem', { item: { name: '迴圈檢查機', mode: 'qty', category: '體驗區', sites: [{ location: '新竹', qty: 6 }] } }, A);
   const ln = [{ itemId: DZ.id, location: '新竹', qty: 2 }];
   const mkOut = (ev) => { const L = ok('createLoan', { event: ev, start: '2026-10-01', end: '2026-10-05', lines: ln }, U);
-    ok('approve', { id: L.id }, A); ok('checkout', { id: L.id }, A); return L.id; };
+    ok('approve', { id: L.id }, A); return L.id; };   // 核准即出借
   const find = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id);
 
-  // ① 同仁申請歸還 → 管理者送出一個什麼都沒對到的歸還
+  // ① 管理者送出一個什麼都沒對到的歸還
   const E1 = mkOut('空歸還測試');
-  ok('requestReturn', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 2, to: '新竹' }] }, U);
   bad('receive', { id: E1, lines: [{ itemId: DZ.id, location: '林口', returned: 2, to: '林口' }] }, A, /沒有登記到任何一項/);
   bad('receive', { id: E1, lines: [] }, A, /沒有登記到任何一項/);
   bad('receive', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 0, lost: 0, to: '新竹' }] }, A, /沒有登記到任何一項/);
   const still = find(E1);
   assert.strictEqual(still.status, 'out', '★ 沒登記到任何一項,單子不可以動');
-  assert.ok(still.request && still.request.type === 'return', '★ 沒登記到任何一項,同仁的歸還申請必須留著');
+  assert.strictEqual(Number(still.lines[0].returned || 0), 0, '★ 沒登記到任何一項,已還數量不可以被加上去');
   // 正常的部分歸還照樣過
   const half = ok('receive', { id: E1, lines: [{ itemId: DZ.id, location: '新竹', returned: 1, to: '新竹' }] }, A);
   assert.strictEqual(half.status, 'out', '還一半應該還是出借中');
@@ -850,7 +842,7 @@ const itemCountBefore = ok('items', {}, A).length;
   const dun = ok('units', { itemId: DU.id }, A).map(x => x.id);
   const DL = ok('createLoan', { event: '單台空歸還測試', start: '2026-10-01', end: '2026-10-05',
     lines: [{ itemId: DU.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10477' }, A);
-  ok('checkout', { id: DL.id, units: { [DU.id + '@新竹']: dun } }, A);
+  assert.deepStrictEqual(find(DL.id).lines[0].units.slice().sort(), dun.slice().sort(), '代為登記就是已出借,兩台都要綁好');
   const uline = { itemId: DU.id, location: '新竹', to: '新竹' };
   // 每一台都選「未還」(result 空字串會被前端濾掉,這裡直接送空陣列)
   bad('receive', { id: DL.id, lines: [Object.assign({ unitResults: [] }, uline)] }, A, /沒有登記到任何一項/);
@@ -894,7 +886,7 @@ const itemCountBefore = ok('items', {}, A).length;
 
   // 登記歸還 → 兩方都要收到(以前完全沒寄)
   const R2 = ok('createLoan', { event: '歸還要寄兩方', start: '2026-10-01', end: '2026-10-05', lines: dln }, UD);
-  ok('approve', { id: R2.id }, A); ok('checkout', { id: R2.id }, A);
+  ok('approve', { id: R2.id }, A);
   G.mails.length = 0;
   const half = ok('receive', { id: R2.id, lines: [{ itemId: DM.id, location: '新竹', returned: 2, damaged: 1, to: '新竹' }] }, A);
   const m1 = G.mails.filter(m => /部分歸還/.test(m.subject))[0];
@@ -918,6 +910,48 @@ const itemCountBefore = ok('items', {}, A).length;
   assert.ok(m2 && /ming@x\.com/.test(m2.to) && /admin@x\.com/.test(m2.to), '★ 結案信也要兩方都收到');
   // 總數不變:損壞的東西還在庫存裡
   assert.strictEqual(ok('items', {}, A).find(i => i.id === DM.id).total, 10, '★ 損壞不影響總數,東西還在');
+}
+
+/* ===== 流程精簡 C+D:舊資料收尾(2026-10-01) =====
+   新流程不會再產生「已核准」的單,也不會再產生 L.request。
+   但線上可能還卡著舊格式的單,所以 checkout / decideRequest 這兩條留著,
+   而且必須照舊守得住 —— 這一段就是在測那些「只給舊資料用」的路。      */
+{
+  const LGC = ok('saveItem', { item: { name: '舊資料收尾機', mode: 'unit', category: 'Signage', location: '新竹' } }, A);
+  ok('addUnits', { itemId: LGC.id, count: 1, location: '新竹' }, A);
+  ok('addUnits', { itemId: LGC.id, count: 1, location: '林口' }, A);
+  const gun = ok('units', { itemId: LGC.id }, A);
+  const hc = gun.find(u => u.location === '新竹').id, lk = gun.find(u => u.location === '林口').id;
+  const findG = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id);
+  // 把一張待審核的單手動改成舊格式(已核准 + 掛一個簽收請求),模擬線上殘留的資料
+  const legacy = (id, req) => {
+    const db = G.ctx.Memory.load();                 // 完整載入才寫得回去
+    const row = db.Loans.find(x => x.id === id);
+    row.status = 'approved'; row.units = ''; row.request = req || null;
+    (row.lines || []).forEach(ln => { ln.units = []; });
+    db._dirty.Loans = true; G.ctx.Memory.save(db);
+  };
+  const UG = ok('login', { emp: '10231', pin: '1234' }).token;   // 前面停用過一次,token 要重拿
+  const mk = ev => ok('createLoan', { event: ev, start: '2026-10-01', end: '2026-10-05',
+    lines: [{ itemId: LGC.id, location: '新竹', qty: 1 }] }, UG).id;
+
+  // ① 舊的「已核准」單還是要點交得出去,而且照舊不准拿別廠的機器交差
+  const G1 = mk('舊資料點交');
+  legacy(G1, { type: 'pickup', units: {} });
+  bad('checkout', { id: G1, units: { [LGC.id + '@新竹']: [lk] } }, A, /放在 林口/);
+  ok('checkout', { id: G1, units: { [LGC.id + '@新竹']: [hc] } }, A);
+  assert.strictEqual(findG(G1).status, 'out', '★ 舊的已核准單要推得到出借中');
+  ok('receive', { id: G1, lines: [{ itemId: LGC.id, location: '新竹', to: '新竹',
+    unitResults: [{ id: hc, result: 'in' }] }] }, A);
+
+  // ② 舊的待確認延期請求:駁回時必須清掉,不然已駁回的單還能被延期
+  const G2 = mk('舊資料駁回');
+  legacy(G2, { type: 'extend', end: '2026-12-31' });
+  assert.ok(findG(G2).request, '前置條件:這張單身上要掛著舊的延期請求');
+  ok('reject', { id: G2, note: '舊資料清掉' }, A);
+  assert.strictEqual(findG(G2).status, 'rejected');
+  assert.strictEqual(findG(G2).request, null, '★ 駁回要把舊的待確認請求清掉');
+  bad('decideRequest', { id: G2, ok: true }, A, /沒有待處理的延期或轉借申請/);
 }
 
 /* ===== 人員管理:部門不再收;沒帶到的欄位不可以被清掉(2026-10-01) ===== */
@@ -1037,7 +1071,6 @@ const itemCountBefore = ok('items', {}, A).length;
 
   const LM = ok('createLoan', { event: '跨廠歸還測試', start: '2026-10-01', end: '2026-10-05',
     lines: [{ itemId: MV.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A);
-  ok('checkout', { id: LM.id }, A);   // 管理者代開的單本來就是已核准
   const out = look();
   assert.strictEqual(out.total, 5, '借出期間總數不變(東西只是在外面)');
   assert.strictEqual(out.hc, 4, '借出不會把展品從原廠區搬走');
@@ -1052,14 +1085,12 @@ const itemCountBefore = ok('items', {}, A).length;
   // 還回原區:誰都不該動
   const LN = ok('createLoan', { event: '還回原區測試', start: '2026-10-01', end: '2026-10-05',
     lines: [{ itemId: MV.id, location: '林口', qty: 1 }], onBehalf: true, applicant: '10231' }, A);
-  ok('checkout', { id: LN.id }, A);
   ok('receive', { id: LN.id, lines: [{ itemId: MV.id, location: '林口', returned: 1, to: '林口' }] }, A);
   assert.deepStrictEqual([look().total, look().hc, look().lk], [5, 2, 3], '還回原區不該搬動任何庫存');
 
   // 短少是唯一該讓總數變少的路徑
   const LL = ok('createLoan', { event: '短少不搬廠測試', start: '2026-10-01', end: '2026-10-05',
     lines: [{ itemId: MV.id, location: '林口', qty: 1 }], onBehalf: true, applicant: '10231' }, A);
-  ok('checkout', { id: LL.id }, A);
   ok('receive', { id: LL.id, lines: [{ itemId: MV.id, location: '林口', returned: 0, lost: 1, to: '新竹' }] }, A);
   const lost = look();
   assert.strictEqual(lost.total, 4, '★ 短少要讓總數少 1');
@@ -1072,7 +1103,7 @@ const itemCountBefore = ok('items', {}, A).length;
   const mun = ok('units', { itemId: MU.id }, A).map(u => u.id);
   const LU = ok('createLoan', { event: '單台跨廠歸還', start: '2026-10-01', end: '2026-10-05',
     lines: [{ itemId: MU.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A);
-  ok('checkout', { id: LU.id, units: { [MU.id + '@新竹']: mun } }, A);
+  assert.deepStrictEqual(ok('loans', { filter: 'all' }, A).find(x => x.id === LU.id).lines[0].units.slice().sort(), mun.slice().sort(), '代為登記就是已出借,兩台都要綁好');
   ok('receive', { id: LU.id, lines: [{ itemId: MU.id, location: '新竹', to: '林口',
     unitResults: [{ id: mun[0], result: 'in' }, { id: mun[1], result: 'in', to: '新竹' }] }] }, A);
   const uv = ok('units', { itemId: MU.id }, A);
@@ -1104,8 +1135,8 @@ const itemCountBefore = ok('items', {}, A).length;
   // 人員欄要填得出來(籤條是靠它分的)
   assert.ok(rows.every(r => r.user), '每一筆都要記得住是誰做的');
   // 會互相搶的那幾個要歸對邊 —— 只檢查「有跑到」的動作,沒跑到就不管
-  const WANT = { '封存借用單到歷史表': 'show', '由展覽產生借用單': 'show', '展覽批次申請歸還': 'show',
-    '重新上架': 'item', '下架展品': 'item', '當面確認歸還完成': 'loan', '取消簽收 / 歸還申請': 'loan' };
+  const WANT = { '封存借用單到歷史表': 'show', '由展覽產生借用單': 'show', '展覽批次歸還': 'show',
+    '重新上架': 'item', '下架展品': 'item', '核准借用': 'loan', '登記歸還': 'loan' };
   let checked = 0;
   Object.keys(WANT).forEach(act => {
     const hit = rows.filter(r => r.action === act);
@@ -1123,7 +1154,6 @@ const readActions = [
   ['catalog', {}, U], ['catalog', { start: '2026-10-01', end: '2026-10-05' }, U],
   ['check', { start: '2026-10-01', end: '2026-10-05', lines: [{ itemId: stand.id, qty: 3 }] }, U],
   ['myLoans', {}, U], ['myLoans', {}, U2b],
-  ['pickupOptions', { id: L3.id }, U2b], ['pickupOptions', { id: L.id }, U], ['pickupOptions', { id: LG.id }, U],
   ['lookup', { code: 'E0001' }, U2b], ['lookup', { code: 'E0001' }, A], ['lookup', { code: '沒這個' }, U],
   ['dashboard', {}, A], ['items', {}, A], ['units', {}, A], ['units', { itemId: panel.id }, A]
 ];

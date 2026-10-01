@@ -213,19 +213,18 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.waitForSelector('#tabs .tab'); await p.click('[data-v=dash]'); await p.waitForSelector('.kpis'); await p.click('[data-v=loans]'); await wait(300);
   await p.click('[data-f=pending]'); await wait(400); await p.click('[data-act=approve]'); await p.waitForSelector('#ago'); await p.click('#ago'); await wait(600);
   await p.click('#menu-btn'); await p.click('#m-out');
-  // 同仁簽收 + 當面確認
+  // v3.0:核准即出借 —— 同仁那邊直接變成「出借中」,而且不該再有任何操作入口
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
-  await p.click('[data-v=mine]'); await wait(400); await p.click('[data-act=u-pickup]'); await p.waitForSelector('#pgo2');
-  await p.click('#pauto'); await wait(500);                       // 自動指派:不用逐台勾
-  const pc = await p.textContent('[data-pc]');
-  if (!/已選 1 \/ 1/.test(pc)) throw new Error('自動選好沒生效:' + pc);
-  await shot('pickup'); await p.click('#pgo2'); await p.waitForSelector('#osf');
-  // 一次把兩欄填好再送出,避免自動聚焦跟輸入搶時序
-  await p.$eval('#osf', (f, v) => { f.emp.value = v.e; f.pin.value = v.p; }, { e: '90001', p: '1234' });
-  await p.click('#osf .btn.pri'); await wait(900); await shot('mine_out');
-  const st = await p.textContent('.loans'); if (!/出借中/.test(st)) throw new Error('未變成出借中');
-  // 歸還
-  await p.click('[data-act=u-return]'); await p.waitForSelector('#ugo2'); await p.click('#ugo2'); await p.waitForSelector('#osf'); await p.click('.modal [data-act=close-render]'); await wait(500);
+  await p.click('[data-v=mine]'); await wait(400); await shot('mine_out');
+  const st = await p.textContent('.loans');
+  if (!/出借中/.test(st)) throw new Error('★ 核准就等於出借,同仁那邊應該直接是「出借中」:' + st.replace(/\n/g, ' ').slice(0, 160));
+  for (const a of ['u-pickup', 'u-return', 'u-extend', 'u-transfer', 'u-onsite', 'u-cancel-req']) {
+    if (await p.$(`[data-act=${a}]`)) throw new Error('★ 同仁端不該再有「' + a + '」這個入口(v3.0 砍掉了)');
+  }
+  const mineActs = await p.$$eval('.loans .actions [data-act]', els => [...new Set(els.map(e => e.dataset.act))]);
+  const allowed = ['print-loan', 'loan-fold'];
+  const extra = mineActs.filter(a => !allowed.includes(a));
+  if (extra.length) throw new Error('★ 出借中的單在同仁端只該剩下列印:多了 ' + extra.join('、'));
   await p.click('#menu-btn'); await p.click('#m-out');
   await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
   await p.waitForSelector('#tabs .tab'); await p.click('[data-v=dash]'); await p.waitForSelector('.kpis'); await shot('dash_req');
@@ -261,7 +260,8 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await shot('count_who'); await p.click('.modal [data-act=close]'); await wait(400);
   await shot('count');
   await p.click('[data-v=dash]'); await p.waitForSelector('.kpis');
-  await p.click('[data-act=go-loans][data-f=request]'); await wait(300); await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2');
+  await p.click('[data-v=loans]'); await wait(300); await p.click('[data-f=out]'); await wait(400);
+  await p.click('[data-act=receive]'); await p.waitForSelector('#rgo2');
   await p.click('#rgo2'); await wait(600);
   await p.click('[data-f=returned]'); await wait(500); const t2 = await p.textContent('#llist'); if (!/已歸還/.test(t2)) throw new Error('未歸還');
   // 進行中的五個分頁共用同一次請求:切分頁不應該再打後端
@@ -272,7 +272,7 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   if (nReq > 0) throw new Error('切進行中的分頁不該再打後端,實際打了 ' + nReq + ' 次');
   await p.click('[data-f=all]'); await wait(700);
   if (await p.evaluate(() => window.__n) === 0) throw new Error('「全部」應該要向後端要資料');
-  // ---- 待辦 / 批次核准 / 延期 / 轉借 / 列印 ----
+  // ---- 待辦 / 批次核准 / 延期 / 列印 ----
   const makeLoan = async (name, d1, d2) => {
     await p.click('[data-v=catalog]'); await wait(900);
     const ps = await p.$$('[data-mpick]'); await ps[1].check(); await wait(300);
@@ -285,7 +285,7 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   await p.click('#menu-btn'); await p.click('#m-out');
   await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
   await makeLoan('延期測試', d(10), d(12));
-  await makeLoan('轉借測試', d(20), d(22));
+  await makeLoan('批次核准測試', d(20), d(22));
   await p.click('#menu-btn'); await p.click('#m-out');
   await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
   await p.waitForSelector('#tabs .tab'); await p.click('[data-v=dash]'); await p.waitForSelector('.kpis'); await wait(800);
@@ -300,33 +300,17 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
   const bulkTxt = await p.textContent('.modal');
   if (!/成功 2 張/.test(bulkTxt)) throw new Error('批次核准結果不對:' + bulkTxt.replace(/\n/g, ' ').slice(0, 140));
   await shot('bulk'); await p.click('.modal [data-act=close-render]'); await wait(800);
-  // 同仁:申請延期 + 轉借
-  await p.click('#menu-btn'); await p.click('#m-out');
-  await p.fill('#l-emp', '10231'); await p.click('#login-f button'); await p.waitForSelector('#tabs .tab');
-  await p.click('[data-v=mine]'); await wait(1000);
-  await (await p.$$('[data-act=u-extend]'))[0].click(); await p.waitForSelector('#xgo');
-  await p.fill('#xd', d(30)); await p.click('#xgo'); await wait(1200);
-  await p.click('.modal [data-act=close-render]'); await wait(900);
-  await (await p.$$('[data-act=u-transfer]'))[0].click(); await p.waitForSelector('#tgo');
-  await p.fill('#td', '10477'); await p.click('#tgo'); await wait(1200);
-  await p.click('.modal [data-act=close-render]'); await wait(900);
-  const stages = await p.textContent('.loans');
-  if (!/待確認延期/.test(stages) || !/待確認轉借/.test(stages)) throw new Error('請求狀態沒顯示:' + stages.replace(/\n/g, ' ').slice(0, 160));
-  await shot('requests');
-  // 管理者:同意延期與轉借
-  await p.click('#menu-btn'); await p.click('#m-out');
-  await p.fill('#l-emp', '90001'); await p.click('#login-f button'); await p.waitForSelector('#l-pin:visible'); await p.fill('#l-pin', '1234'); await p.click('#login-f button');
-  await p.waitForSelector('#tabs .tab'); await p.click('[data-v=loans]'); await wait(700);
-  await p.click('[data-f=request]'); await wait(1000);
-  const reqN = (await p.$$('[data-act=req-ok]')).length;
-  if (reqN !== 2) throw new Error('待確認應有 2 張,實際 ' + reqN);
-  for (let k = 0; k < 2; k++) {
-    await (await p.$$('[data-act=req-ok]'))[0].click(); await p.waitForSelector('#dgo');
-    await p.click('#dgo'); await wait(1400); await p.click('[data-f=request]'); await wait(900);
-  }
+  // v3.0:延期只剩管理者這一條路(同仁的「申請延期 / 轉借」都砍掉了)
+  await p.click('[data-v=loans]'); await wait(700);
+  await p.click('[data-f=out]'); await wait(1000);
+  if (await p.$('[data-act=req-ok]')) throw new Error('★ 新流程不該再產生待確認的請求');
+  const exBtn = (await p.$$('[data-act=extend]'))[0];
+  if (!exBtn) throw new Error('管理者應該可以直接延期');
+  await exBtn.click(); await p.waitForSelector('#xgo');
+  await p.fill('#xd', d(30)); await p.click('#xgo'); await wait(1400);
+  await shot('extend');
   await p.click('[data-f=all]'); await wait(1000);
   const allTxt = await p.textContent('#llist');
-  if (!/測試員工B/.test(allTxt)) throw new Error('轉借後借用人沒換人');
   if (!new RegExp(d(30)).test(allTxt)) throw new Error('延期後歸還日沒改成 ' + d(30));
   /* ---- 展覽檔期:新增 → 整批貼上 → 確認卡位 → 產生借用單 ---- */
   await p.click('[data-v=shows]'); await wait(700);
@@ -469,15 +453,15 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     for (const L of v.loans.filter(x => x.status === 'approved')) await Api.call('checkout', { id: L.id, units: {} }, S.token);
   }, shid);
   await p.evaluate(() => { bumpCache(); render(); }); await wait(1800);
-  // 批次申請歸還:撤場時一次送出,預設全勾
-  if (!await p.$('[data-act=show-return]')) throw new Error('底下有出借中的單時應該出現「批次申請歸還」');
+  // 批次登記歸還:撤場時一次送出,預設全勾
+  if (!await p.$('[data-act=show-return]')) throw new Error('底下有出借中的單時應該出現「批次登記歸還」');
   await p.click('[data-act=show-return]'); await p.waitForSelector('.sr-id');
   const srN = await p.$$eval('.sr-id', els => els.filter(e => e.checked).length);
   if (srN !== 2) throw new Error('批次歸還預設應該把出借中的都勾起來:' + srN);
   await p.click('[data-act=show-return-ok]'); await wait(2000);
   const srReq = await p.evaluate(async id =>
-    (await Api.call('show', { id }, S.token)).loans.filter(L => L.request && L.request.type === 'return').length, shid);
-  if (srReq !== 2) throw new Error('★ 批次申請歸還沒有把請求掛上去:' + srReq);
+    (await Api.call('show', { id }, S.token)).loans.filter(L => L.status === 'returned').length, shid);
+  if (srReq !== 2) throw new Error('★ 批次登記歸還應該把兩張單直接結案,實際結案 ' + srReq + ' 張');
   // 確認歸還 → 結案 → 結算卡片要出現,而且說東西都回來了
   await p.evaluate(async id => {
     const v = await Api.call('show', { id }, S.token);
@@ -935,35 +919,37 @@ const URL = 'http://localhost:' + (process.env.PORT || 8787) + '/';
     await p.fill('#l-pin', '1234'); await p.click('#login-f button'); await p.waitForSelector('[data-v=items]');
   }
 
-  // ---- 四種請求的按鈕要講自己的話(v2.6)----
-  // 以前寫死成「簽收 / 歸還」,延期與轉借都長出「撤回歸還」;
-  // 而且「請管理者當面確認」是用卡片文字 regex 猜型別的,延期會被猜成歸還、跳出錯的對話框。
+  // ---- 同仁端只剩「申請」這一步(v3.0)----
+  // 以前這裡驗的是四種請求的按鈕文案。v3.0 把簽收 / 歸還 / 延期 / 轉借 / 撤回 / 當面確認
+  // 六個入口全部砍掉了,所以改成反向守門:連舊資料(身上還掛著 request)也不能長出那些鈕。
   {
     const out = await p.evaluate(() => {
-      const mk = type => ({
-        id: 'L2609-999', event: '標籤測試', applicant: '員工A', dept: '業務部',
-        status: type === 'pickup' ? 'approved' : 'out',
-        statusLabel: type === 'pickup' ? '已核准' : '出借中',
+      const mk = (status, req) => ({
+        id: 'L2609-999', event: '入口測試', applicant: '員工A', dept: '業務部',
+        status: status, statusLabel: status === 'approved' ? '已核准' : '出借中',
         start: '2026-10-01', end: '2026-10-05',
         lines: [{ itemId: 'P0001', name: '測試機', qty: 1, location: '新竹', mode: 'qty', returned: 0, lost: 0, outstanding: 1, units: [], returnedUnits: [], lostUnits: [] }],
-        request: { type, at: '2026-09-27 10:00', by: '員工A', end: '2026-10-09' },
-        stage: '待確認', overdue: false, archived: false
+        request: req, stage: req ? '待確認' : '', overdue: false, archived: false
       });
-      const r = {};
-      ['pickup', 'return', 'extend', 'transfer'].forEach(t => {
+      const cases = [['approved', null], ['out', null],
+        ['approved', { type: 'pickup', at: '2026-09-27 10:00', by: '員工A' }],
+        ['out', { type: 'return', at: '2026-09-27 10:00', by: '員工A' }],
+        ['out', { type: 'extend', at: '2026-09-27 10:00', by: '員工A', end: '2026-10-09' }],
+        ['out', { type: 'transfer', at: '2026-09-27 10:00', by: '員工A', toName: '員工B' }]];
+      return cases.map(([st, rq]) => {
         const d = document.createElement('div');
-        d.innerHTML = loanCard(mk(t), { mine: true });
-        const cancel = [...d.querySelectorAll('[data-act=u-cancel-req]')][0];
-        const onsite = [...d.querySelectorAll('[data-act=u-onsite]')][0];
-        r[t] = { label: cancel && cancel.textContent.trim(), type: onsite && onsite.dataset.t };
+        d.innerHTML = loanCard(mk(st, rq), { mine: true });
+        return { st: st, rq: rq ? rq.type : '-',
+          acts: [...new Set([...d.querySelectorAll('[data-act]')].map(e => e.dataset.act))] };
       });
-      return r;
     });
-    const want = { pickup: '撤回領取', 'return': '撤回歸還', extend: '撤回延期', transfer: '撤回轉借' };
-    Object.keys(want).forEach(t => {
-      if (out[t].label !== want[t]) throw new Error(`★ ${t} 的撤回鈕寫成「${out[t].label}」,應該是「${want[t]}」`);
-      if (out[t].type !== t) throw new Error(`★ ${t} 的當面確認鈕帶的型別是「${out[t].type}」—— 不可以用卡片文字去猜`);
+    const BAN = ['u-pickup', 'u-return', 'u-extend', 'u-transfer', 'u-onsite', 'u-cancel-req'];
+    out.forEach(c => {
+      const hit = c.acts.filter(a => BAN.includes(a));
+      if (hit.length) throw new Error(`★ 同仁端(${c.st} / request=${c.rq})又長出被砍掉的入口:${hit.join('、')}`);
     });
+    // 反過來也要守:該留的「列印」還在,不然等於整段斷言都在測一塊空白
+    if (!out.some(c => c.acts.includes('print-loan'))) throw new Error('★ 同仁端的列印鈕不該一起被砍掉');
   }
 
   // ---- 展品目錄:依地點篩選,數字也只算那個地點(v2.7)----

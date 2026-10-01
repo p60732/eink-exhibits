@@ -143,7 +143,7 @@ async function drawShow(main) {
         ${v.status === 'cancelled' ? `<button class="btn sm" data-act="show-status" data-s="draft">改回規劃中</button>` : ''}
         ${v.status === 'draft' || v.status === 'confirmed' ? `<button class="btn sm ghost" data-act="show-status" data-s="cancelled">取消展覽</button>` : ''}
         ${live.length ? `<button class="btn sm" data-act="show-extend">批次延期(${live.length} 張)</button>` : ''}
-        ${outNow.length ? `<button class="btn brand sm" data-act="show-return">批次申請歸還(${outNow.length} 張)</button>` : ''}
+        ${outNow.length ? `<button class="btn brand sm" data-act="show-return">批次登記歸還(${outNow.length} 張)</button>` : ''}
         <span class="spacer"></span>
         ${v.loanCount || v.archived ? '' : `<button class="btn sm ghost" data-act="show-del">刪除</button>`}
       </div>

@@ -1,6 +1,4 @@
 /* ===================== 共用元件 ===================== */
-/** 四種請求的中文字。按鈕標籤、當面確認對話框共用一份,免得哪天又有人只改一邊 */
-const REQ_WORD = { pickup: '領取', 'return': '歸還', extend: '延期', transfer: '轉借' };
 /** 操作紀錄大類的顯示順序。名稱與歸類規則都在後端(Logic.logCat),這裡只決定籤條排列 */
 const LOG_CAT_ORDER = ['loan', 'item', 'show', 'cat', 'user', 'other'];
 
@@ -19,7 +17,8 @@ function archPill(L) { return L.archived ? '<span class="pill">已封存</span>'
 function statusPill(L) {
   return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.stage ? ` <span class="pill pending">${esc(L.stage)}</span>` : '') + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
 }
-/** 待確認請求的說明列(四種請求共用) */
+/** 待確認請求的說明列。
+    v3.0 之後同仁端不再送出任何請求,這一段只剩「舊資料收尾」會用到 */
 function reqBanner(req, mine) {
   if (!req || !req.type) return '';
   const T = { pickup: '簽收領取', 'return': '歸還', extend: '延長歸還日', transfer: '轉借' };
@@ -64,13 +63,10 @@ function loanCard(L, opts = {}) {
   if (opts.mine) {
     if (L.status === 'pending' && !req) A.push(btn('edit-loan', '修改申請'));
     if ((L.status === 'pending' || L.status === 'approved') && !req) A.push(btn('cancel', '取消申請', 'danger'));
-    if ((L.status === 'approved' || L.status === 'out') && !req) A.push(btn('u-extend', '申請延期'), btn('u-transfer', '轉借'));
-    if (L.status === 'approved' && !req) A.push(btn('u-pickup', '簽收領取', 'pri'));
-    if (L.status === 'out' && !req) A.push(btn('u-return', '歸還', 'pri'));
-    // 四種請求各自用自己的字。以前這裡寫死成「簽收 / 歸還」,延期與轉借都會長出「撤回歸還」,
-    // 而且 u-onsite 是用卡片上的文字去 regex 猜型別的 —— 延期會被猜成歸還,跳出錯的對話框。
-    if (req) A.push(`<button class="btn sm ghost" data-act="u-cancel-req" data-id="${L.id}">撤回${REQ_WORD[req.type] || '申請'}</button>`,
-      `<button class="btn sm pri" data-act="u-onsite" data-id="${L.id}" data-t="${esc(req.type)}">請管理者當面確認</button>`);
+    /* v3.0(2026-10-01):同仁端只剩「申請」這一步。
+       簽收領取 / 申請歸還 / 申請延期 / 轉借 / 撤回 / 當面確認六個入口全部拿掉 ——
+       核准就等於東西交出去了,之後一律由管理者登記歸還,同仁收 Email 就好。
+       要延期就跟管理者說,管理者直接改。 */
   }
   const who = admin ? `<span>借用人 <b>${esc(L.applicant)}</b>${L.dept ? '・' + esc(L.dept) : ''}</span>${L.contact ? `<span>聯絡 ${esc(L.contact)}</span>` : ''}` : '';
   const notes = [L.purpose && '用途:' + L.purpose, L.reviewNote && '審核:' + L.reviewNote + (L.reviewer ? '(' + L.reviewer + ')' : ''), L.note && '備註:' + L.note].filter(Boolean);

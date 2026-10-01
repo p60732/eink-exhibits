@@ -36,41 +36,21 @@ function editLoan(id) {
 }
 function cancelEdit() { S.editing = null; S.cart = []; store.del(uk('draft')); saveCart(); go('mine'); }
 
-/** 同仁申請延期 / 管理者直接延期 */
-function extendModal(id, asAdmin) {
+/** 管理者直接延期。v3.0 之後同仁沒有「申請延期」這條路,要延期就跟管理者說 */
+function extendModal(id) {
   const L = findLoan(id);
   if (!L) return toast('請重新整理這一頁', true);
-  const m = openModal(`<h2>${asAdmin ? '延長歸還日' : '申請延長歸還日'} ${esc(id)}</h2>
+  const m = openModal(`<h2>延長歸還日 ${esc(id)}</h2>
     <p class="sub">${esc(L.event)}・目前歸還日 <b>${esc(L.end)}</b>。系統會檢查多出來的那一段期間還借不借得到。</p>
     <label class="f"><span>新的歸還日 <b>*</b></span><input type="date" id="xd" min="${esc(plusDays(L.end, 1))}" max="${esc(shiftDays(todayStr(), DATE_FWD_DAYS))}" value="${esc(plusDays(L.end, 7))}"></label>
     <label class="f"><span>說明</span><input type="text" id="xn" placeholder="例:展期延後一週"></label>
-    ${asAdmin ? '<label class="chk"><input type="checkbox" id="xf">數量不足仍延期</label>' : ''}
-    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="xgo">${asAdmin ? '確定延期' : '送出申請'}</button></div>`);
+    <label class="chk"><input type="checkbox" id="xf">數量不足仍延期</label>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="xgo">確定延期</button></div>`);
   $('#xgo', m).onclick = () => {
     const end = $('#xd', m).value, note = $('#xn', m).value;
     if (!end) return toast('請選新的歸還日', true);
-    const call = asAdmin
-      ? api('extendLoan', { id, end, note, force: $('#xf', m) && $('#xf', m).checked })
-      : api('requestExtend', { id, end, note });
-    run(() => call, asAdmin ? '已延期' : '已送出,請等管理者確認')
-      .then(() => { closeModal(); if (!asAdmin) onsiteModal(id, 'extend'); else render(); }).catch(() => { });
-  };
-}
-
-/** 同仁申請把借用轉給別人 */
-function transferModal(id) {
-  const L = findLoan(id);
-  if (!L) return toast('請重新整理這一頁', true);
-  const m = openModal(`<h2>轉借 ${esc(id)}</h2>
-    <p class="sub">${esc(L.event)}・目前借用人 <b>${esc(L.applicant)}</b>。轉出去之後歸還責任就在對方身上,逾期也算他的。</p>
-    <label class="f"><span>要轉給誰(工號) <b>*</b></span><input type="text" id="td" autocapitalize="characters" placeholder="例:10477"></label>
-    <label class="f"><span>說明</span><input type="text" id="tn" placeholder="例:我出差,後續由他負責"></label>
-    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="tgo">送出申請</button></div>`);
-  $('#tgo', m).onclick = () => {
-    const emp = $('#td', m).value.trim().toUpperCase();
-    if (!emp) return toast('請填寫要轉給誰的工號', true);
-    run(() => api('requestTransfer', { id, emp, note: $('#tn', m).value }), '已送出,請等管理者確認')
-      .then(() => { closeModal(); onsiteModal(id, 'transfer'); }).catch(() => { });
+    run(() => api('extendLoan', { id, end, note, force: $('#xf', m) && $('#xf', m).checked }), '已延期')
+      .then(() => { closeModal(); render(); }).catch(() => { });
   };
 }
 

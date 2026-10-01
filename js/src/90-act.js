@@ -171,26 +171,26 @@ const ACT = {
         .concat((SE.lines || []).map(r => [r.itemId, r.name, r.location, r.planned, r.issued, r.returned, r.lost, r.unreturned, (r.loans || []).join(' ')]))
         .concat([['', '合計', '', SE.totals.planned, SE.totals.issued, SE.totals.returned, SE.totals.lost, SE.totals.unreturned, '']]));
   },
-  /** 批次申請歸還:撤場時一次把底下出借中的單都送出歸還申請 */
+  /** 批次登記歸還:撤場時一次把底下出借中的單都結案(v3.0 之後沒有「申請歸還」這一步了)*/
   'show-return': async () => {
     const v = await cachedGet('show|' + S.showId, 'show', { id: S.showId });
     const out = (v.loans || []).filter(L => L.status === 'out');
     if (!out.length) return toast('底下沒有出借中的借用單', true);
-    openModal(`<h2>批次申請歸還</h2>
-      <p class="meta">預設整批全還、還回原本借出的廠區。這一步只是送出申請,實際扣庫存仍然要管理者確認歸還時逐項核對。
-        已經掛著其他請求(延期 / 轉借)的單會被跳過,不會被蓋掉。</p>
+    openModal(`<h2>批次登記歸還</h2>
+      <p class="meta">預設整批全還、還回原本借出的廠區,送出之後這幾張單就結案了,申請人會收到 Email。
+        要改數量、標短少或損壞,請改用每張單自己的「登記歸還」。</p>
       ${out.map(L => `<label class="chk"><input type="checkbox" class="sr-id" value="${esc(L.id)}" checked>
-        <span class="mono">${esc(L.id)}</span> ${esc(L.applicant)}・${L.lines.length} 項${L.request && L.request.type ? '(已有待確認的請求)' : ''}</label>`).join('')}
+        <span class="mono">${esc(L.id)}</span> ${esc(L.applicant)}・${L.lines.length} 項</label>`).join('')}
       <label class="f" style="margin-top:8px"><span>備註</span><input type="text" id="sr-note" value="撤場" maxlength="100"></label>
-      <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-return-ok">送出申請</button></div>`);
+      <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" data-act="show-return-ok">登記歸還</button></div>`);
   },
   'show-return-ok': async () => {
     const ids = $$('.sr-id').filter(c => c.checked).map(c => c.value);
-    if (!ids.length) return toast('請先勾選要申請歸還的借用單', true);
+    if (!ids.length) return toast('請先勾選要登記歸還的借用單', true);
     const r = await run(() => api('returnMany', { id: S.showId, ids: ids, note: $('#sr-note').value })).catch(() => null);
     if (!r) return;
     closeModal();
-    toast('已送出 ' + r.ok + ' 張' + (r.fail.length ? ',' + r.fail.length + ' 張沒成功' : ''));
+    toast('已登記歸還 ' + r.ok + ' 張' + (r.fail.length ? ',' + r.fail.length + ' 張沒成功' : ''));
     S.showLines = null;
     if (r.fail.length) openModal(`<h2>有 ${r.fail.length} 張沒送出</h2>
       <div class="banner bad">${r.fail.map(f => esc(f.id) + ':' + esc(f.error)).join('<br>')}</div>
@@ -311,9 +311,7 @@ const ACT = {
   'approve': el => approveModal(el.dataset.id),
   'edit-loan': el => editLoan(el.dataset.id),
   'cancel-edit': () => cancelEdit(),
-  'u-extend': el => extendModal(el.dataset.id, false),
-  'u-transfer': el => transferModal(el.dataset.id),
-  'extend': el => extendModal(el.dataset.id, true),
+  'extend': el => extendModal(el.dataset.id),
   'req-ok': el => decideModal(el.dataset.id, true),
   'req-no': el => decideModal(el.dataset.id, false),
   'print-loan': el => printLoan(el.dataset.id),
@@ -332,10 +330,6 @@ const ACT = {
   'import': () => importModal(),
   'edit-user': el => userModal(el.dataset.id),
   'import-users': () => importUsersModal(),
-  'u-pickup': el => userPickupModal(el.dataset.id),
-  'u-return': el => userReturnModal(el.dataset.id),
-  'u-onsite': el => onsiteModal(el.dataset.id, el.dataset.t),
-  'u-cancel-req': el => run(() => api('cancelRequest', { id: el.dataset.id }), '已撤回').then(render).catch(() => { }),
   'lookup-code': el => lookupModal(el.dataset.code),
   'multi-clear': () => { S.multi.clear(); S._catDraw(); },
   'multi-go': () => {

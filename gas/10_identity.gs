@@ -72,13 +72,6 @@ var Identity = (function () {
     return u;
   }
   function requireAdmin(u) { if (!u || u.role !== 'admin') throw E('需要管理者權限'); }
-  /** 當面確認:驗證在場管理者的工號 + PIN */
-  function verifyAdmin(db, emp, pin) {
-    var a = findByEmp(db, emp);
-    if (!a || a.role !== 'admin' || !bool(a.active)) throw E('此工號不是管理者');
-    checkPin_(a, pin);
-    return a;
-  }
 
   /* ---- 名冊維護 ---- */
   function createUser_(db, actor, p) {
@@ -191,5 +184,5 @@ var Identity = (function () {
     }
   };
 
-  return { actions: actions, authenticate: authenticate, requireAdmin: requireAdmin, verifyAdmin: verifyAdmin };
+  return { actions: actions, authenticate: authenticate, requireAdmin: requireAdmin };
 })();

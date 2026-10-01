@@ -5,7 +5,6 @@ const M = [
   ['00_gateway.gs', "if (route.auth === 'admin') Identity.requireAdmin(c.user);", '', '拿掉管理者權限檢查'],
   ['00_gateway.gs', 'checkPayload_(req.payload, route.fields, route.big)', '(req.payload || {})', '拿掉參數白名單'],
   ['00_gateway.gs', "err.userFacing ? err.message : '操作失敗,請稍後再試'", 'err.message', '錯誤訊息洩漏內部細節'],
-  ['10_identity.gs', '    checkPin_(a, pin);\n    return a;', '    return a;', '當面確認不驗管理者 PIN'],
   ['10_identity.gs', "if (bool(u.mustChange) && ['me', 'changePin', 'logout'].indexOf(action) < 0) throw E('請先變更 PIN');", '', '拿掉首次改 PIN 強制'],
   ['10_identity.gs', "|| String(+u.sessionVer || 0) !== p[1]", '', '登出後 token 仍有效'],
   ['10_identity.gs', 'function guardOk_(k) { return', 'function guardOk_(k) { return true || ', '拿掉 PIN 錯誤次數限制'],
@@ -73,7 +72,6 @@ const M = [
   ['20_logic.gs', "if (L.status !== 'pending') throw E('只有「待審核」的申請可以修改');", '', '已核准的單也能被改掉'],
   ['20_logic.gs', "if (newEnd <= L.end) throw E('新的歸還日要比原本的 ' + L.end + ' 晚');", '', '延期可以往前縮'],
   ['20_logic.gs', "if (short.length && !force) throw E('延長期間數量不足:'", "if (false) throw E('延長期間數量不足:'", '延期不檢查延長期間的庫存'],
-  ['20_logic.gs', "if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');", '', '同一張單可以同時掛兩個請求'],
   ['20_logic.gs', "catch (e) { fail.push({ id: id, error: e.userFacing ? e.message : '無法核准' }); }", 'catch (e) { ok++; }', '批次核准把失敗的也算成功'],
   // 效能索引:資料變了卻沒清掉快取,會算出過期的可借量
   ['20_logic.gs', "if (t === 'Loans') { m.li = null; m.si = null; }", '', '借用單索引沒隨資料更新'],
@@ -85,6 +83,7 @@ const M = [
   // 分地點庫存的守門
   ['20_logic.gs', "if (where != null) return siteTotal(db, item, where);", '', '可借量不分地點,新竹借光了林口也跟著不能借'],
   ['20_logic.gs', "if (loc(u.location) !== where) throw E(uid + ' 放在 '", "if (false) throw E(uid + ' 放在 '", '點交可以拿別廠的機器交差'],
+  ['20_logic.gs', "return u.itemId === it.id && u.status === 'in' && loc(u.location) === where && !used[u.id];", "return u.itemId === it.id && u.status === 'in' && !used[u.id];", '核准自動綁定時拿了別廠的機器'],
   ['20_logic.gs', "if (sites.length > 1) throw E('「' + it.name + '」放在 '", "if (false) throw E('「' + it.name + '」放在 '", '多地點時沒要求指定要借哪一點'],
   ['20_logic.gs', "} else if (sites.length && sites.indexOf(where) < 0) {", '} else if (false) {', '可以借一個根本沒庫存的地點'],
   ['20_logic.gs', "if (onlyHere && at !== where) return;", '', '只盤一個廠區時卻把別廠的也算進差異'],
@@ -109,7 +108,6 @@ const M = [
    "    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; if (!(s(x.itemId) in input)) input[s(x.itemId)] = x; });\n    L.lines.forEach(function (ln) { if (!input[lineKey(ln)] && input[ln.itemId]) input[lineKey(ln)] = input[ln.itemId]; });",
    '歸還只送一個地點時套用到同品項的另一個地點'],
   ['20_logic.gs', "      L.status = 'rejected'; L.request = null;", "      L.status = 'rejected';", '駁回沒清掉待確認請求(已駁回的單還能被延期)'],
-  ['20_logic.gs', "      if (L.request && L.request.type) throw E('這張單還有待確認的請求,請先完成或撤回');\n      var lines = (c.p.lines || []).map", '      var lines = (c.p.lines || []).map', '歸還申請無聲蓋掉待確認的延期 / 轉借'],
   ['20_logic.gs', "        idx[k] = (idx[k] || 0) + outstanding(ln);", '        idx[k] = (idx[k] || 0) + int(ln.qty);', '展覽已開單量與可借量基準不一致(部分歸還會放掉庫存)'],
   ['20_logic.gs', "        if (sw.status === 'closed' || sw.status === 'cancelled') throw E(", "        if (false) throw E(", '已結案 / 已取消的展覽還能掛新借用單'],
   ['20_logic.gs', "        if (wait) throw E('此展品還有 ' + wait + ' 張待審核的申請,請先處理完再下架');", '', '有待審核申請的展品也能下架'],
