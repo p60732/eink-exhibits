@@ -8,6 +8,7 @@ const root = path.join(__dirname, '..');
 const { concat: concatUI, parts: uiParts } = require('../js/src/_concat');
 const read = f => f === 'js/ui.js' ? concatUI() : fs.readFileSync(path.join(root, f), 'utf8');
 const gasFiles = fs.readdirSync(path.join(root, 'gas')).filter(f => f.endsWith('.gs'));
+const GL = require('../gas-src/20_logic/_concat');
 const webFiles = ['index.html', 'css/style.css', 'js/connect.js', 'js/ui.js'];
 // 絕大多數檢查是同步的;少數需要真的跑起來(例如連線層的去重)會回傳 Promise,
 // 那種要收集起來最後一起等 —— 不等的話斷言失敗會變成沒人接的 rejection,報錯訊息也認不出是哪一條。
@@ -305,6 +306,35 @@ t('沒有 Email 就收不到任何通知:代填要對到帳號、登入要補 Em
   assert.ok(/openModal\(`<h2>請先補一下你的 Email/.test(ui) && /locked: true/.test(ui), '補 Email 的視窗要擋住畫面,不能略過');
   // 前端那道擋板擋不住舊瀏覽器,也擋不住代為登記 —— 後端要再擋一次
   assert.ok(/if \(!s\(applyUser\.email\)\)/.test(g), '★ 後端也要擋:帳號沒有 Email 就不收單');
+});
+t('gas/20_logic.gs 是建置產物:內容必須等於 gas-src/20_logic 串接的結果', () => {
+  /**
+   * 跟 js/ui.js 不同,這個產物**必須 commit** —— 部署是 clasp push 整個 gas/ 目錄,推的就是它。
+   * 所以不能用「原始碼目錄不准有這個檔」來守,只能守「它跟原始碼一致」。
+   * 手改了 gas/20_logic.gs 而沒改 gas-src/,或是改了 gas-src/ 忘記 node build.js,這條都會紅。
+   */
+  assert.strictEqual(read('gas/20_logic.gs'), GL.concat(),
+    '★ gas/20_logic.gs 與 gas-src/20_logic 串接結果不一致 —— 跑 node build.js 重新產生,並且一起 commit');
+  const p = GL.parts();
+  assert.ok(p.length >= 2, 'gas-src/20_logic 應該有多個分片');
+  assert.ok(/^\d\d-/.test(p[0]) && p.every(f => /^\d\d-/.test(f)),
+    '★ 每個分片都要有兩位數字前綴 —— 排序就是串接順序,也就是行為');
+  const head = fs.readFileSync(path.join(GL.SRC, p[0]), 'utf8');
+  const tail = fs.readFileSync(path.join(GL.SRC, p[p.length - 1]), 'utf8');
+  assert.ok(/var Logic = \(function \(\) \{/.test(head), '★ IIFE 的開頭必須在第一個分片裡');
+  assert.ok(/\}\)\(\);\s*$/.test(tail), '★ IIFE 的結尾必須在最後一個分片裡');
+});
+t('gas/ 底下只能有 .gs 與 appsscript.json(clasp 會把別的檔也推上去)', () => {
+  /**
+   * 原始碼刻意放在 gas-src/ 而不是 gas/src/:clasp push 推的是整個 gas/,
+   * 底下的 .js 會變成一個個獨立的 Apps Script 檔 —— Logic 被切成好幾段、重複宣告,線上直接掛。
+   * 這條就是在擋「哪天有人把 gas-src 搬回 gas/ 底下」。
+   */
+  fs.readdirSync(path.join(root, 'gas'), { withFileTypes: true }).forEach(e => {
+    assert.ok(e.isFile(), '★ gas/ 底下不可以有子目錄(clasp 會連裡面的檔一起推):' + e.name);
+    assert.ok(/\.gs$/.test(e.name) || e.name === 'appsscript.json',
+      '★ gas/ 底下只能放 .gs 與 appsscript.json,clasp 會把其他檔也當成程式推上去:' + e.name);
+  });
 });
 t('人員管理不再收部門,而且 Email 要看得出有沒有', () => {
   const ui = read('js/ui.js');

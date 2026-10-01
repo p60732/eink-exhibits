@@ -19,11 +19,11 @@
 | 啟用 | 積木 | 本專案的具體實作 |
 |---|---|---|
 | ☑ | 入口 | `index.html`:載入 css/js 後呼叫 `boot()`,不含邏輯 |
-| ☑ | 展示積木 | `js/ui.js` + `css/style.css`:畫面、表單格式驗證、QR 掃描/列印 |
+| ☑ | 展示積木 | `js/ui.js`(**建置產物**,原始碼在 `js/src/*.js`)+ `css/style.css`:畫面、表單格式驗證、QR 掃描/列印 |
 | ☑ | 排程積木 | `gas/50_schedule.gs`:每日 08:30 觸發 `dailyReminder` |
 | ☑ | 守門+調度 | `gas/00_gateway.gs`:`doPost` → 路由表(權限、欄位白名單)→ 分派 → `{success,data,error}` |
 | ☑ | 身份積木 | `gas/10_identity.gs`:工號登入、管理者 PIN、token、名冊維護 |
-| ☑ | 邏輯積木 | `gas/20_logic.gs`:庫存/可借量(分地點各算各的)、預約、審核、簽收、歸還、盤點、提醒內容(純規則,時間由外部傳入) |
+| ☑ | 邏輯積木 | `gas/20_logic.gs`(**建置產物,但要 commit**,原始碼在 `gas-src/20_logic/*.js`):庫存/可借量(分地點各算各的)、申請、審核、核准即出借、歸還、盤點、提醒內容(純規則,時間由外部傳入) |
 | ☑ | 連線積木 | `js/connect.js`:fetch GAS、逾時、讀取類重試、統一解析 |
 | ☐ | 爬蟲積木 | — |
 | ☐ | AI 積木 | — |
@@ -54,8 +54,13 @@
 
 - **邏輯積木是純規則引擎**:不讀系統時間、不呼叫任何 Google 服務;`today/now` 由守門調度傳入,通知只產生事件。規則層測試直接呼叫 `Logic.rules.*`。
 - **前端不重寫規則**:能不能借、缺多少、狀態文字都以後端回傳為準(結構測試會掃描 ui.js)。
-- **當面確認**:守門調度先請身份積木驗證在場管理者的工號+PIN,再把管理者身分交給邏輯積木。
 - **檔案載入順序**:Apps Script 依序載入各檔,路由表採第一次請求時才建立(`routes_()`),避免順序依賴。
+- **兩個建置產物,守門方式不一樣**:
+  `js/ui.js` 不在 repo 裡(結構測試擋著,原始碼目錄出現它就紅);
+  `gas/20_logic.gs` **必須在 repo 裡**,因為部署是 `clasp push` 整個 `gas/`,推的就是它 ——
+  所以改用「產物必須等於 `gas-src/20_logic` 串接結果」來守,手改產物當場紅。
+  原始碼刻意放在 `gas/` **外面**:放進去的話 clasp 會把每個分片也推成獨立的 Apps Script 檔,
+  Logic 的 IIFE 會被切斷、重複宣告,線上直接掛。
 
 ## 五、建置與部署
 
@@ -64,7 +69,7 @@
 | 測試 | `node tests/rules.test.js`、`e2e.test.js`、`structure.test.js`、`mutation.test.js`;前端 `node tests/serve.js 8787` + `PORT=8787 node tests/ui.test.js` |
 | 建置 | `node build.js`(先跑測試,失敗即停止)→ `dist/site`、`dist/gas` |
 | 前端上線 | push `main` → GitHub Actions 自動測試、建置、發佈 Pages |
-| 後端上線 | 把 `gas/*.gs` 貼到 Apps Script 同名檔案 → 部署 → 管理部署 → 新版本 |
+| 後端上線 | push `main` 且動到 `gas/**` → GitHub Actions `gas-deploy` 自動 `clasp push` + 更新原部署(網址不變)+ 驗線上 `code` 等於這個 commit |
 | 版本控制 | commit 訊息 `[積木名] 做了什麼`,例:`[邏輯] 逾期借用永久佔用可借量` |
 
 ## 六、路線圖

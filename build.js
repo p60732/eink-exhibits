@@ -17,6 +17,28 @@ function run(file) {
   const r = spawnSync(process.execPath, [path.join(root, 'tests', file)], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('✘ 測試失敗:' + file + ',停止建置'); process.exit(1); }
 }
+/**
+ * gas/20_logic.gs 的原始碼在 gas-src/20_logic/*.js,**先串好再跑測試** ——
+ * 測試(以及 CI 的 gas-deploy)讀的都是 gas/20_logic.gs 那個產物,
+ * 不先串的話改了原始碼卻測到舊產物,是最糟的一種綠燈。
+ * 這一步會寫回原始碼目錄,是刻意的:那個產物要 commit(clasp 推的是它)。
+ */
+{
+  const gl = require('./gas-src/20_logic/_concat');
+  const joined = gl.concat();
+  try { new Function(joined); } catch (e) {
+    console.error('✘ gas-src/20_logic 串接之後語法不正確:' + e.message); process.exit(1);
+  }
+  if (!/var Logic = \(function \(\) \{/.test(joined) || !/\}\)\(\);\s*$/.test(joined)) {
+    console.error('✘ 串接結果不是完整的 IIFE,頭尾那兩個檔可能漏了'); process.exit(1);
+  }
+  const before = fs.existsSync(gl.OUT) ? fs.readFileSync(gl.OUT, 'utf8') : null;
+  if (before !== joined) {
+    fs.writeFileSync(gl.OUT, joined);
+    console.log('  gas-src/20_logic → gas/20_logic.gs(' + gl.parts().length + ' 個檔,已更新,記得一起 commit)');
+  }
+}
+
 if (!args.includes('--no-test')) ['rules.test.js', 'e2e.test.js', 'structure.test.js', 'mutation.test.js'].forEach(run);
 
 const cfg = JSON.parse(fs.readFileSync(path.join(root, 'deploy.config.json'), 'utf8'));
