@@ -122,7 +122,8 @@ async function drawSiteBreak() {
 }
 
 /* 進行中的五個分頁都是同一批資料的子集合:向後端要一次「active」,分頁在前端切,點分頁不再等後端 */
-const LOAN_HIST = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
+// 這幾個分頁會翻到已結案的舊單,所以要讓使用者可以勾「含歷史資料」
+const LOAN_HIST = { returned: 1, all: 1, rejected: 1, cancelled: 1, short: 1 };
 const loanSrv = f => LOAN_HIST[f] ? f : 'active';
 /* v3.0:只剩四格流程,所以分頁也只剩這幾個。
    「待確認」「待點交」兩個分頁連同它們背後的請求 / 點交機制一起拿掉了 ——
@@ -143,16 +144,20 @@ VIEWS.loans = main => {
   const pick = loanTabOf[S.loanFilter];
   const list = pick ? all.filter(pick) : all;
   S._loans = all;
-  const F = [['pending', '待審核'], ['out', '出借中'], ['overdue', '逾期'], ['returned', '已歸還'], ['all', '全部']];
+  const F = [['pending', '待審核'], ['out', '出借中'], ['overdue', '逾期'], ['short', '短少'], ['returned', '已歸還'], ['all', '全部']];
   main.innerHTML = `<div class="row"><div><div class="eyebrow">Loans</div><h1>借用單</h1><p class="sub">核准就等於把展品交出去,之後由你登記歸還。口頭借用請從「借用申請」代為登記。</p></div><span class="spacer"></span><button class="btn brand" data-act="go" data-v="catalog">${ICON.plus}代為登記</button></div>
     <div class="toolbar"><div class="seg">${F.map(([k, l]) => {
-      const n = loanTabOf[k] ? all.filter(loanTabOf[k]).length : (k === 'all' || k === 'returned' ? null : all.length);
+      // 會翻歷史的那幾個分頁不顯示數字 —— 它們的內容不在手上這一批裡,算出來的數會騙人
+      const n = loanTabOf[k] ? all.filter(loanTabOf[k]).length : (LOAN_HIST[k] ? null : all.length);
       return `<button class="${S.loanFilter === k ? 'on' : ''}" data-act="lf" data-f="${k}">${l}${n ? ` <span class="n">${n}</span>` : ''}</button>`;
     }).join('')}</div>
     <input class="grow" type="search" id="lq" placeholder="搜尋單號、借用人、活動…">
     ${LOAN_HIST[srv] ? `<label class="chk"><input type="checkbox" id="lhist" ${S.loanHist ? 'checked' : ''}>含歷史資料</label>` : ''}
     <button class="btn sm ghost" data-act="loan-foldall">全部展開</button>
     <button class="btn sm ghost" data-act="arch-open">整理歷史</button></div>
+    ${S.loanFilter === 'short' ? `<div class="banner warn">這裡收的是<b>身上有短少的單</b>，已經結案的和還在出借中的都在。
+      短少的數量系統已經從庫存扣掉了；東西找回來請走<b>盤點</b>把數量加回去，這張單上的紀錄會留著。
+      ${hist ? '' : '<br>更早以前、已經搬進歷史工作表的舊單，要勾「含歷史資料」才看得到。'}</div>` : ''}
     ${hist ? '<div class="banner info">已含封存到歷史工作表的舊單(標示「已封存」的那些)。查完建議取消勾選,平常翻單會比較快。</div>' : ''}
     <div id="lbulk"></div>
     <div class="loans" id="llist"></div>`;

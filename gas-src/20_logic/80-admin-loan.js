@@ -28,6 +28,13 @@
         if (f === 'all') return true;
         if (f === 'active') return !!LIVE_ST[L.status];
         if (f === 'overdue') return isOverdue(L, today);
+        /**
+         * 「短少」是**跨狀態**的視角,不是一個狀態:只要單子身上有短少就收進來。
+         * 分成「已歸還(全部)/ 已歸還(短少)」看起來比較直覺,但那樣會漏掉
+         * **還了一半、其中有短少、所以還停在「出借中」**的單 —— 而那種才是最該追的
+         * (東西還在外面,而且已經確定少了)。
+         */
+        if (f === 'short') return (L.lines || []).some(function (ln) { return int(ln.lost) > 0; });
         return L.status === f;
       }).slice().sort(sortLoans).map(function (L) {
         var o = enrichLoan(c.db, L, today);

@@ -1074,6 +1074,39 @@ const itemCountBefore = ok('items', {}, A).length;
   assert.strictEqual(lost.lk, 2, '★ 短少要算在「借出的那一區」,不可以算到 to 指的那一區');
   assert.strictEqual(lost.hc, 2, '★ 短少不可以順便把庫存搬到 to 指的那一區');
 
+  /* 「短少」分頁:跨狀態收單 —— 這一條守的是「不可以退化成只看已歸還的單」 */
+  {
+    const SH = ok('saveItem', { item: { name: '短少分頁測試機', mode: 'qty', category: '體驗區',
+      sites: [{ location: '新竹', qty: 20 }] } }, A);
+    const mk = (ev, qty) => ok('createLoan', { event: ev, start: '2026-10-01', end: '2026-10-05',
+      lines: [{ itemId: SH.id, location: '新竹', qty: qty }], onBehalf: true, applicant: '10231' }, A).id;
+    const stat = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id).status;
+
+    // ① 結案了,而且中間有短少
+    const A1 = mk('短少已結案', 2);
+    ok('receive', { id: A1, lines: [{ itemId: SH.id, location: '新竹', returned: 1, lost: 1, to: '新竹' }] }, A);
+    assert.strictEqual(stat(A1), 'returned', '前置條件:1 還 + 1 短少 = 全部處理完,結案');
+
+    // ② **還停在出借中**、但已經有短少 —— 這種才是最該追的
+    const A2 = mk('出借中帶短少', 3);
+    ok('receive', { id: A2, lines: [{ itemId: SH.id, location: '新竹', returned: 0, lost: 1, to: '新竹' }] }, A);
+    assert.strictEqual(stat(A2), 'out', '前置條件:還有 2 台沒還,所以還停在出借中');
+
+    // ③ 乾乾淨淨還完的
+    const A3 = mk('乾淨歸還', 1);
+    ok('receive', { id: A3, lines: [{ itemId: SH.id, location: '新竹', returned: 1, to: '新竹' }] }, A);
+
+    const ids = ok('loans', { filter: 'short' }, A).map(x => x.id);
+    assert.ok(ids.includes(A1), '★ 已經結案、但有短少的單要收進「短少」');
+    assert.ok(ids.includes(A2), '★ **還在出借中**、但已經有短少的單也要收進來 —— 那種東西還在外面,最該追');
+    assert.ok(!ids.includes(A3), '★ 沒有短少的單不可以出現在「短少」分頁');
+    // 損壞不是短少:東西還在庫存裡,不該被當成不見了
+    const A4 = mk('只有損壞', 1);
+    ok('receive', { id: A4, lines: [{ itemId: SH.id, location: '新竹', returned: 1, damaged: 1, to: '新竹' }] }, A);
+    assert.ok(!ok('loans', { filter: 'short' }, A).map(x => x.id).includes(A4),
+      '★ 只有損壞、沒有短少的單不該進「短少」—— 東西還在庫存裡');
+  }
+
   // 逐台型:那一台的所在地要跟著改,而且可以逐台指定
   const MU = ok('saveItem', { item: { name: '跨廠單台機', mode: 'unit', category: '體驗區', location: '新竹' } }, A);
   ok('addUnits', { itemId: MU.id, count: 2, location: '新竹' }, A);

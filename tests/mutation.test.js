@@ -83,6 +83,9 @@ const M = [
   // 分地點庫存的守門
   ['20_logic.gs', "if (where != null) return siteTotal(db, item, where);", '', '可借量不分地點,新竹借光了林口也跟著不能借'],
   ['20_logic.gs', '    delete o.request;', '', '借用單又把舊的 request 欄漏回 API(前端會長出讀它的分支)'],
+  ['20_logic.gs', "if (f === 'short') return (L.lines || []).some(function (ln) { return int(ln.lost) > 0; });",
+   "if (f === 'short') return L.status === 'returned' && (L.lines || []).some(function (ln) { return int(ln.lost) > 0; });",
+   '「短少」分頁退化成只看已歸還(東西還在外面的那種反而看不到)'],
   ['20_logic.gs', "return u.itemId === it.id && u.status === 'in' && loc(u.location) === where && !used[u.id];", "return u.itemId === it.id && u.status === 'in' && !used[u.id];", '核准自動綁定時拿了別廠的機器'],
   ['20_logic.gs', "if (sites.length > 1) throw E('「' + it.name + '」放在 '", "if (false) throw E('「' + it.name + '」放在 '", '多地點時沒要求指定要借哪一點'],
   ['20_logic.gs', "} else if (sites.length && sites.indexOf(where) < 0) {", '} else if (false) {', '可以借一個根本沒庫存的地點'],

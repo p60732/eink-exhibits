@@ -91,7 +91,8 @@ function routes_() {
   add('admin', false, A, { dashboard: [] },
     { Items: '*', Units: '*', Loans: { cols: '*', only: LIVE }, Shows: SHOWS_, Users: C.USER_AUTH });
   // 借用單:只看進行中的那幾個分頁不必翻出歷史單,只有「已歸還 / 全部 / 已駁回 / 已取消」才整張讀
-  var HISTORY_ = { returned: 1, all: 1, rejected: 1, cancelled: 1 };
+  // short 也要整張讀:短少的單大多已經結案,躺在未結案那一段的前面
+  var HISTORY_ = { returned: 1, all: 1, rejected: 1, cancelled: 1, short: 1 };
   add('admin', false, A, { loans: ['filter', 'includeHistory'] }, function (p) {
     var live = !HISTORY_[String((p && p.filter) || 'active')];
     var spec = { Items: C.ITEM_CALC, Units: C.UNIT_CALC, Users: C.USER_AUTH, Shows: SHOWS_,

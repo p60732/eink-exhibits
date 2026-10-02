@@ -14,8 +14,21 @@ const PRINT_BAR = '<div class="pbar"><button class="go" onclick="window.print()"
   + '<button class="cl" onclick="window.close()">關閉,回到系統</button>'
   + '<span class="tip">印完按「關閉」就會回到展品管理系統。這一條不會被印出來。</span></div>';
 function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
+/**
+  * 短少與損壞要標在**收合狀態下就看得到的地方**。每張單預設只露出單號 / 標題 / 狀態,
+  * 數字藏在收合起來的明細裡 —— 追短少時一張一張點開等於沒有這個功能。
+  * 兩個分開標,因為它們是兩回事:**短少 = 東西真的不見了**(總數會少),
+  * **損壞 = 東西還在、只是壞了**(總數不變,只留記號)。
+  */
+function lossPills(L) {
+  const sum = k => (L.lines || []).reduce((a, ln) => a + (Number(ln[k]) || 0), 0);
+  const lost = sum('lost'), dmg = sum('damaged');
+  return (lost ? ` <span class="pill lost">短少 ${lost}</span>` : '')
+    + (dmg ? ` <span class="pill repair">損壞 ${dmg}</span>` : '');
+}
 function statusPill(L) {
-  return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
+  return `<span class="pill ${L.status}">${esc(L.statusLabel)}</span>` + lossPills(L)
+    + (L.overdue ? ` <span class="pill bad">逾期 ${L.overdueDays} 天</span>` : '');
 }
 function loanCard(L, opts = {}) {
   const chk = {}; (L.check || []).forEach(c => { chk[c.itemId + '@' + nloc(c.location)] = c; });
