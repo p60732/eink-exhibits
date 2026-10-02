@@ -198,3 +198,51 @@ async function receiveModal(id) {
   };
 }
 
+
+/**
+ * 補回短少(v3.4):短少 ≠ 永遠不見了,常常是幾天後在別的箱子裡翻到。
+ *
+ * 後端做的是 `lost −= n; returned += n`,所以 `未還 = 數量 − 已還 − 短少` 完全不變,
+ * 已結案的單補完還是已結案,「短少」分頁的條件會自己把它篩掉。
+ *
+ * ⚠️ 唯一會弄壞資料的是**重複加庫存** —— 數量型的盤點本來就能把某一區的數字調上去。
+ *    所以後端會擋「登記短少之後那一區又盤點過」的情況,這裡提供那條出口(只結短少、不加庫存)。
+ *    「不歸還」的那一份不給補:它是決定不收回來,不是不見了。
+ */
+async function recoverModal(id) {
+  const L = await getLoan(id);
+  const short = L.lines.filter(l => (Number(l.lost) || 0) - (Number(l.kept) || 0) > 0);
+  if (!short.length) return toast('這張單上沒有可以補回的短少', true);
+  const m = openModal(`<h2>補回短少 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・${esc(L.applicant)}</p>
+    <div class="banner info" style="font-size:13px">
+      東西後來找到了就補在這裡:<b>庫存加回去,這張單上的短少也一起結掉</b>,之後就不會再出現在「短少」分頁。<br>
+      單子的狀態不會變(已結案的還是已結案)。<b>「不歸還」的那一份不在這裡</b> —— 那是決定不收回來,不是不見了。
+    </div>
+    <div class="lines">${short.map(l => {
+      const k = esc(lkey(l)), back = backSelect(l), max = (Number(l.lost) || 0) - (Number(l.kept) || 0);
+      if (l.mode === 'unit') {
+        const lost = (l.lostUnits || []).filter(u => !(l.keptUnits || []).includes(u));
+        return `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b>${back}</div>
+          ${lost.map(u => `<label class="row" style="margin:6px 0;gap:8px">
+            <input type="checkbox" data-fu="${esc(u)}" data-it="${k}" checked>
+            <span class="mono">${esc(u)}</span></label>`).join('')}</div>`;
+      }
+      return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">短少 ${max}</span></span>${back}
+        <label class="meta">找回 <input type="number" min="0" max="${max}" value="${max}" data-fq="${k}" style="width:80px"></label></div>`;
+    }).join('')}</div>
+    ${short.some(l => l.mode !== 'unit') ? `<label class="row" style="gap:8px;margin-top:12px">
+      <input type="checkbox" id="rcskip">
+      <span class="meta"><b>只結短少,不要加庫存</b> —— 如果這一區已經用「盤點」把數字調對了,再加一次會變成兩台。</span></label>` : ''}
+    <label class="f" style="margin-top:10px"><span>備註(選填)</span><input type="text" id="rcn" placeholder="在哪裡找到的…"></label>
+    <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="rcgo">確認補回</button></div>`,
+    { wide: true, noFocus: true });
+  $('#rcgo', m).onclick = () => {
+    const skip = $('#rcskip', m) && $('#rcskip', m).checked;
+    const lines = short.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
+      ? { itemId: l.itemId, location: nloc(l.location), to: to, units: $$(`[data-fu][data-it="${k}"]`, m).filter(i => i.checked).map(i => i.dataset.fu) }
+      : { itemId: l.itemId, location: nloc(l.location), to: to, qty: +$(`[data-fq="${k}"]`, m).value || 0 }; });
+    if (!lines.some(x => (x.qty || 0) > 0 || (x.units || []).length)) return toast('請至少填一項要補回的數量', true);
+    run(() => api('recoverLost', { id, lines, note: $('#rcn', m).value, stock: skip ? 'skip' : 'add' }))
+      .then(() => { toast(skip ? '已結掉短少(庫存沒有變動)' : '已補回庫存'); closeModal(); render(); }).catch(() => { });
+  };
+}

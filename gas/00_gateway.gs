@@ -117,6 +117,7 @@ function routes_() {
     { Loans: { cols: ['id', 'status', 'showId', 'start', 'end', 'event'], only: null }, Shows: C.SHOW_CALC, Users: C.USER_AUTH });
   add('admin', true, A, {
     approve: ['id', 'note', 'force'], reject: ['id', 'note'], receive: ['id', 'lines', 'note'],
+    recoverLost: ['id', 'lines', 'note', 'stock'],
     saveItem: ['item'], archiveItem: ['id', 'archived'], addUnits: ['itemId', 'count', 'location', 'serials'], saveUnit: ['unit'],
     stocktake: ['location', 'qty', 'unitItems', 'seenUnits', 'apply', 'markMissingLost'], importItems: ['rows'],
     saveCat: ['cat'], moveCat: ['id', 'dir'],

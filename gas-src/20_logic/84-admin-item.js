@@ -4,6 +4,12 @@
       var lines = c.p.lines || [];
       return doReceive(c, L, lines, c.p.note);
     },
+    /** 補回短少:東西後來找到了。`stock` 預設 'add'(連庫存一起補),'skip' 只結掉單上的短少 */
+    recoverLost: function (c) {
+      var L = byId(c.db.Loans, s(c.p.id));
+      if (!L) throw E('找不到借用單。已經封存到歷史表的單沒辦法補,請用盤點把庫存調對。');
+      return doRecover(c, L, c.p.lines || [], c.p.note, s(c.p.stock) !== 'skip');
+    },
     items: function (c) {
       var today = c.today, st = stats(c.db);
       return c.db.Items.map(function (it) { return itemView(c.db, it, st, null, today); });

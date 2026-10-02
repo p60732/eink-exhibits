@@ -348,6 +348,10 @@ let r1 = ok('receive', { id: R1.id, lines: [{ itemId: RG.id, location: '新竹',
   unitResults: [{ id: RU[0], result: 'in' }, { id: RU[0], result: 'in' }] }] }, A);
 assert.strictEqual(r1.status, 'out', '★ 只還了一台,單子不可以變成已歸還');
 assert.strictEqual(r1.lines[0].returned, 1, '★ 同一台送兩次只能算一次');
+// 分成兩次請求送同一台也不行 —— 待還清單是每次從「units 扣掉已還 / 已遺失」重算出來的,
+// 所以已還清單沒記下來的話,同一台可以被還到天荒地老,單子提早結案、另一台卡在借出中
+bad('receive', { id: R1.id, lines: [{ itemId: RG.id, location: '新竹', unitResults: [{ id: RU[0], result: 'in' }] }] },
+  A, /沒有登記到任何一項/);
 ok('receive', { id: R1.id, lines: [{ itemId: RG.id, location: '新竹', unitResults: [{ id: RU[1], result: 'in' }] }] }, A);
 assert.strictEqual(ok('units', { itemId: RG.id }, A).every(u => u.status === 'in'), true, '兩台都回到在庫');
 
@@ -1176,6 +1180,114 @@ const itemCountBefore = ok('items', {}, A).length;
       '★ 不歸還的那一台不可以還留在總數裡');
     assert.ok(!ok('loans', { filter: 'short' }, A).map(x => x.id).includes(KL),
       '★ 逐台型的「不歸還」也不該進「短少」分頁');
+  }
+
+  /**
+   * 「補回短少」(v3.4):短少 ≠ 永遠不見了,常常是幾天後翻到。
+   * 模型跟「不歸還」相反但同樣不動核心公式:`lost −= n; returned += n`,
+   * 所以 outstanding 完全沒變、單子的狀態不會被這個動作改掉。
+   * 唯一會弄壞資料的是**重複加庫存**(盤點本來就能把數字調上去),守門在下面。
+   */
+  {
+    const RC = ok('saveItem', { item: { name: '補回短少測試機', mode: 'qty', category: '體驗區',
+      sites: [{ location: '新竹', qty: 10 }] } }, A);
+    const total = () => ok('items', {}, A).find(x => x.id === RC.id).total;
+    const mk = qty => ok('createLoan', { event: '補回測試', start: '2026-10-01', end: '2026-10-05',
+      lines: [{ itemId: RC.id, location: '新竹', qty: qty }], onBehalf: true, applicant: '10231' }, A).id;
+    const one = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id);
+    const inShort = id => ok('loans', { filter: 'short' }, A).map(x => x.id).includes(id);
+    const L0 = { itemId: RC.id, location: '新竹', to: '新竹' };
+
+    // ① 一般情況:3 台短少 2,後來找回 2
+    const R1 = mk(3);
+    ok('receive', { id: R1, lines: [Object.assign({ returned: 1, lost: 2 }, L0)] }, A);
+    assert.strictEqual(one(R1).status, 'returned', '前置:1 還 + 2 短少 = 處理完,結案');
+    assert.strictEqual(total(), 8, '前置:短少 2 要先把庫存扣掉');
+    assert.ok(inShort(R1), '前置:它應該在「短少」分頁上');
+
+    ok('recoverLost', { id: R1, lines: [{ itemId: RC.id, location: '新竹', qty: 2 }], note: '在倉庫角落找到' }, A);
+    const r1 = one(R1), rl = r1.lines[0];
+    assert.strictEqual(total(), 10, '★ 找回來要把庫存加回去');
+    assert.deepStrictEqual([rl.returned, rl.lost, rl.found], [3, 0, 2],
+      '★ 找回 = lost 減、returned 加、另外累計 found —— 這樣 outstanding 一個字都不用動');
+    assert.strictEqual(rl.outstanding, 0, '★ outstanding 不可以因為補回而變動');
+    assert.strictEqual(r1.status, 'returned', '★ 已結案的單補回之後還是已結案,不可以被打回出借中');
+    assert.ok(!inShort(R1), '★ 補回之後要自己離開「短少」分頁(條件是 lost − kept > 0)');
+
+    // ② 不能補超過真的短少的數量
+    const R2 = mk(2);
+    ok('receive', { id: R2, lines: [Object.assign({ returned: 0, lost: 1 }, L0)] }, A);
+    ok('receive', { id: R2, lines: [Object.assign({ returned: 1 }, L0)] }, A);
+    ok('recoverLost', { id: R2, lines: [{ itemId: RC.id, location: '新竹', qty: 99 }] }, A);
+    assert.strictEqual(one(R2).lines[0].lost, 0, '補回會被夾在「真的短少幾個」');
+    assert.strictEqual(total(), 10, '★ 夾住之後庫存只能加回那 1 個,不是 99 個');
+    bad('recoverLost', { id: R2, lines: [{ itemId: RC.id, location: '新竹', qty: 1 }] }, A, /沒有補回任何一項/);
+
+    // ③ 「不歸還」的那一份不可以被「找回」—— 它是決定不收回來,不是不見了
+    const R3 = mk(2);
+    ok('receive', { id: R3, lines: [Object.assign({ returned: 0, kept: 2, keptNote: '留在當地' }, L0)] }, A);
+    assert.strictEqual(total(), 8, '前置:不歸還一樣扣庫存');
+    bad('recoverLost', { id: R3, lines: [{ itemId: RC.id, location: '新竹', qty: 2 }] }, A, /沒有補回任何一項/);
+    assert.strictEqual(total(), 8, '★ 不歸還的那一份不可以被補回來(kept 不在可補的範圍裡)');
+
+    // ④ 守門:這一區在「登記短少之後」盤點過就不給自動補,否則同一台會被加兩次
+    const R4 = mk(2);
+    ok('receive', { id: R4, lines: [Object.assign({ returned: 0, lost: 2 }, L0)] }, A);
+    const afterLost = total();
+    ok('stocktake', { location: '新竹', qty: [{ itemId: RC.id, location: '新竹', counted: afterLost + 2 }], apply: true }, A);
+    assert.strictEqual(total(), afterLost + 2, '前置:盤點已經把那 2 台調回去了');
+    bad('recoverLost', { id: R4, lines: [{ itemId: RC.id, location: '新竹', qty: 2 }] }, A, /盤點過/);
+    assert.strictEqual(total(), afterLost + 2, '★ 被擋下來的那一次一個字都不可以寫進去');
+    assert.strictEqual(one(R4).lines[0].lost, 2, '★ 被擋下來時借用單也不可以被改到');
+
+    // 改用「只結短少、不加庫存」就過得去,而且庫存真的不動
+    ok('recoverLost', { id: R4, stock: 'skip', lines: [{ itemId: RC.id, location: '新竹', qty: 2 }] }, A);
+    assert.strictEqual(total(), afterLost + 2, '★ 只結短少就是不碰庫存');
+    assert.strictEqual(one(R4).lines[0].lost, 0, '單上的短少要結掉');
+    assert.ok(!inShort(R4), '★ 結掉之後要離開「短少」分頁');
+
+    // ⑤ 逐台型:找回來的那一台要變回在庫,而且可以指定放到哪一區
+    const RU = ok('saveItem', { item: { name: '補回單台機', mode: 'unit', category: '體驗區', location: '新竹' } }, A);
+    ok('addUnits', { itemId: RU.id, count: 2, location: '新竹' }, A);
+    const run_ = ok('units', { itemId: RU.id }, A).map(u => u.id);
+    const RL = ok('createLoan', { event: '單台補回', start: '2026-10-01', end: '2026-10-05',
+      lines: [{ itemId: RU.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A).id;
+    ok('receive', { id: RL, lines: [{ itemId: RU.id, location: '新竹', to: '新竹', unitResults: [
+      { id: run_[0], result: 'lost' }, { id: run_[1], result: 'in' }] }] }, A);
+    assert.strictEqual(ok('items', {}, A).find(x => x.id === RU.id).total, 1, '前置:遺失的那一台不算庫存');
+    assert.ok(inShort(RL), '前置:它在「短少」分頁上');
+
+    ok('recoverLost', { id: RL, lines: [{ itemId: RU.id, location: '新竹', to: '林口', units: [run_[0]] }] }, A);
+    const ru = one(RL).lines[0];
+    assert.strictEqual(ok('units', { itemId: RU.id }, A).find(u => u.id === run_[0]).status, 'in',
+      '★ 找回來的那一台要變回「在庫」,不然它永遠借不出去');
+    assert.strictEqual(ok('units', { itemId: RU.id }, A).find(u => u.id === run_[0]).location, '林口',
+      '★ 在別的廠區找到就放在那一區,不要硬塞回原本那區');
+    assert.ok(!(ru.lostUnits || []).includes(run_[0]), '★ 要從遺失清單移出去');
+    assert.ok((ru.returnedUnits || []).includes(run_[0]), '★ 並且記成已還(它真的回來了)');
+    assert.strictEqual(ru.outstanding, 0, '★ 逐台型的 outstanding 也不可以因為補回而變動');
+    assert.ok(!inShort(RL), '★ 補回之後離開「短少」分頁');
+
+    // ⑥ 不是「出借中 / 已歸還」的單根本沒有短少可以補
+    const R6 = mk(1);
+    ok('reject', { id: R6, note: '按錯了' }, A);
+    bad('recoverLost', { id: R6, lines: [{ itemId: RC.id, location: '新竹', qty: 1 }] }, A, /出借中或已歸還/);
+
+    // ⑦ 舊版登記的短少沒有 lostAt —— 無從判斷盤點補過沒有,寧可擋下來多問一次
+    const R7 = mk(2);
+    ok('receive', { id: R7, lines: [Object.assign({ returned: 0, lost: 2 }, L0)] }, A);
+    {
+      const sh = G.sheets['借用單'], head = sh.data[0];
+      const ri = head.indexOf('id'), ci = head.indexOf('lines');
+      const row = sh.data.find(r => r[ri] === R7);
+      const ls = JSON.parse(row[ci]); ls.forEach(l => { delete l.lostAt; }); row[ci] = JSON.stringify(ls);
+      ok('archiveItem', { id: RC.id, archived: false }, A);   // 直接改試算表要讓快取失效,隨便做一次寫入就會 bump
+    }
+    const before7 = total();
+    bad('recoverLost', { id: R7, lines: [{ itemId: RC.id, location: '新竹', qty: 2 }] }, A, /舊版/);
+    assert.strictEqual(total(), before7, '★ 舊版短少被擋下來時庫存一個字都不可以動');
+    ok('recoverLost', { id: R7, stock: 'skip', lines: [{ itemId: RC.id, location: '新竹', qty: 2 }] }, A);
+    assert.strictEqual(one(R7).lines[0].lost, 0, '確認過在庫數字就可以只結短少');
   }
 
   // 逐台型:那一台的所在地要跟著改,而且可以逐台指定

@@ -47,7 +47,7 @@ function loanCard(L, opts = {}) {
     }).join('、')}</div>` : '';
     let right = `<span class="q">× ${ln.qty}</span>`;
     const kept = Number(ln.kept) || 0, lost = (Number(ln.lost) || 0) - kept;
-    if ((L.status === 'out' || L.status === 'returned') && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.damaged ? `(損壞 ${ln.damaged})` : ''}${lost ? `・短少 ${lost}` : ''}${kept ? `・不歸還 ${kept}` : ''}</span>`;
+    if ((L.status === 'out' || L.status === 'returned') && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.damaged ? `(損壞 ${ln.damaged})` : ''}${lost ? `・短少 ${lost}` : ''}${kept ? `・不歸還 ${kept}` : ''}${ln.found ? `・找回 ${ln.found}` : ''}</span>`;
     if (c) right += c.short ? ` <span class="short">缺 ${c.short}(可借 ${c.available})</span>` : ` <span class="okt">足夠</span>`;
     return `<div class="line"><span class="nm">${esc(ln.name)} ${ln.mode === 'unit' ? '<span class="pill unit">逐台</span>' : ''}<br><span class="meta">${where}</span></span>${right}${units}${ln.keptNote ? `<div class="u">不歸還原因:${esc(ln.keptNote)}</div>` : ''}</div>`;
   }).join('');
@@ -58,6 +58,11 @@ function loanCard(L, opts = {}) {
   // 出借中的單:按錯了可以「取消核准」把東西收回來(只在還沒登記過歸還時,後端會擋)
   if (admin && L.status === 'out') A.push(`<button class="btn sm danger" data-act="reject" data-id="${L.id}">取消核准</button>`,
     btn('extend', '延期'), btn('receive', '登記歸還', 'pri'));
+  /* 短少的東西後來找到是常事,所以「補回短少」要出現在**看得到短少的那張卡片上**,
+     不要逼人記得「這種事要去盤點那一頁做」。已封存的單寫不回去,所以不給按。
+     「不歸還」那一份不算 —— 它不會回來,所以條件是 lost − kept。 */
+  if (admin && !L.archived && (L.status === 'out' || L.status === 'returned')
+    && (L.lines || []).some(ln => (Number(ln.lost) || 0) - (Number(ln.kept) || 0) > 0)) A.push(btn('recover', '補回短少'));
   if (!['pending', 'rejected', 'cancelled'].includes(L.status)) A.push(btn('print-loan', '列印', 'ghost'));
   if (opts.mine) {
     /* v3.0(2026-10-01):同仁端只剩「申請」這一步 —— 待審核時可以改或取消,之後什麼都不用做。

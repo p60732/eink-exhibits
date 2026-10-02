@@ -124,4 +124,33 @@ async function run(C) {
   const khead = await p.textContent(`#loan-${ids.keep} .loan-h`);
   if (!/不歸還\s*2/.test(khead)) throw new Error('★ 收合狀態下就要看得到「不歸還 2」:' + khead.replace(/\n/g, ' '));
   if (/短少/.test(khead)) throw new Error('★ 不歸還不可以被標成短少(一個要追、一個不用):' + khead.replace(/\n/g, ' '));
+
+  /**
+   * ⑦ 補回短少:東西後來找到了。守三件事 ——
+   * 按鈕要出現在**看得到短少的那張卡片上**(不是逼人去盤點那一頁)、
+   * 庫存真的加得回去、而且補完要自己離開「短少」分頁。
+   */
+  const totalOf = () => p.evaluate(async itemId => {
+    bumpCache();
+    return (await Api.call('items', {}, S.token)).find(x => x.id === itemId).total;
+  }, ids.itemId);
+  // 兩張單都是「已歸還」,所以在同一個分頁上比:有短少的要有鈕,純不歸還的不可以有
+  await p.click('[data-f=returned]'); await wait(1400);
+  if (!await p.$(`#loan-${ids.short} [data-act=recover]`)) throw new Error('★ 有短少的卡片上要直接看得到「補回短少」');
+  if (await p.$(`#loan-${ids.keep} [data-act=recover]`)) throw new Error('★ 純「不歸還」的單不該有「補回短少」—— 那些東西不會回來');
+  await p.click('[data-f=short]'); await wait(1400);
+  const t0 = await totalOf();
+  await p.click(`#loan-${ids.short} [data-act=recover]`); await p.waitForSelector('#rcgo');
+  await p.fill('#rcn', '在倉庫角落找到');
+  await p.click('#rcgo'); await wait(1400);
+  const t1 = await totalOf();
+  if (t1 !== t0 + 1) throw new Error(`★ 補回短少要把庫存加回去,實際 ${t0} → ${t1}`);
+  const after7 = await p.evaluate(async id => {
+    const L = (await Api.call('loans', { filter: 'all' }, S.token)).find(x => x.id === id);
+    return { st: L.status, lost: L.lines[0].lost || 0, found: L.lines[0].found || 0, left: L.lines[0].outstanding };
+  }, ids.short);
+  if (after7.lost !== 0 || after7.found !== 1) throw new Error('★ 短少要結掉並記成找回 1,實際 ' + JSON.stringify(after7));
+  if (after7.st !== 'returned' || after7.left !== 0) throw new Error('★ 補回不可以改變單子的狀態與未還數,實際 ' + JSON.stringify(after7));
+  await p.click('[data-f=short]'); await wait(1400); await shot('recovered');
+  if (await p.$(`#loan-${ids.short}`)) throw new Error('★ 補回之後那張單要自己離開「短少」分頁');
 }

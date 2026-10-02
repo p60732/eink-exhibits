@@ -580,7 +580,7 @@ var Logic = (function () {
           pending.splice(at, 1);        // 處理過就從待還清單移除:同一台送兩次只能算一次,
                                         // 否則 returned 會多加,單子提早結案,另一台永遠卡在「借出中」
           var u = byId(c.db.Units, uid);
-          if (r.result === 'lost') { touched++; ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; if (u) u.status = 'lost'; notes.push(uid + ' 遺失'); }
+          if (r.result === 'lost') { touched++; ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; ln.lostAt = today; if (u) u.status = 'lost'; notes.push(uid + ' 遺失'); }
           /**
            * 「不歸還」= 東西沒有不見,是**決定不收回來了**(例:老闆指示留在當地)。
            * 庫存一樣要扣,但它跟短少是兩回事:短少要追,這個已經結案了。
@@ -628,6 +628,9 @@ var Logic = (function () {
         lost += kept;
         if (ret || lost) touched++;
         ln.returned = int(ln.returned) + ret; ln.lost = int(ln.lost) + lost;
+        /* 記下「這一行最後一次登記短少是哪一天」。之後要補回短少時,
+           得靠它跟這一區的盤點日比對 —— 盤點已經把數字調對過的話,再加一次就重複了。 */
+        if (lost) ln.lostAt = today;
         if (kept) {
           ln.kept = int(ln.kept) + kept;
           ln.keptNote = (s(ln.keptNote) ? s(ln.keptNote) + ';' : '') + s(x.keptNote);
@@ -661,6 +664,78 @@ var Logic = (function () {
       L.applicant + ' 的借用單' + (done ? '已全部歸還,這筆結案。' : '登記了部分歸還,還有沒還完的項目。')
       + '\n登記人:' + c.user.name + '\n歸還日:' + today
       + (notes.length ? '\n\n' + notes.join('\n') : '')
+      + '\n\n' + linesText(c.db, L));
+    return enrichLoan(c.db, L, today);
+  }
+  /**
+   * 找回短少的東西(v3.4)。短少 ≠ 永遠不見了 —— 常常是幾天後在別的箱子裡翻到。
+   *
+   * 模型刻意跟「不歸還」相反但同樣不動核心公式:
+   *   lost −= n;  returned += n       → outstanding = qty − returned − lost 完全不變
+   * 所以單子的狀態不會被這個動作改掉(已結案的仍然是已結案),
+   * 而「短少」分頁的條件 `lost − kept > 0` 會自己把它篩掉,不用另外標記。
+   * 另外累加 ln.found 只是為了讓卡片上看得出「這批東西後來找回來了」。
+   *
+   * ⚠️ 重複加庫存是這個功能唯一會弄壞資料的地方:數量型的盤點本來就能把某一區的數字調上去,
+   *    如果有人先盤點調過、再按這裡,同一台會被加兩次。所以 addStock 這條路要先過守門。
+   *    逐台型沒有這個問題 —— 它的庫存是從 Units 的狀態算出來的(unitSites 只算 in / out),
+   *    同一台重複處理也只會是 in,不會變成兩台。
+   */
+  function doRecover(c, L, inputLines, note, addStock) {
+    var today = c.today, now = c.now;
+    if (L.status !== 'out' && L.status !== 'returned') throw E('只有出借中或已歸還的單可以補回短少');
+    var input = {};
+    (inputLines || []).forEach(function (x) { input[s(x.itemId) + '@' + loc(x.location)] = x; });
+    var notes = [], touched = 0;
+    L.lines.forEach(function (ln) {
+      var x = input[lineKey(ln)]; if (!x) return;
+      var it = byId(c.db.Items, ln.itemId);
+      var from = loc(ln.location), back = s(x.to) || from;
+      if (it && it.mode === 'unit') {
+        // 只有「登記成遺失」的那幾台可以找回來;「不歸還」是已經決定不收回來的,不在這裡處理
+        var kept = ln.keptUnits || [];
+        (x.units || []).forEach(function (raw) {
+          var uid = s(raw).toUpperCase(), at = (ln.lostUnits || []).indexOf(uid);
+          if (at < 0 || kept.indexOf(uid) >= 0) return;
+          ln.lostUnits.splice(at, 1);
+          ln.returnedUnits.push(uid);
+          ln.lost = int(ln.lost) - 1; ln.returned = int(ln.returned) + 1; ln.found = int(ln.found) + 1;
+          touched++;
+          var u = byId(c.db.Units, uid);
+          if (u) { u.status = 'in'; u.location = back; u.updatedAt = now; }
+          notes.push(uid + ' 找回(' + back + ')');
+        });
+      } else {
+        var avail = int(ln.lost) - int(ln.kept);          // 不歸還的那一份不能被「找回」
+        var n = Math.min(Math.max(0, avail), Math.max(0, int(x.qty)));
+        if (!n) return;
+        if (addStock) {
+          /**
+           * 守門:這一區在「登記短少之後」盤點過的話,盤點那個數字就是現況 ——
+           * 再加一次等於憑空多出東西。擋下來,讓人改用「只結短少」或去把盤點數字調對。
+           * 舊版登記的短少沒有 lostAt,無從判斷,一樣擋(寧可多問一次)。
+           */
+          var mm = stockMap(it), ent = mm[from] || {}, cAt = s(ent.countedAt), lAt = s(ln.lostAt);
+          if (!lAt) throw E('「' + it.name + '」這筆短少是舊版登記的,系統不知道登記日期,沒辦法判斷盤點有沒有已經補過。'
+            + '請先確認 ' + from + ' 目前的在庫數字:對的話改用「只結短少、不加庫存」,不對的話請用盤點把數字調對。');
+          if (cAt && cAt >= lAt) throw E('「' + it.name + '」在 ' + from + ' 於 ' + cAt + ' 盤點過(短少是 ' + lAt + ' 登記的)。'
+            + '再加一次庫存會重複算。請先確認目前的在庫數字:對的話改用「只結短少、不加庫存」,不對的話請用盤點把數字調對。');
+          adjustStock(c, it, back, n);
+        }
+        ln.lost = int(ln.lost) - n; ln.returned = int(ln.returned) + n; ln.found = int(ln.found) + n;
+        touched++;
+        notes.push((it ? it.name : '') + '(' + back + ') 找回 ' + n + (addStock ? '' : '(庫存不加,已盤點過)'));
+      }
+    });
+    if (!touched) throw E('這次沒有補回任何一項。請確認填的數量大於 0,而且這張單上真的有那麼多短少。');
+    if (s(note)) L.note = s(L.note) + ' [找回] ' + s(note);
+    dirty(c.db, 'Loans'); dirty(c.db, 'Units');
+    log(c, '補回短少', L.id, notes.join(';') + (s(note) ? '|' + s(note) : ''));
+    notify(c, mailList([applicantEmail(c.db, L), c.user.email]),
+      '[展品管理] 短少的東西找回來了 ' + L.id + ' — ' + L.event,
+      L.applicant + ' 的借用單原本登記為短少的項目,已經找回並歸還入庫。'
+      + '\n登記人:' + c.user.name + '\n日期:' + today
+      + '\n\n' + notes.join('\n') + (s(note) ? '\n備註:' + s(note) : '')
       + '\n\n' + linesText(c.db, L));
     return enrichLoan(c.db, L, today);
   }
@@ -723,7 +798,7 @@ var Logic = (function () {
     ['show', ['展覽', '封存借用單到歷史表']],
     ['cat', ['分類']],
     ['item', ['展品', '單台', '盤點', '上架']],
-    ['loan', ['借用', '歸還', '領取', '簽收', '轉借', '延期', '延長', '點交', '當面確認']],
+    ['loan', ['借用', '歸還', '領取', '簽收', '轉借', '延期', '延長', '點交', '當面確認', '補回短少']],
     ['user', ['帳號', '使用者', '人員', 'PIN', 'Email']]
   ];
   function logCat(action) {
@@ -1428,6 +1503,12 @@ var Logic = (function () {
       if (!L) throw E('找不到借用單');
       var lines = c.p.lines || [];
       return doReceive(c, L, lines, c.p.note);
+    },
+    /** 補回短少:東西後來找到了。`stock` 預設 'add'(連庫存一起補),'skip' 只結掉單上的短少 */
+    recoverLost: function (c) {
+      var L = byId(c.db.Loans, s(c.p.id));
+      if (!L) throw E('找不到借用單。已經封存到歷史表的單沒辦法補,請用盤點把庫存調對。');
+      return doRecover(c, L, c.p.lines || [], c.p.note, s(c.p.stock) !== 'skip');
     },
     items: function (c) {
       var today = c.today, st = stats(c.db);
