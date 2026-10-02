@@ -27,7 +27,7 @@ async function run(C) {
       lines: [{ itemId: it.id, location: '新竹', qty: qty }]
     }, S.token)).id;
     const r = { itemId: it.id, loc: '新竹', part: await mk('UI 部分歸還測試', 3),
-      short: await mk('UI 短少測試', 2), dmg: await mk('UI 損壞測試', 1) };
+      short: await mk('UI 短少測試', 2), dmg: await mk('UI 損壞測試', 1), keep: await mk('UI 不歸還測試', 2) };
     bumpCache();            // 繞過畫面建的資料,要把前端快取清掉,不然列表還是舊的
     return r;
   });
@@ -84,4 +84,44 @@ async function run(C) {
   const dhead = await p.textContent(`#loan-${ids.dmg} .loan-h`);
   if (!/損壞\s*1/.test(dhead)) throw new Error('★ 收合狀態下也要看得到「損壞 1」:' + dhead.replace(/\n/g, ' '));
   if (/短少/.test(dhead)) throw new Error('★ 只有損壞的單不可以標成短少:' + dhead.replace(/\n/g, ' '));
+
+  /**
+   * ⑥ 「不歸還」:東西沒有不見,是決定不收回來了(主管指示留在當地)。
+   * 這是整張表單唯一「按下去就不能反悔」的欄位,所以守三件事:
+   * 原因欄平常不佔位、填了數字才出現;沒寫原因按確認要被擋下來;
+   * 以及它**不可以**混進「短少」分頁(那張清單是用來追還沒追到的)。
+   */
+  await p.click('[data-f=out]'); await wait(900);
+  await p.click(`#loan-${ids.keep} [data-act=receive]`); await p.waitForSelector('#rgo2');
+  const whyShown = () => p.$eval('.modal [data-rkn]', el => !el.hidden);
+  if (await whyShown()) throw new Error('★ 不歸還原因欄平常不該佔位置,填了數字才出現');
+  await p.$eval('.modal [data-rq]', el => { el.value = '0'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await p.$eval('.modal [data-rk]', el => { el.value = '2'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  if (!await whyShown()) throw new Error('★ 不歸還填了數字,原因欄就要自己出現(它是必填,藏起來只會讓人卡住)');
+  const krest = await p.textContent('.modal [data-rest]');
+  if (!/這項還清/.test(krest)) throw new Error('★ 不歸還也要算進「還欠幾個」,2 個全部不歸還就該顯示「這項還清」:' + krest);
+
+  // 沒寫原因就按確認:要被擋在前端,而且什麼都不可以送出去
+  await p.click('#rgo2'); await wait(600);
+  const warn = await p.textContent('#toasts').catch(() => '');
+  if (!/原因/.test(warn)) throw new Error('★ 不歸還沒寫原因就按確認,要擋下來並說明:' + warn);
+  const mid = await p.evaluate(async id => (await Api.call('loans', { filter: 'all' }, S.token))
+    .find(x => x.id === id).status, ids.keep);
+  if (mid !== 'out') throw new Error('★ 被擋下來的那一次不可以真的送出去,實際狀態 ' + mid);
+
+  await p.fill('.modal [data-rkn]', '主管指示留在當地');
+  await p.click('#rgo2'); await wait(1400);
+  const kept = await p.evaluate(async id => {
+    const L = (await Api.call('loans', { filter: 'all' }, S.token)).find(x => x.id === id);
+    return { st: L.status, kept: L.lines[0].kept || 0, lost: L.lines[0].lost || 0 };
+  }, ids.keep);
+  if (kept.st !== 'returned') throw new Error('★ 2 個都標成不歸還 = 這張單處理完了,實際 ' + kept.st);
+  if (kept.kept !== 2) throw new Error('★ 不歸還要記成 kept 2,實際 ' + kept.kept);
+
+  await p.click('[data-f=short]'); await wait(1400);
+  if (await p.$(`#loan-${ids.keep}`)) throw new Error('★ 純「不歸還」的單不該出現在「短少」分頁 —— 已經結案,追它只是浪費時間');
+  await p.click('[data-f=returned]'); await wait(1400); await shot('kept_tab');
+  const khead = await p.textContent(`#loan-${ids.keep} .loan-h`);
+  if (!/不歸還\s*2/.test(khead)) throw new Error('★ 收合狀態下就要看得到「不歸還 2」:' + khead.replace(/\n/g, ' '));
+  if (/短少/.test(khead)) throw new Error('★ 不歸還不可以被標成短少(一個要追、一個不用):' + khead.replace(/\n/g, ' '));
 }

@@ -34,7 +34,8 @@
          * **還了一半、其中有短少、所以還停在「出借中」**的單 —— 而那種才是最該追的
          * (東西還在外面,而且已經確定少了)。
          */
-        if (f === 'short') return (L.lines || []).some(function (ln) { return int(ln.lost) > 0; });
+        // 扣掉「不歸還」—— 那些已經決定不收回來了,混進來會讓這個清單失去意義
+        if (f === 'short') return (L.lines || []).some(function (ln) { return int(ln.lost) - int(ln.kept) > 0; });
         return L.status === f;
       }).slice().sort(sortLoans).map(function (L) {
         var o = enrichLoan(c.db, L, today);

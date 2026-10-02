@@ -1107,6 +1107,77 @@ const itemCountBefore = ok('items', {}, A).length;
       '★ 只有損壞、沒有短少的單不該進「短少」—— 東西還在庫存裡');
   }
 
+  /**
+   * 「不歸還」:東西沒有不見,是**決定不收回來了**(例:主管指示留在當地)。
+   * 它跟短少一樣要把庫存扣掉,但**不可以**進「短少」分頁 —— 那張清單是用來追還沒追到的,
+   * 混進一堆已經結案的就等於沒有這個功能。計數上掛在 lost 底下(kept ⊆ lost),
+   * 所以 `未還 = 數量 − 已還 − 短少` 這條核心公式一個字都不用動。
+   */
+  {
+    const KP = ok('saveItem', { item: { name: '不歸還測試機', mode: 'qty', category: '體驗區',
+      sites: [{ location: '新竹', qty: 10 }] } }, A);
+    const total = () => ok('items', {}, A).find(x => x.id === KP.id).total;
+    const mk = qty => ok('createLoan', { event: '不歸還測試', start: '2026-10-01', end: '2026-10-05',
+      lines: [{ itemId: KP.id, location: '新竹', qty: qty }], onBehalf: true, applicant: '10231' }, A).id;
+    const one = id => ok('loans', { filter: 'all' }, A).find(x => x.id === id);
+
+    assert.strictEqual(total(), 10, '前置:10 台');
+
+    // 原因是強制的 —— 這是整個流程唯一「按下去就不能反悔」的地方
+    const K0 = mk(2);
+    bad('receive', { id: K0, lines: [{ itemId: KP.id, location: '新竹', returned: 0, kept: 1, to: '新竹' }] },
+      A, /原因/);
+    assert.strictEqual(one(K0).lines[0].returned + one(K0).lines[0].lost, 0,
+      '★ 原因沒寫的那一次要整筆不存檔,不可以「擋了訊息但數字已經扣下去」');
+    assert.strictEqual(total(), 10, '★ 被擋下來的那一次不可以動到庫存');
+
+    // 10 個寄出去 → 先回 1、2 個留在當地不收回來、剩下 1 個還在外面
+    const K1 = mk(4);
+    ok('receive', { id: K1, lines: [{ itemId: KP.id, location: '新竹', returned: 1, kept: 2,
+      keptNote: '主管指示留在當地', to: '新竹' }] }, A);
+    const k1 = one(K1), ln1 = k1.lines[0];
+    assert.strictEqual(k1.status, 'out', '★ 還有 1 個沒處理,單子要停在出借中,不可以提早結案');
+    assert.strictEqual(ln1.outstanding, 1, '★ 未還 = 4 − 已還 1 − 短少 2(不歸還算在短少底下)');
+    assert.strictEqual(ln1.kept, 2, '不歸還要獨立記下來,才分得出哪些要追');
+    assert.strictEqual(ln1.lost, 2, 'kept 是 lost 的子集,所以 lost 一樣是 2');
+    assert.ok(/主管指示留在當地/.test(ln1.keptNote || ''), '原因要留在單子上');
+    assert.strictEqual(total(), 8, '★ 不歸還一樣要把庫存扣掉(東西真的不在了)');
+    assert.ok(!ok('loans', { filter: 'short' }, A).map(x => x.id).includes(K1),
+      '★ 純「不歸還」的單**不可以**進「短少」分頁 —— 已經結案了,追它只是浪費時間');
+
+    // 同一張單又有短少又有不歸還:短少還沒追到,所以還是要進清單
+    const K2 = mk(2);
+    ok('receive', { id: K2, lines: [{ itemId: KP.id, location: '新竹', returned: 0, lost: 1, kept: 1,
+      keptNote: '留在當地', to: '新竹' }] }, A);
+    assert.strictEqual(one(K2).status, 'returned', '1 短少 + 1 不歸還 = 全部處理完');
+    assert.ok(ok('loans', { filter: 'short' }, A).map(x => x.id).includes(K2),
+      '★ 混在一起時,只要還有「真的不見了」的部分就要進「短少」分頁');
+    assert.strictEqual(total(), 6, '短少 1 + 不歸還 1 都要扣');
+
+    // 逐台型:接到既有的 retired(unitSites 只算 in / out,所以它本來就不佔庫存)
+    const KU = ok('saveItem', { item: { name: '不歸還單台機', mode: 'unit', category: '體驗區', location: '新竹' } }, A);
+    ok('addUnits', { itemId: KU.id, count: 2, location: '新竹' }, A);
+    const kun = ok('units', { itemId: KU.id }, A).map(u => u.id);
+    const KL = ok('createLoan', { event: '單台不歸還', start: '2026-10-01', end: '2026-10-05',
+      lines: [{ itemId: KU.id, location: '新竹', qty: 2 }], onBehalf: true, applicant: '10231' }, A).id;
+    const ul = { itemId: KU.id, location: '新竹', to: '新竹' };
+    bad('receive', { id: KL, lines: [Object.assign({ unitResults: [{ id: kun[0], result: 'retired' }] }, ul)] },
+      A, /原因/);
+    ok('receive', { id: KL, lines: [Object.assign({ unitResults: [
+      { id: kun[0], result: 'retired', note: '留在當地' }, { id: kun[1], result: 'in' }] }, ul)] }, A);
+    const kl = one(KL), lnu = kl.lines[0];
+    assert.strictEqual(kl.status, 'returned', '兩台都處理完了');
+    assert.strictEqual(lnu.kept, 1, '逐台型的不歸還也要算進 kept');
+    assert.deepStrictEqual(lnu.keptUnits, [kun[0]],
+      '★ 要另外記 keptUnits —— lostUnits 裡混了「遺失」與「不歸還」,畫面上分不出來');
+    assert.strictEqual(ok('units', { itemId: KU.id }, A).find(u => u.id === kun[0]).status, 'retired',
+      '★ 那一台要變成「報廢」,不然它還會被算成庫存、還借得出去');
+    assert.strictEqual(ok('items', {}, A).find(x => x.id === KU.id).total, 1,
+      '★ 不歸還的那一台不可以還留在總數裡');
+    assert.ok(!ok('loans', { filter: 'short' }, A).map(x => x.id).includes(KL),
+      '★ 逐台型的「不歸還」也不該進「短少」分頁');
+  }
+
   // 逐台型:那一台的所在地要跟著改,而且可以逐台指定
   const MU = ok('saveItem', { item: { name: '跨廠單台機', mode: 'unit', category: '體驗區', location: '新竹' } }, A);
   ok('addUnits', { itemId: MU.id, count: 2, location: '新竹' }, A);

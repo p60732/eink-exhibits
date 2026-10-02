@@ -95,6 +95,20 @@
                                         // 否則 returned 會多加,單子提早結案,另一台永遠卡在「借出中」
           var u = byId(c.db.Units, uid);
           if (r.result === 'lost') { touched++; ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; if (u) u.status = 'lost'; notes.push(uid + ' 遺失'); }
+          /**
+           * 「不歸還」= 東西沒有不見,是**決定不收回來了**(例:老闆指示留在當地)。
+           * 庫存一樣要扣,但它跟短少是兩回事:短少要追,這個已經結案了。
+           * 逐台型接到既有的 `retired` —— unitSites 只算 in / out,所以它本來就不佔庫存。
+           * 計數上掛在 lost 底下(kept 是 lost 的子集),這樣 outstanding 的公式完全不用動。
+           */
+          else if (r.result === 'retired') {
+            if (!s(r.note)) throw E(uid + ' 標成「不歸還」要在備註寫原因 —— 這會直接把它從庫存移除,而且不能反悔。');
+            touched++; ln.lostUnits.push(uid); ln.lost = int(ln.lost) + 1; ln.kept = int(ln.kept) + 1;
+            // 另外記一份 keptUnits:lostUnits 裡混了「遺失」與「不歸還」,畫面上要分得出來哪台是哪種
+            ln.keptUnits = (ln.keptUnits || []).concat([uid]);
+            ln.keptNote = (s(ln.keptNote) ? s(ln.keptNote) + ';' : '') + uid + ':' + s(r.note);
+            if (u) u.status = 'retired'; notes.push(uid + ' 不歸還(' + s(r.note) + ')');
+          }
           else if (r.result === 'in' || r.result === 'repair') {
             touched++;
             ln.returnedUnits.push(uid); ln.returned = int(ln.returned) + 1;
@@ -116,10 +130,27 @@
          * 東西還在庫存裡,只是在這張單與操作紀錄上留下記號。
          */
         var dmg = Math.min(ret, Math.max(0, int(x.damaged)));
+        /**
+         * 「不歸還」跟「短少」一樣會讓東西離開庫存,但意思相反:
+         * 短少是東西不見了、要去追;不歸還是**決定不收回來**,已經結案。
+         * 兩個分開記才有意義 —— 不然「短少」那個清單會混進一堆不用追的單。
+         * kept 是 lost 的子集(跟 damaged 之於 returned 同一套),所以
+         * `outstanding = qty − returned − lost` 這條核心公式一個字都不用動。
+         */
+        var kept = Math.min(left - ret - lost, Math.max(0, int(x.kept)));
+        if (kept && !s(x.keptNote)) throw E('標成「不歸還」要寫原因 —— 這會直接把東西從庫存移除,而且不能反悔。');
+        lost += kept;
         if (ret || lost) touched++;
         ln.returned = int(ln.returned) + ret; ln.lost = int(ln.lost) + lost;
+        if (kept) {
+          ln.kept = int(ln.kept) + kept;
+          ln.keptNote = (s(ln.keptNote) ? s(ln.keptNote) + ';' : '') + s(x.keptNote);
+          notes.push((it ? it.name : '') + ' 不歸還 ' + kept + '(' + s(x.keptNote) + ')');
+        }
         if (dmg) { ln.damaged = int(ln.damaged) + dmg; notes.push(it ? it.name + ' 有 ' + dmg + ' 台損壞' : dmg + ' 台損壞'); }
-        if (lost && it) { adjustStock(c, it, from, -lost); notes.push(it.name + '(' + from + ') 短少 ' + lost); }
+        // 庫存照 lost 全額扣(kept 已經併進去了),但紀錄上要分開寫 ——
+        // 操作紀錄是事後追短少唯一的線索,混在一起寫就分不出哪些還要追。
+        if (lost && it) { adjustStock(c, it, from, -lost); if (lost - kept > 0) notes.push(it.name + '(' + from + ') 短少 ' + (lost - kept)); }
         if (ret && it && back !== from) {                            // 還到別的廠區 = 庫存跟著搬過去
           adjustStock(c, it, from, -ret); adjustStock(c, it, back, ret);
           notes.push(it.name + ' ' + ret + ' 台從 ' + from + ' 移到 ' + back);

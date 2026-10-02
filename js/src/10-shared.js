@@ -15,15 +15,18 @@ const PRINT_BAR = '<div class="pbar"><button class="go" onclick="window.print()"
   + '<span class="tip">印完按「關閉」就會回到展品管理系統。這一條不會被印出來。</span></div>';
 function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
 /**
-  * 短少與損壞要標在**收合狀態下就看得到的地方**。每張單預設只露出單號 / 標題 / 狀態,
+  * 短少 / 不歸還 / 損壞要標在**收合狀態下就看得到的地方**。每張單預設只露出單號 / 標題 / 狀態,
   * 數字藏在收合起來的明細裡 —— 追短少時一張一張點開等於沒有這個功能。
-  * 兩個分開標,因為它們是兩回事:**短少 = 東西真的不見了**(總數會少),
+  * 三個分開標,因為它們是三回事:**短少 = 東西不見了、還要追**(總數會少),
+  * **不歸還 = 決定不收回來了、不用追**(總數一樣會少,但追查清單不該出現它),
   * **損壞 = 東西還在、只是壞了**(總數不變,只留記號)。
+  * 後端把「不歸還」當成 lost 的子集(kept ⊆ lost),所以要追的短少是 lost − kept。
   */
 function lossPills(L) {
   const sum = k => (L.lines || []).reduce((a, ln) => a + (Number(ln[k]) || 0), 0);
-  const lost = sum('lost'), dmg = sum('damaged');
+  const kept = sum('kept'), lost = sum('lost') - kept, dmg = sum('damaged');
   return (lost ? ` <span class="pill lost">短少 ${lost}</span>` : '')
+    + (kept ? ` <span class="pill">不歸還 ${kept}</span>` : '')
     + (dmg ? ` <span class="pill repair">損壞 ${dmg}</span>` : '');
 }
 function statusPill(L) {
@@ -36,13 +39,17 @@ function loanCard(L, opts = {}) {
     const c = chk[lkey(ln)];
     const where = esc(nloc(ln.location));
     const units = (ln.units || []).length ? `<div class="u">${ln.units.map(u => {
-      const st = (ln.lostUnits || []).includes(u) ? '(遺失)' : (ln.returnedUnits || []).includes(u) ? '(已還)' : '';
+      // keptUnits 也在 lostUnits 裡(kept ⊆ lost),所以要先問「不歸還」才問「遺失」
+      const st = (ln.keptUnits || []).includes(u) ? '(不歸還)'
+        : (ln.lostUnits || []).includes(u) ? '(遺失)'
+          : (ln.returnedUnits || []).includes(u) ? '(已還)' : '';
       return esc(u) + st;
     }).join('、')}</div>` : '';
     let right = `<span class="q">× ${ln.qty}</span>`;
-    if ((L.status === 'out' || L.status === 'returned') && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.damaged ? `(損壞 ${ln.damaged})` : ''}${ln.lost ? `・短少 ${ln.lost}` : ''}</span>`;
+    const kept = Number(ln.kept) || 0, lost = (Number(ln.lost) || 0) - kept;
+    if ((L.status === 'out' || L.status === 'returned') && (ln.returned || ln.lost)) right += ` <span class="meta">已還 ${ln.returned}${ln.damaged ? `(損壞 ${ln.damaged})` : ''}${lost ? `・短少 ${lost}` : ''}${kept ? `・不歸還 ${kept}` : ''}</span>`;
     if (c) right += c.short ? ` <span class="short">缺 ${c.short}(可借 ${c.available})</span>` : ` <span class="okt">足夠</span>`;
-    return `<div class="line"><span class="nm">${esc(ln.name)} ${ln.mode === 'unit' ? '<span class="pill unit">逐台</span>' : ''}<br><span class="meta">${where}</span></span>${right}${units}</div>`;
+    return `<div class="line"><span class="nm">${esc(ln.name)} ${ln.mode === 'unit' ? '<span class="pill unit">逐台</span>' : ''}<br><span class="meta">${where}</span></span>${right}${units}${ln.keptNote ? `<div class="u">不歸還原因:${esc(ln.keptNote)}</div>` : ''}</div>`;
   }).join('');
   const A = [];
   const admin = isAdmin() && !opts.mine;

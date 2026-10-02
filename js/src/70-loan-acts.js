@@ -127,26 +127,36 @@ async function receiveModal(id) {
   const m = openModal(`<h2>登記歸還 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・${esc(L.applicant)}・應還 ${esc(L.end)} ${L.overdue ? '<span class="pill bad">逾期</span>' : ''}</p>
     ${open.some(l => l.mode !== 'unit') ? `<div class="banner info" style="font-size:13px">
       <b>東西沒有全部回來?把「歸還」的數字改小就好。</b>剩下的會留在這張單上,單子停在「出借中」,之後再登記一次。<br>
-      <b>「短少」是確定東西不見了</b> —— 會直接把庫存扣掉,而且<b>不能反悔</b>(要補回來只能走盤點)。還沒確定之前請留在「未還」。
+      <b>「短少」是確定東西不見了、還要追</b>;<b>「不歸還」是決定不收回來了</b>(例:主管指示留在當地)。<br>
+      兩個都會<b>直接把庫存扣掉而且不能反悔</b>,差別是「短少」會進借用單的「短少」分頁繼續追,「不歸還」不會。還沒確定之前請留在「未還」。
     </div>` : ''}
     <div class="lines">${open.map(l => {
       const k = esc(lkey(l)), back = backSelect(l);
       if (l.mode === 'unit') {
         const pend = l.units.filter(u => !l.returnedUnits.includes(u) && !l.lostUnits.includes(u));
         return `<div class="line" style="display:block"><div class="row"><b style="flex:1">${esc(l.name)}</b>${back}</div>${pend.map(u => `<div class="row" style="margin:6px 0"><span class="mono" style="min-width:70px">${esc(u)}</span>
-          <div class="seg" data-ru="${u}" data-it="${k}">${[['in', '歸還'], ['repair', '送修'], ['lost', '遺失'], ['', '未還']].map(([kk, t], i) => `<button type="button" data-v="${kk}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div></div>`).join('')}</div>`;
+          <div class="seg" data-ru="${u}" data-it="${k}">${[['in', '歸還'], ['repair', '送修'], ['lost', '遺失'], ['retired', '不歸還'], ['', '未還']].map(([kk, t], i) => `<button type="button" data-v="${kk}" class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div>
+          <input type="text" data-rkn-u="${u}" placeholder="不歸還原因(必填)" class="kept-why" hidden></div>`).join('')}</div>`;
       }
       // 損壞是「還回來了但壞了」,是歸還數裡面的子集,所以上限綁在歸還數上
       return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>${back}
         <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${k}" style="width:80px"></label>
         <label class="meta">其中損壞 <input type="number" min="0" max="${l.outstanding}" value="0" data-rd="${k}" style="width:80px"></label>
         <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${k}" style="width:80px"></label>
-        <span data-rest="${k}" class="meta" style="min-width:92px;text-align:right"></span></div>`;
+        <label class="meta">不歸還 <input type="number" min="0" max="${l.outstanding}" value="0" data-rk="${k}" style="width:80px"></label>
+        <span data-rest="${k}" class="meta" style="min-width:92px;text-align:right"></span>
+        <input type="text" data-rkn="${k}" placeholder="不歸還原因(必填)" class="kept-why" hidden></div>`;
     }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>備註</span><input type="text" id="rn2" placeholder="損壞狀況、短少原因…"></label>
-    <p class="meta">逐台編號的展品:每一台選「未還」就會留在單子上,之後再登記。</p>
+    <p class="meta">逐台編號的展品:每一台選「未還」就會留在單子上,之後再登記。選「不歸還」要在旁邊寫原因。</p>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="rgo2">確認</button></div>`, { wide: true, noFocus: true });
-  $$('.seg[data-ru] button', m).forEach(b => b.onclick = () => { $$('button', b.parentNode).forEach(x => x.classList.remove('on')); b.classList.add('on'); });
+  /** 逐台型選到「不歸還」才把原因欄露出來 —— 其他四種結果不需要寫原因,一直擺在那裡只會擠滿畫面 */
+  const toggleWhy = (box, on) => { if (box) { box.hidden = !on; if (!on) box.value = ''; } };
+  $$('.seg[data-ru] button', m).forEach(b => b.onclick = () => {
+    const sg = b.parentNode;
+    $$('button', sg).forEach(x => x.classList.remove('on')); b.classList.add('on');
+    toggleWhy($(`[data-rkn-u="${sg.dataset.ru}"]`, m), b.dataset.v === 'retired');
+  });
   /**
    * 數量型的「部分歸還」本來就做得到(把歸還改小就好),但畫面上完全沒講 ——
    * 使用者回報「只能寫短少」(2026-10-02)。猜錯的那條路很傷:
@@ -157,19 +167,33 @@ async function receiveModal(id) {
   const drawRest = () => qtyLines.forEach(l => {
     const k = lkey(l), el = $(`[data-rest="${k}"]`, m);
     if (!el) return;
-    const left = l.outstanding - (+$(`[data-rq="${k}"]`, m).value || 0) - (+$(`[data-rl="${k}"]`, m).value || 0);
+    const kept = +$(`[data-rk="${k}"]`, m).value || 0;
+    const left = l.outstanding - (+$(`[data-rq="${k}"]`, m).value || 0) - (+$(`[data-rl="${k}"]`, m).value || 0) - kept;
     el.textContent = left > 0 ? '還欠 ' + left : left === 0 ? '這項還清' : '超過 ' + (-left);
     el.className = left > 0 ? 'meta' : left === 0 ? 'okt' : 'short';
+    toggleWhy($(`[data-rkn="${k}"]`, m), kept > 0);
   });
-  $$('[data-rq],[data-rl]', m).forEach(i => i.oninput = drawRest);
+  $$('[data-rq],[data-rl],[data-rk]', m).forEach(i => i.oninput = drawRest);
   drawRest();
   $('#rgo2', m).onclick = () => {
     const lines = open.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
-      ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
+      ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({
+          id: sg.dataset.ru, result: $('button.on', sg).dataset.v,
+          note: ($(`[data-rkn-u="${sg.dataset.ru}"]`, m) || {}).value || '' })).filter(r => r.result) }
       : { itemId: l.itemId, location: nloc(l.location), to: to, returned: +$(`[data-rq="${k}"]`, m).value || 0,
-          damaged: +$(`[data-rd="${k}"]`, m).value || 0, lost: +$(`[data-rl="${k}"]`, m).value || 0 }; });
+          damaged: +$(`[data-rd="${k}"]`, m).value || 0, lost: +$(`[data-rl="${k}"]`, m).value || 0,
+          kept: +$(`[data-rk="${k}"]`, m).value || 0, keptNote: ($(`[data-rkn="${k}"]`, m) || {}).value || '' }; });
     const over = lines.find(x => (x.damaged || 0) > (x.returned || 0));
     if (over) return toast('「其中損壞」不能大於「歸還」的數量', true);
+    /**
+     * 原因在前端先擋一次。後端也會擋(它才是真正的守門),但那要等一趟連線回來,
+     * 而這個欄位是整張表單裡唯一「填錯就不能反悔」的地方 —— 先在這裡講比較不會白送一次。
+     */
+    const noWhy = lines.find(x => (x.kept || 0) > 0 && !String(x.keptNote || '').trim())
+      || lines.find(x => (x.unitResults || []).some(r => r.result === 'retired' && !String(r.note || '').trim()));
+    if (noWhy) return toast('標成「不歸還」要寫原因', true);
+    const keptN = lines.reduce((a, x) => a + (x.kept || 0) + (x.unitResults || []).filter(r => r.result === 'retired').length, 0);
+    if (keptN && !confirmInline(`確定有 ${keptN} 個「不歸還」?\n\n這會直接把它們從庫存移除,而且不能反悔。\n如果只是還沒收到,請改成留在「未還」。`)) return;
     run(() => api('receive', { id, lines, note: $('#rn2', m).value })).then(r => { toast(r.status === 'returned' ? '已全部歸還' : '已登記部分歸還'); closeModal(); render(); }).catch(() => { });
   };
 }
