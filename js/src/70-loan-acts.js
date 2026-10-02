@@ -125,6 +125,10 @@ async function receiveModal(id) {
   const L = await getLoan(id);
   const open = L.lines.filter(l => l.outstanding > 0);
   const m = openModal(`<h2>登記歸還 ${esc(L.id)}</h2><p><b>${esc(L.event)}</b>・${esc(L.applicant)}・應還 ${esc(L.end)} ${L.overdue ? '<span class="pill bad">逾期</span>' : ''}</p>
+    ${open.some(l => l.mode !== 'unit') ? `<div class="banner info" style="font-size:13px">
+      <b>東西沒有全部回來?把「歸還」的數字改小就好。</b>剩下的會留在這張單上,單子停在「出借中」,之後再登記一次。<br>
+      <b>「短少」是確定東西不見了</b> —— 會直接把庫存扣掉,而且<b>不能反悔</b>(要補回來只能走盤點)。還沒確定之前請留在「未還」。
+    </div>` : ''}
     <div class="lines">${open.map(l => {
       const k = esc(lkey(l)), back = backSelect(l);
       if (l.mode === 'unit') {
@@ -136,12 +140,29 @@ async function receiveModal(id) {
       return `<div class="line"><span class="nm">${esc(l.name)}<br><span class="meta">未還 ${l.outstanding}</span></span>${back}
         <label class="meta">歸還 <input type="number" min="0" max="${l.outstanding}" value="${l.outstanding}" data-rq="${k}" style="width:80px"></label>
         <label class="meta">其中損壞 <input type="number" min="0" max="${l.outstanding}" value="0" data-rd="${k}" style="width:80px"></label>
-        <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${k}" style="width:80px"></label></div>`;
+        <label class="meta">短少 <input type="number" min="0" max="${l.outstanding}" value="0" data-rl="${k}" style="width:80px"></label>
+        <span data-rest="${k}" class="meta" style="min-width:92px;text-align:right"></span></div>`;
     }).join('')}</div>
     <label class="f" style="margin-top:12px"><span>備註</span><input type="text" id="rn2" placeholder="損壞狀況、短少原因…"></label>
-    <p class="meta">「未還」的項目會保留在借用單上,之後可再登記。</p>
+    <p class="meta">逐台編號的展品:每一台選「未還」就會留在單子上,之後再登記。</p>
     <div class="modal-f"><button class="btn" data-act="close">取消</button><button class="btn pri" id="rgo2">確認</button></div>`, { wide: true, noFocus: true });
   $$('.seg[data-ru] button', m).forEach(b => b.onclick = () => { $$('button', b.parentNode).forEach(x => x.classList.remove('on')); b.classList.add('on'); });
+  /**
+   * 數量型的「部分歸還」本來就做得到(把歸還改小就好),但畫面上完全沒講 ——
+   * 使用者回報「只能寫短少」(2026-10-02)。猜錯的那條路很傷:
+   * 把剩下的填進短少會直接扣庫存,而且不能反悔。
+   * 所以這裡即時算出「這次之後還欠幾個」,讓那個數字自己說話。
+   */
+  const qtyLines = open.filter(l => l.mode !== 'unit');
+  const drawRest = () => qtyLines.forEach(l => {
+    const k = lkey(l), el = $(`[data-rest="${k}"]`, m);
+    if (!el) return;
+    const left = l.outstanding - (+$(`[data-rq="${k}"]`, m).value || 0) - (+$(`[data-rl="${k}"]`, m).value || 0);
+    el.textContent = left > 0 ? '還欠 ' + left : left === 0 ? '這項還清' : '超過 ' + (-left);
+    el.className = left > 0 ? 'meta' : left === 0 ? 'okt' : 'short';
+  });
+  $$('[data-rq],[data-rl]', m).forEach(i => i.oninput = drawRest);
+  drawRest();
   $('#rgo2', m).onclick = () => {
     const lines = open.map(l => { const k = lkey(l), to = backOf(m, k); return l.mode === 'unit'
       ? { itemId: l.itemId, location: nloc(l.location), to: to, unitResults: $$(`.seg[data-it="${k}"]`, m).map(sg => ({ id: sg.dataset.ru, result: $('button.on', sg).dataset.v })).filter(r => r.result) }
