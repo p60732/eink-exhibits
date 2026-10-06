@@ -15,6 +15,33 @@ const PRINT_BAR = '<div class="pbar"><button class="go" onclick="window.print()"
   + '<span class="tip">印完按「關閉」就會回到展品管理系統。這一條不會被印出來。</span></div>';
 function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
 /**
+ * 照片放大(v3.5)。卡片上的縮圖只有一百多像素高 —— 借用人要看清楚展品長什麼樣,
+ * 那個尺寸根本不夠(2026-10-06 回報)。點一下整張蓋上來,盡量拿得到的最大尺寸。
+ *
+ * 雲端硬碟的網址帶著尺寸參數,這裡把它換大;**自己貼的網址原樣不動**
+ * (那是別人家的網站,亂改參數只會變成 404)。
+ * 上傳時前端會先把長邊縮到 1200px,所以再大也就是原圖那麼大,不會更清楚。
+ */
+function bigPhoto(url) {
+  const u = String(url || '');
+  if (/drive\.google\.com\/thumbnail/.test(u)) return u.replace(/([?&]sz=)w\d+/, '$1w2000');
+  if (/lh3\.googleusercontent\.com\/d\//.test(u)) return u.replace(/=w\d+(-h\d+)?$/, '=w2000');
+  return u;
+}
+/** 點縮圖之後蓋上來的那一張。點畫面任何地方或按 Esc 都關掉 */
+function photoBox(src, caption) {
+  const old = $('#photo-bg'); if (old) old.remove();
+  const bg = document.createElement('div');
+  bg.className = 'photo-bg'; bg.id = 'photo-bg';
+  bg.innerHTML = `<img src="${esc(bigPhoto(src))}" alt="${esc(caption || '展品照片')}"
+      onerror="this.closest('#photo-bg').classList.add('broken')">
+    <div class="cap">${esc(caption || '')}</div>
+    <button class="x" type="button" aria-label="關閉">×</button>`;
+  bg.addEventListener('click', () => bg.remove());
+  document.body.appendChild(bg);
+  return bg;
+}
+/**
   * 短少 / 不歸還 / 損壞要標在**收合狀態下就看得到的地方**。每張單預設只露出單號 / 標題 / 狀態,
   * 數字藏在收合起來的明細裡 —— 追短少時一張一張點開等於沒有這個功能。
   * 三個分開標,因為它們是三回事:**短少 = 東西不見了、還要追**(總數會少),

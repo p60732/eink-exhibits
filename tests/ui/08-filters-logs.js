@@ -204,4 +204,49 @@ async function run(C) {
     await p.evaluate(() => { S.filters.q = ''; S._catDraw(); }); await wait(400);
   }
 
+  /**
+   * ---- 點縮圖要看得到大圖 ----
+   * 卡片上那一塊只有 150px 高,借用人光看它分不出展品長什麼樣(2026-10-06 回報)。
+   * 用 data: 圖當測試素材,因為沙箱連不到 Google。
+   */
+  {
+    // 用 SVG 當素材:沙箱連不到 Google,而且它有真正的尺寸(1px 的 GIF 放大也還是 1px)
+    const PX = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='400'><rect width='600' height='400' fill='%23C8102E'/></svg>";
+    await p.evaluate(async px => {
+      await Api.call('saveItem', { item: { name: '放大測試機', mode: 'qty', category: 'Signage',
+        sites: [{ location: '新竹', qty: 1 }], image: px } }, S.token);
+      bumpCache();
+    }, PX);
+    await p.click('[data-v=catalog]'); await wait(1200);
+    await p.evaluate(() => { S.filters.q = '放大測試機'; S.filters.cat = ''; S.filters.loc = ''; S._catDraw(); });
+    await p.waitForSelector('#cgrid .item-card .img[data-act=zoom-photo]', { timeout: 8000 });
+    if (await p.$('#photo-bg')) throw new Error('前置條件:還沒點就不該有大圖');
+    await p.click('#cgrid .item-card .img[data-act=zoom-photo]'); await wait(600);
+    const box = await p.evaluate(() => {
+      const bg = document.querySelector('#photo-bg');
+      if (!bg) return null;
+      const img = bg.querySelector('img');
+      const r = img.getBoundingClientRect();
+      return { src: img.getAttribute('src'), w: Math.round(r.width), h: Math.round(r.height),
+        cap: (bg.querySelector('.cap') || {}).textContent };
+    });
+    if (!box) throw new Error('★ 點了縮圖要蓋上一張大圖');
+    if (box.h < 200) throw new Error('★ 大圖要比卡片上那 150px 大得有感,實際高 ' + box.h);
+    if (!/放大測試機/.test(box.cap || '')) throw new Error('★ 大圖下面要寫是哪一個展品:' + box.cap);
+    await p.keyboard.press('Escape'); await wait(400);
+    if (await p.$('#photo-bg')) throw new Error('★ 按 Esc 要關掉大圖');
+    if (!await p.$('#cgrid .item-card')) throw new Error('★ Esc 只該關大圖,不可以把底下的頁面一起收掉');
+    // 雲端硬碟的縮圖網址要換成大尺寸,自己貼的網址原樣不動
+    const sz = await p.evaluate(() => [
+      bigPhoto('https://drive.google.com/thumbnail?id=ABC&sz=w1000'),
+      bigPhoto('https://lh3.googleusercontent.com/d/ABC=w1000'),
+      bigPhoto('https://example.com/a.jpg?sz=w1000')
+    ]);
+    if (!/sz=w2000/.test(sz[0]) || !/=w2000$/.test(sz[1]))
+      throw new Error('★ 雲端硬碟的網址要換成大尺寸:' + JSON.stringify(sz));
+    if (sz[2] !== 'https://example.com/a.jpg?sz=w1000')
+      throw new Error('★ 不是雲端硬碟的網址不可以亂改參數(會變成 404):' + sz[2]);
+    await p.evaluate(() => { S.filters.q = ''; S._catDraw(); }); await wait(400);
+  }
+
 }

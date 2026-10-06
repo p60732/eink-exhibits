@@ -316,6 +316,7 @@ const ACT = {
   'reject': el => rejectModal(el.dataset.id),
   'receive': el => receiveModal(el.dataset.id),
   'recover': el => recoverModal(el.dataset.id),
+  'zoom-photo': el => photoBox(el.dataset.src, el.dataset.cap),
   'cancel': el => { if (confirmInline('確定取消這筆申請?')) run(() => api('cancelLoan', { id: el.dataset.id }), '已取消').then(render).catch(() => { }); },
   'edit-item': el => itemModal(el.dataset.id, el.dataset.cat),
   'units': el => unitsModal(el.dataset.id),
@@ -367,7 +368,12 @@ document.addEventListener('click', e => {
     r.catch(() => { }).then(() => { delete el.dataset.busy; el.removeAttribute('aria-busy'); });
   }
 });
-document.addEventListener('keydown', e => { const m = $('#modal-bg'); if (e.key === 'Escape' && !$('#scanner-bg') && !(m && m.dataset.locked)) closeModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  // 放大的照片蓋在最上面,所以 Esc 要先關它,不要把它底下的視窗一起收掉
+  const ph = $('#photo-bg'); if (ph) return ph.remove();
+  const m = $('#modal-bg'); if (!$('#scanner-bg') && !(m && m.dataset.locked)) closeModal();
+});
 /* 主題(淺色 / 深色),記在這台裝置 */
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);

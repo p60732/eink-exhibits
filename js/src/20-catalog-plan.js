@@ -71,7 +71,7 @@ VIEWS.catalog = async main => {
       ? `<div class="dist"><span class="${n.inStock ? '' : 'z'}">${esc(f.loc)} <b>${Number(range ? n.total : n.inStock) || 0}</b></span></div>`
       : distLine(i, range ? 'total' : 'inStock');
     return `<div class="card item-card">
-      ${i.image ? `<div class="img"><img src="${esc(i.image)}" alt="${esc(i.name)}" loading="lazy" onerror="this.closest('.img').classList.add('broken')"></div>` : ''}
+      ${i.image ? `<div class="img" data-act="zoom-photo" data-src="${esc(i.image)}" data-cap="${esc(i.name)}" title="點一下看大圖"><img src="${esc(i.image)}" alt="${esc(i.name)}" loading="lazy" onerror="this.closest('.img').classList.add('broken')"></div>` : ''}
       <div class="row" style="gap:6px"><label class="chk"><input type="checkbox" data-mpick="${esc(i.id)}" ${S.multi.has(i.id) ? 'checked' : ''}>選</label><span class="pill">${esc(i.category)}</span>${i.mode === 'unit' ? '<span class="pill unit">逐台編號</span>' : ''}<span class="meta mono" style="margin-left:auto">${esc(i.id)}</span></div>
       <h3>${esc(i.name)}</h3>
       ${i.spec ? `<div class="meta">${esc(i.spec)}</div>` : ''}

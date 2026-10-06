@@ -121,7 +121,7 @@ function itemModal(id, preCat) {
   const drawPhoto = () => {
     const v = $('#fimg', m).value;
     $('#fphoto', m).innerHTML = v
-      ? `<img src="${esc(v)}" alt="展品照片" loading="lazy">`
+      ? `<img src="${esc(v)}" alt="展品照片" loading="lazy" data-act="zoom-photo" data-src="${esc(v)}" style="cursor:zoom-in" title="點一下看大圖">`
       : '<div class="ph-empty">還沒有照片</div>';
     $('#fdel', m).classList.toggle('hidden', !v);
   };
