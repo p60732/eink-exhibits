@@ -121,7 +121,14 @@ tr.grouph th .chipnum{margin-left:8px}
 tr.grouph th .btn{float:right}
 tr.groupe td{font-size:13px;color:var(--muted);padding:8px 12px}
 .item-card{display:flex;flex-direction:column;gap:7px}
-.item-card .img{height:112px;border-radius:var(--r-sm);background:var(--surface-2) center/cover no-repeat;margin:-2px 0 4px}
+/* 照片用 <img> 不用 background-image,為的是**載不出來時看得出來**。
+   背景圖失敗是靜悄悄的:使用者只會看到一塊空白,說不出是「沒放照片」還是「照片壞了」,
+   回報到我這邊也變成要猜(2026-10-06 同事的電腦看不到照片,查了半天才確定不是版面問題)。 */
+.item-card .img{height:112px;border-radius:var(--r-sm);background:var(--surface-2);margin:-2px 0 4px;overflow:hidden;position:relative}
+.item-card .img img{width:100%;height:100%;object-fit:cover;display:block}
+.item-card .img.broken img{display:none}
+.item-card .img.broken::after{content:'照片載不出來';position:absolute;inset:0;display:grid;place-items:center;
+  font-size:12px;color:var(--muted)}
 .item-card h3{font-size:16px;margin:0;letter-spacing:-.01em}
 .meta{font-size:13px;color:var(--muted)}
 .nums{display:flex;gap:16px;margin:8px 0 4px;flex-wrap:wrap}

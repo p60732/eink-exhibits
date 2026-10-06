@@ -173,4 +173,35 @@ async function run(C) {
     if (back.length !== all.length) throw new Error('★ 清掉篩選之後筆數應該回到 ' + all.length + ',現在是 ' + back.length);
   }
 
+  /**
+   * ---- 照片載不出來要看得出來 ----
+   * 以前卡片的照片是 background-image,載失敗就只剩一塊空白 ——
+   * 使用者分不出「這個展品沒放照片」跟「照片壞了」,回報過來也只能用猜的
+   * (2026-10-06 同事的電腦看不到照片,查了半天才確定不是版面問題)。
+   */
+  {
+    const id = await p.evaluate(async () => {
+      const it = await Api.call('saveItem', { item: { name: '壞照片測試機', mode: 'qty',
+        category: 'Signage', sites: [{ location: '新竹', qty: 1 }],
+        image: 'https://127.0.0.1:9/not-a-real-photo.jpg' } }, S.token);
+      bumpCache();
+      return it.id;
+    });
+    await p.click('[data-v=catalog]'); await wait(1200);
+    await p.evaluate(() => { S.filters.q = '壞照片測試機'; S.filters.cat = ''; S.filters.loc = ''; S._catDraw(); });
+    await p.waitForSelector(`#cgrid .item-card .img`, { timeout: 8000 });
+    await wait(2500);                       // 等那張圖真的失敗(onerror)
+    const st = await p.evaluate(() => {
+      const el = document.querySelector('#cgrid .item-card .img');
+      if (!el) return null;
+      return { broken: el.classList.contains('broken'), h: Math.round(el.getBoundingClientRect().height),
+        after: getComputedStyle(el, '::after').content };
+    });
+    if (!st) throw new Error('前置條件:找不到那張卡片的照片區塊');
+    if (!st.broken) throw new Error('★ 照片載不出來時要標成 broken,不可以靜悄悄留一塊空白');
+    if (!/載不出來/.test(st.after || '')) throw new Error('★ 載不出來的那一塊要寫出「照片載不出來」,實際:' + st.after);
+    if (st.h < 60) throw new Error('★ 那一塊還是要佔住版面,不然卡片會跳一下:' + st.h);
+    await p.evaluate(() => { S.filters.q = ''; S._catDraw(); }); await wait(400);
+  }
+
 }
