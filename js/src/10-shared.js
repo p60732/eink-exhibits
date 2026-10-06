@@ -15,26 +15,34 @@ const PRINT_BAR = '<div class="pbar"><button class="go" onclick="window.print()"
   + '<span class="tip">印完按「關閉」就會回到展品管理系統。這一條不會被印出來。</span></div>';
 function archPill(L) { return L.archived ? '<span class="pill">已封存</span>' : ''; }
 /**
- * 照片放大(v3.5)。卡片上的縮圖只有一百多像素高 —— 借用人要看清楚展品長什麼樣,
+ * 照片放大。卡片上的縮圖只有一百多像素高 —— 借用人要看清楚展品長什麼樣,
  * 那個尺寸根本不夠(2026-10-06 回報)。點一下整張蓋上來,盡量拿得到的最大尺寸。
  *
- * 雲端硬碟的網址帶著尺寸參數,這裡把它換大;**自己貼的網址原樣不動**
- * (那是別人家的網站,亂改參數只會變成 404)。
+ * ⚠️ **放大一律改走 `lh3.googleusercontent.com/d/<id>=w2000`,不要沿用原本的
+ * `drive.google.com/thumbnail?...&sz=`。** 那個網址在 `sz=w1000` 正常,
+ * 換成 `w2000` 之後**有些檔案會卡住不回應或直接失敗**,而且每次都一樣
+ * (2026-10-06 在正式站用真實檔案連測兩輪確認:同一張圖 thumbnail w2000 固定逾時,
+ * lh3 =w2000 每次都回得來,而且回的是完整的 1200x900,比 w1000 那版還大)。
+ * 縮圖維持 thumbnail 不動 —— 它在 w1000 一直都是好的,沒必要跟著改。
+ *
+ * **自己貼的網址原樣不動**(那是別人家的網站,亂改參數只會變成 404)。
  * 上傳時前端會先把長邊縮到 1200px,所以再大也就是原圖那麼大,不會更清楚。
  */
 function bigPhoto(url) {
   const u = String(url || '');
-  if (/drive\.google\.com\/thumbnail/.test(u)) return u.replace(/([?&]sz=)w\d+/, '$1w2000');
-  if (/lh3\.googleusercontent\.com\/d\//.test(u)) return u.replace(/=w\d+(-h\d+)?$/, '=w2000');
-  return u;
+  const m = u.match(/[?&]id=([A-Za-z0-9_-]{20,})/)
+    || u.match(/lh3\.googleusercontent\.com\/d\/([A-Za-z0-9_-]{20,})/);
+  return m ? 'https://lh3.googleusercontent.com/d/' + m[1] + '=w2000' : u;
 }
 /** 點縮圖之後蓋上來的那一張。點畫面任何地方或按 Esc 都關掉 */
 function photoBox(src, caption) {
   const old = $('#photo-bg'); if (old) old.remove();
   const bg = document.createElement('div');
   bg.className = 'photo-bg'; bg.id = 'photo-bg';
-  bg.innerHTML = `<img src="${esc(bigPhoto(src))}" alt="${esc(caption || '展品照片')}"
-      onerror="this.closest('#photo-bg').classList.add('broken')">
+  // 大圖失敗就先退回卡片上那張(小一點總比看不到好),再失敗才說載不出來
+  bg.innerHTML = `<img src="${esc(bigPhoto(src))}" data-small="${esc(src)}" alt="${esc(caption || '展品照片')}"
+      onerror="if (this.dataset.small &amp;&amp; !this.dataset.tried) { this.dataset.tried = '1'; this.src = this.dataset.small; }
+        else { this.closest('#photo-bg').classList.add('broken'); }">
     <div class="cap">${esc(caption || '')}</div>
     <button class="x" type="button" aria-label="關閉">×</button>`;
   bg.addEventListener('click', () => bg.remove());

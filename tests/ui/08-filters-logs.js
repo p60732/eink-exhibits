@@ -236,14 +236,22 @@ async function run(C) {
     await p.keyboard.press('Escape'); await wait(400);
     if (await p.$('#photo-bg')) throw new Error('★ 按 Esc 要關掉大圖');
     if (!await p.$('#cgrid .item-card')) throw new Error('★ Esc 只該關大圖,不可以把底下的頁面一起收掉');
-    // 雲端硬碟的縮圖網址要換成大尺寸,自己貼的網址原樣不動
-    const sz = await p.evaluate(() => [
-      bigPhoto('https://drive.google.com/thumbnail?id=ABC&sz=w1000'),
-      bigPhoto('https://lh3.googleusercontent.com/d/ABC=w1000'),
+    /**
+     * 放大的網址要**整個換成 lh3**,不是把原本 thumbnail 的 sz 調大 ——
+     * `drive.google.com/thumbnail` 在 sz=w2000 有些檔案會卡住不回應
+     * (2026-10-06 在正式站用真實檔案連測兩輪確認,每次都一樣)。
+     */
+    const ID = 'ABCDEFGHIJKLMNOPQRSTUVWX';
+    const sz = await p.evaluate(id => [
+      bigPhoto('https://drive.google.com/thumbnail?id=' + id + '&sz=w1000'),
+      bigPhoto('https://lh3.googleusercontent.com/d/' + id + '=w1000'),
       bigPhoto('https://example.com/a.jpg?sz=w1000')
-    ]);
-    if (!/sz=w2000/.test(sz[0]) || !/=w2000$/.test(sz[1]))
-      throw new Error('★ 雲端硬碟的網址要換成大尺寸:' + JSON.stringify(sz));
+    ], ID);
+    const want = 'https://lh3.googleusercontent.com/d/' + ID + '=w2000';
+    if (sz[0] !== want) throw new Error('★ 放大要走 lh3,不可以沿用 thumbnail 的 sz 參數:' + sz[0]);
+    if (sz[1] !== want) throw new Error('★ 本來就是 lh3 的也要換成 w2000:' + sz[1]);
+    if (/drive\.google\.com\/thumbnail/.test(sz[0]))
+      throw new Error('★ 放大不可以再用 thumbnail 那個網址(有些檔案在 w2000 會卡住)');
     if (sz[2] !== 'https://example.com/a.jpg?sz=w1000')
       throw new Error('★ 不是雲端硬碟的網址不可以亂改參數(會變成 404):' + sz[2]);
     await p.evaluate(() => { S.filters.q = ''; S._catDraw(); }); await wait(400);
