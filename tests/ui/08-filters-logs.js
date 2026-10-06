@@ -249,4 +249,20 @@ async function run(C) {
     await p.evaluate(() => { S.filters.q = ''; S._catDraw(); }); await wait(400);
   }
 
+  /**
+   * ---- 照片體檢 ----
+   * 共用設定沒設好的照片,**上傳的人自己完全看不出異常**(他登入著同一個 Google 帳號),
+   * 看不到的是別人。所以管理者要有一個地方可以一次問清楚。
+   */
+  {
+    await p.click('[data-v=items]'); await wait(1400);
+    if (!await p.$('[data-act=photo-check]')) throw new Error('★ 展品管理要有「檢查照片」');
+    await p.click('[data-act=photo-check]'); await p.waitForSelector('.modal h2', { timeout: 10000 });
+    await wait(500);
+    const txt = await p.textContent('.modal');
+    if (!/照片體檢/.test(txt)) throw new Error('★ 應該開出照片體檢視窗:' + txt.slice(0, 80));
+    if (!/正常/.test(txt)) throw new Error('★ 體檢結果至少要講「正常幾張」:' + txt.slice(0, 120));
+    await p.click('.modal [data-act=close]'); await wait(400);
+  }
+
 }

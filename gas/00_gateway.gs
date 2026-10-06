@@ -132,6 +132,28 @@ function routes_() {
   // 照片上傳:交給檔案積木放進雲端硬碟,試算表只存連結。不碰試算表,所以不算寫入。
   R.uploadImage = { auth: 'admin', write: false, fields: ['name', 'data', 'ext'], big: 420000,
     tables: { Users: C.USER_AUTH }, fn: function (c) { return Files.saveImage(c.p.name, c.p.data, c.p.ext); } };
+  /**
+   * 照片共用設定的體檢(fix 為真就順便修)。放在這裡而不是 20_logic,理由跟 uploadImage 一樣:
+   * 整件事都發生在雲端硬碟上,20_logic 的檔頭明寫「純規則、不碰 IO」,這裡只做
+   * 「把展品表的照片網址一條條交給檔案積木」這層接線。
+   * `write: true` 不是因為它會動試算表(它不會),是為了讓這次檢查留得下操作紀錄。
+   */
+  R.checkPhotos = { auth: 'admin', write: true, fields: ['fix'], tables: FULL_, fn: function (c) {
+    var fix = !!(c.p && c.p.fix), out = { ok: 0, skip: 0, fixed: [], bad: [], missing: [] };
+    (c.db.Items || []).forEach(function (it) {
+      var url = String(it.image || '').trim();
+      if (!url) return;
+      var r = Files.checkPhoto(url, fix), who = String(it.name || it.id);
+      if (r === 'ok') out.ok++;
+      else if (r === 'skip') out.skip++;
+      else if (r === 'fixed') out.fixed.push(who);
+      else if (r === 'missing') out.missing.push(who);
+      else out.bad.push(who);
+    });
+    c.log('檢查照片連結', '', (fix ? '檢查並修復:' : '只檢查:') + '正常 ' + out.ok + ',修好 ' + out.fixed.length
+      + ',仍不公開 ' + out.bad.length + ',找不到檔案 ' + out.missing.length + ',外部網址 ' + out.skip);
+    return out;
+  } };
   // 當面確認:先由身份積木驗證在場管理者,再交邏輯積木
   return (ROUTES_ = R);
 }

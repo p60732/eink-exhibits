@@ -269,3 +269,28 @@ function importUsersModal() {
   $('#iugo', m).onclick = () => { const rows = parse(); if (!rows.length) return toast('沒有可匯入的資料', true); run(() => api('importUsers', { rows })).then(r => { toast(`新增 ${r.created} 人、更新 ${r.updated} 人`); closeModal(); render(); }).catch(() => { }); };
 }
 
+
+/**
+ * 照片體檢(v3.6)。照片存在雲端硬碟,**共用設定如果沒設成「知道連結的人都可以看」,
+ * 上傳的人自己完全看不出異常**(他正登入著同一個 Google 帳號),看不到的是別人。
+ * 這種「只有別人會踩到」的問題不會自己浮出來,所以要有一個地方可以一次問清楚。
+ */
+async function photoCheckModal() {
+  const r = await run(() => api('checkPhotos', {})).catch(() => null);
+  if (!r) return;
+  const list = (t, arr, hint) => arr.length
+    ? `<div class="note"><b>${t}(${arr.length})</b><br>${arr.map(esc).join('、')}<br><span class="meta">${hint}</span></div>` : '';
+  const clean = !r.bad.length && !r.missing.length;
+  const m = openModal(`<h2>照片體檢</h2>
+    <p class="sub">正常 <b>${r.ok}</b> 張${r.skip ? `・外部網址 ${r.skip} 張(不是放在雲端硬碟,管不到)` : ''}</p>
+    ${clean ? '<div class="banner ok">所有放在雲端硬碟的照片都設成「知道連結的人都可以看」,別人開得起來。</div>' : ''}
+    ${list('別人看不到', r.bad, '共用設定不是「知道連結的人都可以看」。按下面那顆可以一次修好。')}
+    ${list('檔案找不到了', r.missing, '雲端硬碟上的檔案被刪或移走了,修不回來 —— 要重新上傳一張。')}
+    <div class="modal-f"><button class="btn" data-act="close">關閉</button>
+      ${r.bad.length ? '<button class="btn pri" id="pcfix">修好這 ' + r.bad.length + ' 張</button>' : ''}</div>`,
+    { wide: true });
+  const fix = $('#pcfix', m);
+  if (fix) fix.onclick = () => run(() => api('checkPhotos', { fix: true }))
+    .then(x => { toast(x.fixed.length ? `修好 ${x.fixed.length} 張` : '這次一張都沒修成,請確認雲端硬碟允許用連結分享', !x.fixed.length); closeModal(); })
+    .catch(() => { });
+}

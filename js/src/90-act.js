@@ -317,6 +317,7 @@ const ACT = {
   'receive': el => receiveModal(el.dataset.id),
   'recover': el => recoverModal(el.dataset.id),
   'zoom-photo': el => photoBox(el.dataset.src, el.dataset.cap),
+  'photo-check': () => photoCheckModal(),
   'cancel': el => { if (confirmInline('確定取消這筆申請?')) run(() => api('cancelLoan', { id: el.dataset.id }), '已取消').then(render).catch(() => { }); },
   'edit-item': el => itemModal(el.dataset.id, el.dataset.cat),
   'units': el => unitsModal(el.dataset.id),

@@ -244,6 +244,72 @@ bad('uploadImage', { name: 'x', data: 'AAAA', ext: 'gif' }, A, /只接受 JPG/);
 bad('uploadImage', { name: 'x', data: 'A'.repeat(410000), ext: 'jpeg' }, A, /照片太大/);      // 檔案積木自己的上限
 bad('uploadImage', { name: 'x', data: 'A'.repeat(420001), ext: 'jpeg' }, A, /文字過長/);      // 守門的外層上限
 bad('uploadImage', { name: 'x', data: 'AAAA', ext: 'jpeg' }, U, /管理者權限/);
+
+/**
+ * 照片的共用設定:**設完要驗,驗不過不可以存**。
+ * 以前這一段是 try/catch 吞掉的 —— 設失敗照樣回傳網址,照片在上傳者自己的瀏覽器
+ * (正登入著同一個 Google 帳號)看起來一切正常,別人卻一律看不到。
+ * 上傳的人完全沒有感覺,出問題的是別人,所以一定要在上傳當下就擋住。
+ */
+{
+  const B64 = Buffer.from('fake-image').toString('base64');
+  const f1 = G.drive.files[img.id];
+  assert.strictEqual(f1.access, 'link', '★ 正常情況下上傳完就該是「知道連結的人都可以看」');
+
+  // 重現「設定沒生效」:不報錯,但狀態沒變
+  G.drive.blockSharing = true;
+  const before = Object.keys(G.drive.files).length;
+  bad('uploadImage', { name: '設不公開', data: B64, ext: 'jpeg' }, A, /看不到/);
+  const after = Object.keys(G.drive.files);
+  assert.strictEqual(after.length, before + 1, '前置:檔案還是會先被建出來');
+  assert.strictEqual(G.drive.files[after[after.length - 1]].trashed, true,
+    '★ 設不公開就要把剛建的那個檔案丟掉 —— 不然雲端硬碟會積一堆沒人知道存在的孤兒照片');
+  G.drive.blockSharing = false;
+}
+
+/**
+ * 照片體檢(checkPhotos):「上傳的人看得到、別人看不到」不會自己浮出來,
+ * 所以要有一個地方可以一次問清楚,而且問得出來就要能修。
+ */
+{
+  const B64 = Buffer.from('fake-image').toString('base64');
+  const up = n => ok('uploadImage', { name: n, data: B64, ext: 'jpeg' }, A);
+  const mk = (n, url) => ok('saveItem', { item: { name: n, mode: 'qty', category: '體驗區',
+    sites: [{ location: '新竹', qty: 1 }], image: url } }, A);
+
+  const good = up('體檢正常'), bad1 = up('體檢不公開');
+  mk('照片正常的展品', good.url);
+  mk('照片不公開的展品', bad1.url);
+  mk('照片連結是外站的展品', 'https://example.com/a.jpg');
+  mk('照片檔案不見了的展品', 'https://drive.google.com/thumbnail?id=ZZZZZZZZZZZZZZZZZZZZZZ&sz=w1000');
+
+  G.drive.files[bad1.id].access = 'private';        // 事後被改回私人(真實世界會發生)
+
+  const r1 = ok('checkPhotos', {}, A);
+  assert.ok(r1.ok >= 1, '★ 公開的照片要算成正常');
+  assert.deepStrictEqual(r1.bad, ['照片不公開的展品'], '★ 不公開的要指名道姓列出來,不能只給一個數字');
+  assert.deepStrictEqual(r1.missing, ['照片檔案不見了的展品'], '★ 檔案被刪掉的要分開列(那不是權限問題)');
+  assert.strictEqual(r1.skip, 1, '★ 不是雲端硬碟的網址不歸我們管,只能跳過');
+  assert.strictEqual(G.drive.files[bad1.id].access, 'private', '★ 沒說要修就不可以偷偷動別人的共用設定');
+
+  const r2 = ok('checkPhotos', { fix: true }, A);
+  assert.deepStrictEqual(r2.fixed, ['照片不公開的展品'], '★ 說要修就要修好,而且回報修了哪些');
+  assert.strictEqual(G.drive.files[bad1.id].access, 'link', '★ 修完那個檔案要真的變成公開');
+  assert.deepStrictEqual(r2.bad, [], '修完就不該再有不公開的');
+  assert.deepStrictEqual(r2.missing, ['照片檔案不見了的展品'], '檔案不見了不是修得好的');
+
+  // 修不動的情況要照實說,不可以回報成修好了
+  G.drive.files[bad1.id].access = 'private';
+  G.drive.blockSharing = true;
+  const r3 = ok('checkPhotos', { fix: true }, A);
+  assert.deepStrictEqual(r3.fixed, [], '★ 修不動就不可以列進「修好」');
+  assert.deepStrictEqual(r3.bad, ['照片不公開的展品'], '★ 修不動要留在「仍不公開」');
+  G.drive.blockSharing = false;
+  ok('checkPhotos', { fix: true }, A);
+
+  bad('checkPhotos', {}, U, /管理者權限/);
+  assert.ok(ok('logs', { limit: 50 }, A).some(l => l.action === '檢查照片連結'), '體檢要留下操作紀錄');
+}
 // 一般欄位的長度上限沒有被放寬
 bad('saveItem', { item: { name: 'x'.repeat(501) } }, A, /文字過長/);
 

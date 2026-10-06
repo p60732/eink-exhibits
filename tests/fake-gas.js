@@ -32,7 +32,7 @@ function makeEnv(opts = {}) {
     Session: { getActiveUser: () => ({ getEmail: () => opts.activeUser ?? 'owner@x.com' }), getEffectiveUser: () => ({ getEmail: () => 'owner@x.com' }) },
     MailApp: { sendEmail: m => mails.push(m) },
     DriveApp: {
-      Access: { ANYONE_WITH_LINK: 'link' }, Permission: { VIEW: 'view' },
+      Access: { ANYONE_WITH_LINK: 'link', ANYONE: 'anyone', PRIVATE: 'private' }, Permission: { VIEW: 'view' },
       createFolder: n => ({ getId: () => 'FOLDER', createFile: b => mkFile(b) }),
       getFoldersByName: () => ({ hasNext: () => !!drive.folder, next: () => drive.folder }),
       getFolderById: id => { if (id !== 'FOLDER') throw new Error('no folder'); return drive.folder; },
@@ -52,8 +52,16 @@ function makeEnv(opts = {}) {
   drive.files = {};
   let fileN = 0;
   function mkFile(blob) {
-    const id = 'F' + (++fileN);
-    const f = { getId: () => id, setSharing() { return f; }, setTrashed(v) { f.trashed = v; return f; }, blob };
+    // 長度要像真的:正式環境的雲端硬碟 id 有 30 幾碼,而照片網址是用長度去認它的
+    const id = 'FakeDriveFileId' + String(++fileN).padStart(18, '0');
+    // 共用設定要真的記下來:正式環境「設了但沒生效」是存在的狀況,
+    // drive.blockSharing 就是用來重現它的(設定不報錯,但狀態沒變)
+    const f = {
+      getId: () => id, blob, access: 'private',
+      setSharing(a) { if (drive.blockSharing) return f; f.access = a; return f; },
+      getSharingAccess() { return f.access; },
+      setTrashed(v) { f.trashed = v; return f; }
+    };
     drive.files[id] = f; return f;
   }
   drive.folder = { getId: () => 'FOLDER', createFile: b => mkFile(b) };
